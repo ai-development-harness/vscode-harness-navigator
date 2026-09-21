@@ -13,13 +13,13 @@ harness:
 project:
   # Завершён ли одноразовый PROJECT INIT.
   # Пример: false в template; true допустим только после deterministic + semantic gates.
-  initialized: false
+  initialized: true
   # Каноническое короткое имя проекта после INIT.
   # Пример: "acme-billing"; null до инициализации.
-  name: null
+  name: "vscode-harness-navigator"
   # ISO-8601 дата/время успешной инициализации.
   # Формат: "2026-09-15T16:00:00+03:00"; null до INIT.
-  initializedAt: null
+  initializedAt: "2026-09-21T14:07:31+00:00"
 
 # Настройки orchestration Harness, которые проект может менять без изменения protocol.
 # Пример: лимит FIX ↔ REVIEW задаётся в диапазоне от 1 до 5.

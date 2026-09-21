@@ -7,7 +7,11 @@
 <!-- PROJECT-CONTEXT:START -->
 ## Project context
 
-Проект ещё не инициализирован. До успешного `PROJECT INIT` не создавай production-код и не придумывай product-specific архитектуру. Сырой вход находится по configured `.harness/manifest.yaml → sources.localBrief`.
+Проект инициализирован как **VSCode Harness Navigator**: локальное read-only расширение Visual Studio Code для навигации по артефактам и command surface AI Development Harness 0.6.0+.
+
+Канонические product contracts находятся в `docs/PROJECT.md`, `docs/requirements/`, `docs/architecture.md`, `docs/adr/` и `planning/tasks/`. Расширение не запускает Harness-команды, агентов, shell/Python tools и не изменяет Harness artifacts. Все configured paths должны читаться из `.harness/manifest.yaml`; Artifact Index, Reference Index и Command Catalog являются derived in-memory моделями.
+
+Начни product implementation с canonical `STEP-001` и следуй его Scope, Mutation policy, Acceptance и Verification.
 <!-- PROJECT-CONTEXT:END -->
 
 ## 2. Приоритет источников истины
