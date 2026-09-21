@@ -29,6 +29,18 @@ __pycache__/
 .venv/
 node_modules/
 dist/
+out/
 build/
 coverage/
 .cache/
+*.vsix
+
+# @vscode/test-electron downloads a real VS Code build here for the
+# isolated Extension Host integration tests; never commit it.
+.vscode-test/
+
+# Yarn (node-modules linker): no PnP cache/state to track.
+.yarn/*
+!.yarn/releases
+!.yarn/patches
+.pnp.*

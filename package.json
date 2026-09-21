@@ -1,0 +1,59 @@
+{
+  "name": "vscode-harness-navigator",
+  "displayName": "%extension.displayName%",
+  "description": "%extension.description%",
+  "version": "0.0.1",
+  "publisher": "ai-development-harness",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ai-development-harness/vscode-harness-navigator.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=20.0.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "l10n": "./l10n",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {},
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.unit.json && tsc --noEmit -p tsconfig.test.json",
+    "lint": "eslint src tests esbuild.js eslint.config.mjs .vscode-test.mjs",
+    "format": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"l10n/**/*.json\" \"package.nls*.json\" \"*.{js,mjs,json}\"",
+    "format:fix": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"l10n/**/*.json\" \"package.nls*.json\" \"*.{js,mjs,json}\"",
+    "clean": "rm -rf dist out",
+    "build": "yarn clean && node esbuild.js --production",
+    "build:dev": "yarn clean && node esbuild.js",
+    "compile:tests": "tsc -p tsconfig.test.json",
+    "test:unit": "node --import tsx --test \"tests/unit/**/*.test.ts\"",
+    "test:integration": "yarn build:dev && yarn compile:tests && vscode-test",
+    "test": "yarn test:unit && yarn test:integration",
+    "vscode:prepublish": "yarn build",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^24.13.6",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.8",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.0"
+  },
+  "packageManager": "yarn@4.10.3+sha512.c38cafb5c7bb273f3926d04e55e1d8c9dfa7d9c3ea1f36a4868fa028b9e5f72298f0b7f401ad5eb921749eb012eb1c3bb74bf7503df3ee43fd600d14a018266f"
+}
