@@ -1,0 +1,144 @@
+# Основная модель root-agent текущей Codex-сессии.
+# Пример: "gpt-5.6-terra" для balanced режима; reasoning-heavy работу делегируют специализированным субагентам.
+model = "gpt-5.6-terra"
+
+# Reasoning effort root-agent для обычных команд.
+# Пример: "medium"; увеличивай до "high" только если root сам решает сложную задачу вместо делегирования.
+model_reasoning_effort = "medium"
+
+# Reasoning effort, который Codex использует в plan mode, если клиент поддерживает отдельную настройку.
+# Пример: "high" для более тщательного планирования перед mutation.
+plan_mode_reasoning_effort = "high"
+
+# Объём текстового вывода модели.
+# Пример: "low" уменьшает лишний output; durable детали должны сохраняться в repository artifacts.
+model_verbosity = "low"
+
+# Когда запрашивать подтверждение пользователя перед действиями, требующими approval.
+# Пример: "on-request" — безопасный default для интерактивной разработки.
+approval_policy = "on-request"
+
+# Максимальный filesystem access root-agent.
+# Пример: "workspace-write" разрешает править текущий repository, но не означает unrestricted host access.
+sandbox_mode = "workspace-write"
+
+# Максимальный объём repository instruction-файлов, загружаемый как project documentation context.
+# Пример: 32768 байт; при росте AGENTS.md подробности следует выносить в docs/skills.
+project_doc_max_bytes = 32768
+
+[agents]
+# Включает native Codex subagents для project-scoped orchestration.
+# Пример: true — роли planner/reviewer/etc доступны root-agent.
+enabled = true
+
+# Максимальное число дочерних agent threads одновременно в одной сессии.
+# Пример: 4 позволяет параллельный read-only review, но не поощряет параллельные write-agents.
+max_concurrent_threads_per_session = 4
+
+# Модель субагента, если конкретная роль не переопределила `model` в своём config_file.
+# Пример: "gpt-5.6-terra" как экономичный balanced fallback.
+default_subagent_model = "gpt-5.6-terra"
+
+# Reasoning effort субагента по умолчанию при отсутствии role-specific override.
+# Пример: "medium".
+default_subagent_reasoning_effort = "medium"
+
+# Разрешает показывать root-agent сообщения/события от дочерних threads во время работы.
+# Пример: true — удобно для наблюдения за orchestration.
+interrupt_message = true
+
+[agents.initializer]
+# Когда выбирать роль initializer.
+# Пример: `PROJECT INIT` и bootstrap knowledge base из локального brief.
+description = "Bootstrap a new project from PROJECT_BRIEF.local.md into requirements, architecture, ADR and roadmap."
+# Путь к role-specific model/effort/sandbox configuration относительно `.codex/config.toml`.
+# Пример: отдельный Sol High профиль для bootstrap.
+config_file = "./agents/initializer.toml"
+
+[agents.architect]
+# Когда выбирать роль architect.
+# Пример: durable architecture trade-offs, ADR и reconciliation архитектурного контракта.
+description = "Analyze durable architectural decisions, trade-offs, boundaries and ADR needs."
+# Role-specific конфигурация архитектора.
+# Пример: "./agents/architect.toml".
+config_file = "./agents/architect.toml"
+
+[agents.planner]
+# Когда выбирать роль planner.
+# Пример: `STEP PLAN STEP-NNN` для сложного pre-implementation анализа.
+description = "Prepare implementation plans for STEP tasks by tracing requirements, ADR, code, dependencies and verification."
+# Role-specific конфигурация planner.
+# Пример: "./agents/planner.toml".
+config_file = "./agents/planner.toml"
+
+[agents.implementer]
+# Когда выбирать роль implementer.
+# Пример: реализация уже сохранённого Implementation plan.
+description = "Implement an approved STEP plan within scope, update tests, and run deterministic verification."
+# Role-specific конфигурация основного write-agent.
+# Пример: "./agents/implementer.toml".
+config_file = "./agents/implementer.toml"
+
+[agents.reviewer]
+# Когда выбирать независимый reviewer.
+# Пример: `STEP REVIEW STEP-NNN` после реализации другим агентом.
+description = "Independently review a completed implementation for correctness, regressions, architecture and missing tests."
+# Role-specific read-only конфигурация reviewer.
+# Пример: "./agents/reviewer.toml".
+config_file = "./agents/reviewer.toml"
+
+[agents.security_reviewer]
+# Когда выбирать security reviewer.
+# Пример: auth, permissions, secrets, network boundaries, untrusted input или другой security-sensitive scope.
+description = "Perform adversarial security review for security-sensitive changes only."
+# Role-specific read-only security profile.
+# Пример: "./agents/security-reviewer.toml".
+config_file = "./agents/security-reviewer.toml"
+
+[agents.test_reviewer]
+# Когда выбирать test reviewer.
+# Пример: сложные acceptance criteria, edge cases или сомнительная полнота verification.
+description = "Review test coverage, edge cases and verification adequacy without changing implementation."
+# Role-specific экономичный read-only профиль.
+# Пример: "./agents/test-reviewer.toml".
+config_file = "./agents/test-reviewer.toml"
+
+[agents.docs]
+# Когда выбирать docs agent.
+# Пример: механическая синхронизация verified behavior с documentation/projections.
+description = "Synchronize project documentation and projections with verified implementation evidence."
+# Role-specific write-профиль только для документационной работы.
+# Пример: "./agents/docs.toml".
+config_file = "./agents/docs.toml"
+
+[agents.mechanic]
+# Когда выбирать mechanic.
+# Пример: rename, boilerplate, небольшие локальные правки без архитектурного решения.
+description = "Perform simple mechanical repository edits such as renames, boilerplate, formatting-adjacent changes and small docs updates."
+# Role-specific экономичный профиль.
+# Пример: "./agents/mechanic.toml".
+config_file = "./agents/mechanic.toml"
+
+[agents.skill_curator]
+# Когда выбирать skill curator.
+# Пример: `SKILL FIND`, `SKILL INSTALL`, `SKILL CREATE`.
+description = "Search, inspect, safely install, and create repository skills while preserving provenance and routing."
+# Role-specific профиль для анализа недоверенного внешнего skill content.
+# Пример: "./agents/skill-curator.toml".
+config_file = "./agents/skill-curator.toml"
+
+[agents.git_operator]
+# Когда выбирать git operator.
+# Пример: `GIT CHECK`, `GIT COMMIT`, `GIT PUSH`, `GIT PR`, `GIT SYNC`.
+description = "Safely prepare commits, branches, pushes and pull requests according to repository Git policy."
+# Role-specific профиль Git workflow.
+# Пример: "./agents/git-operator.toml".
+config_file = "./agents/git-operator.toml"
+
+[agents.harness_updater]
+# Когда выбирать harness updater.
+# Пример: `HARNESS UPDATE CHECK`, `HARNESS UPDATE APPLY` и explicit legacy adoption.
+description = "Check and safely reconcile the Harness protocol layer with immutable upstream release tags while preserving project-owned state."
+# Role-specific профиль maintenance mutation.
+# Пример: "./agents/harness-updater.toml".
+config_file = "./agents/harness-updater.toml"

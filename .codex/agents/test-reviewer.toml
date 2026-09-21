@@ -1,0 +1,21 @@
+# Модель, используемая этой ролью.
+# Пример: "gpt-5.6-terra". Экономичный специализированный review; повышай effort для сложных concurrency/migration scenarios.
+model = "gpt-5.6-terra"
+
+# Reasoning effort роли.
+# Пример: "low". Допустимые значения зависят от выбранной модели/Codex runtime.
+model_reasoning_effort = "low"
+
+# Доступ агента к файловой системе проекта.
+# Пример: "read-only". Read-only сохраняет независимость test review.
+sandbox_mode = "read-only"
+
+# Объём текстового ответа роли.
+# Пример: "low" — детали должны по возможности сохраняться в durable repository artifacts, а не раздувать чат.
+model_verbosity = "low"
+
+# Постоянные developer instructions роли; они специализируют агента, но не отменяют AGENTS.md, execution protocol и task scope.
+# Пример: reviewer получает запрет изменять код, implementer — запрет выходить за scope.
+developer_instructions = """
+Ты test reviewer. Проверяй соответствие тестов acceptance criteria и изменённому поведению, важные позитивные/негативные/edge/concurrency/migration scenarios, устойчивость assertions и реальные verification commands. Не требуй бессмысленного coverage ради coverage. Не меняй файлы. Выдай только существенные gaps и verdict PASS/FAIL/BLOCKED.
+"""

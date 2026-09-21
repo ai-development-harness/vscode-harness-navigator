@@ -1,0 +1,106 @@
+# Политика безопасного self-update protocol layer из release-тегов source repository.
+
+[source]
+# Канонический source repository Harness в формате owner/repo.
+# Пример: "ai-development-harness/ai-development-harness-template".
+repository = "ai-development-harness/ai-development-harness-template"
+
+# Ветка, из которой maintainers готовят releases; updater обновляет проекты только по tags, не по moving branch.
+# Пример: "main".
+default_branch = "main"
+
+# Регулярное выражение release-тегов, допустимых как immutable update baseline.
+# Пример: '^v\d+\.\d+\.\d+$'.
+tag_pattern = '^v\d+\.\d+\.\d+$'
+
+# Machine-readable граф допустимых переходов. Updater читает его из default_branch только как routing metadata;
+# содержимое release по-прежнему берётся исключительно из immutable tags.
+# Пример: ".harness/harness-update-graph.json".
+update_manifest = ".harness/harness-update-graph.json"
+
+[state]
+# Машинный lock с текущим known BASE проекта.
+# Пример: ".harness/harness.lock.json".
+lock_file = ".harness/harness.lock.json"
+
+# Каталог durable report после успешного HARNESS UPDATE APPLY.
+# Пример: "planning/harness-updates".
+report_directory = "planning/harness-updates"
+
+[ownership]
+# Полностью Harness-owned paths. Updater заменяет их только если local content не расходится с BASE;
+# при local modification update блокируется вместо silent overwrite.
+# Core workflow skills перечислены поимённо: project/third-party skills рядом в `.agents/skills/<slug>/` не входят в update scope.\n# Пример: .harness/docs/**, `.agents/skills/run-step/**` и runtime adapter README.
+harness_owned = [
+  ".harness/harness-update-graph.json",
+  ".harness/command-transitions.json",
+  ".agents/skills/README.md",
+  ".agents/skills/init-project/**",
+  ".agents/skills/add-plan-step/**",
+  ".agents/skills/find-skill/**",
+  ".agents/skills/install-skill/**",
+  ".agents/skills/create-skill/**",
+  ".agents/skills/plan-step/**",
+  ".agents/skills/implement-step/**",
+  ".agents/skills/review-step/**",
+  ".agents/skills/fix-step/**",
+  ".agents/skills/run-step/**",
+  ".agents/skills/audit-step/**",
+  ".agents/skills/project-status/**",
+  ".agents/skills/next-step/**",
+  ".agents/skills/reconcile-project/**",
+  ".agents/skills/release-check/**",
+  ".agents/skills/requirements-review/**",
+  ".agents/skills/architecture-change/**",
+  ".agents/skills/documentation-sync/**",
+  ".agents/skills/code-review/**",
+  ".agents/skills/security-review/**",
+  ".agents/skills/write-tests/**",
+  ".agents/skills/git-workflow/**",
+  ".agents/skills/quick-fix/**",
+  ".agents/skills/generate-github-templates/**",
+  ".agents/skills/update-harness/**",
+  ".codex/README.md",
+  ".claude/README.md",
+  ".harness/README.md",
+  ".harness/harness-policy.toml",
+  ".harness/harness-update.toml",
+  ".harness/docs/**",
+  "planning/harness-updates/README.md",
+  ".harness/tools/**",
+]
+
+# Shared paths могут содержать project-specific настройки; при расхождении local/base/target применяется 3-way merge.
+# Colocated TEMPLATE.md рядом с project artifacts намеренно не managed: legacy projects уже могли менять их как project-owned.
+# Пример: пользователь может менять model/effort в runtime adapters, а project templates остаются под контролем проекта.
+shared = [
+  ".codex/config.toml",
+  ".codex/agents/**",
+  "CLAUDE.md",
+  ".claude/settings.json",
+  ".claude/agents/**",
+  ".github/**",
+  ".gitignore",
+  ".gitmessage",
+  ".harness/git-policy.toml",
+  ".harness/manifest.yaml",
+  "AGENTS.local.example.md",
+  "PROJECT_BRIEF.example.md",
+]
+
+# Файлы с generated project blocks. Помимо обычного 3-way merge updater обязан восстановить local marked blocks.
+# Пример: README.md сохраняет <!-- PROJECT:START --> ... <!-- PROJECT:END -->.
+marker_merge = [
+  "AGENTS.md",
+  "README.md",
+]
+
+[markers."AGENTS.md"]
+# Имена generated blocks, которые всегда принадлежат конкретному проекту и сохраняются при update.
+# Пример: PROJECT-CONTEXT.
+blocks = ["PROJECT-CONTEXT", "SKILL-ROUTING"]
+
+[markers."README.md"]
+# Имена generated blocks, которые всегда принадлежат конкретному проекту и сохраняются при update.
+# Пример: PROJECT.
+blocks = ["PROJECT"]

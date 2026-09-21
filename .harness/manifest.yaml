@@ -1,0 +1,162 @@
+# Machine-readable metadata самого Harness. Product requirements здесь хранить нельзя.
+# Пример: секция содержит только version template/protocol layer.
+harness:
+  # Стабильный номер поколения Harness template.
+  # Пример: "1". Пока protocol не стабилизирован dogfooding, номер не повышается за каждую итерацию.
+  version: "1"
+  # Release Harness, от которого текущий project protocol layer синхронизирован.
+  # Формат: "X.X.X"; immutable source ref хранится по state.lock_file из harness-update policy.
+  release: "0.6.0"
+
+# Состояние конкретного проекта, созданного из template.
+# Пример: до INIT initialized=false/name=null, после INIT finalize-init атомарно заполняет значения.
+project:
+  # Завершён ли одноразовый PROJECT INIT.
+  # Пример: false в template; true допустим только после deterministic + semantic gates.
+  initialized: false
+  # Каноническое короткое имя проекта после INIT.
+  # Пример: "acme-billing"; null до инициализации.
+  name: null
+  # ISO-8601 дата/время успешной инициализации.
+  # Формат: "2026-09-15T16:00:00+03:00"; null до INIT.
+  initializedAt: null
+
+# Настройки orchestration Harness, которые проект может менять без изменения protocol.
+# Пример: лимит FIX ↔ REVIEW задаётся в диапазоне от 1 до 5.
+execution:
+  # Максимальное число циклов FIX → REVIEW внутри одного STEP RUN STEP до остановки.
+  # Пример: 3; допустимый диапазон 1..5.
+  maxFixReviewCycles: 3
+
+# Политика specialized reviewers поверх обязательного independent review.
+# Пример: auto использует deterministic preselector, always делает reviewer обязательным всегда.
+review:
+  # Когда security reviewer обязателен.
+  # Пример: auto | always.
+  security: auto
+  # Когда test reviewer обязателен.
+  # Пример: auto | always.
+  tests: auto
+
+# Project-specific настройки управления repository skills.
+# Пример: search.maxResults ограничивает размер выдачи SKILL FIND.
+skills:
+  # Настройки поиска сторонних/repository skills.
+  # Пример: maxResults=5 сохраняет компактный shortlist.
+  search:
+    # Максимальное число кандидатов SKILL FIND.
+    # Пример: 5; допустимый диапазон 1..10.
+    maxResults: 5
+
+# Единая языковая политика Harness и project tooling.
+# Специализированные ключи необязательны: при отсутствии используется language.default.
+# Пример: language.default=ru, documentation=en.
+language:
+  # Обязательный BCP 47 fallback для всех человекочитаемых текстов.
+  # Пример: ru.
+  default: ru
+  # Язык обычных ответов агентов пользователю.
+  # Пример: ru; если ключ удалить, используется language.default.
+  agentResponses: ru
+  # Язык agent-authored prose в project documentation и durable reports.
+  # Пример: ru; protocol headings, machine frontmatter keys/enums и deterministic boilerplate не локализуются.
+  documentation: ru
+  # Язык автоматически сформированных commit message subject/body.
+  # Пример: ru; Conventional Commit identifiers остаются техническими.
+  commitMessages: ru
+  # Язык комментариев/doc-comments в product code, если комментарий нужен.
+  # Пример: ru.
+  codeComments: ru
+  # Язык человекочитаемых названий test cases/spec descriptions.
+  # Пример: ru.
+  testNames: ru
+  # Язык fixture/sample content, когда домен не требует другого.
+  # Пример: ru.
+  fixtures: ru
+  # Язык GitHub issue forms и Pull Request templates.
+  # Пример: ru.
+  githubTemplates: ru
+  # Язык release notes/changelog.
+  # Пример: ru.
+  releaseNotes: ru
+
+# Пути к project-owned knowledge и projections. Все paths реально используются через harness_config.py.
+# Пример: requirements=docs/requirements, roadmap=planning/PLAN.md.
+sources:
+  # Локальный сырой brief пользователя; файл не должен попадать в Git.
+  # Пример: PROJECT_BRIEF.local.md.
+  localBrief: PROJECT_BRIEF.local.md
+  # Нормализованное описание проекта после INIT.
+  # Пример: docs/PROJECT.md.
+  projectOverview: docs/PROJECT.md
+  # Каталог canonical REQ и requirements projections.
+  # Пример: docs/requirements.
+  requirements: docs/requirements
+  # Каталог canonical ADR.
+  # Пример: docs/adr.
+  adrDirectory: docs/adr
+  # Текущий architecture baseline; STEP ссылаются на document/anchor через architecture_refs.
+  # Пример: docs/architecture.md.
+  architecture: docs/architecture.md
+  # Каталог canonical Open Questions OQ-NNN-*.md.
+  # Пример: docs/open-questions.
+  openQuestions: docs/open-questions
+  # Tracked deterministic projection/index Open Questions.
+  # Пример: docs/OPEN_QUESTIONS.md.
+  openQuestionsIndex: docs/OPEN_QUESTIONS.md
+  # Tracked deterministic roadmap projection.
+  # Пример: planning/PLAN.md.
+  roadmap: planning/PLAN.md
+  # Tracked deterministic project status projection.
+  # Пример: planning/STATUS.md.
+  status: planning/STATUS.md
+
+# Пути к protocol/planning artifacts Harness.
+# Пример: taskDirectory=planning/tasks, reviewDirectory=planning/reviews.
+protocol:
+  # Canonical bootstrap path формальной семантики команд; relocation не поддерживается.
+  # Формат: фиксированное значение .harness/docs/EXECUTION_PROTOCOL.md.
+  file: .harness/docs/EXECUTION_PROTOCOL.md
+  # Каталог canonical STEP.
+  # Пример: planning/tasks.
+  taskDirectory: planning/tasks
+  # Каталог immutable implementation review reports.
+  # Пример: planning/reviews.
+  reviewDirectory: planning/reviews
+  # Каталог immutable semantic planning review reports.
+  # Пример: planning/plan-reviews.
+  planningReviewDirectory: planning/plan-reviews
+  # Каталог immutable PROJECT INIT consistency reports.
+  # Пример: planning/init-reviews.
+  initReviewDirectory: planning/init-reviews
+  # Каталог audit/reconcile/migration reports.
+  # Пример: planning/audits.
+  auditDirectory: planning/audits
+  # Каталог RELEASE CHECK reports.
+  # Пример: planning/releases.
+  releaseDirectory: planning/releases
+  # Каталог durable результатов SKILL FIND.
+  # Пример: planning/skill-searches.
+  skillSearchDirectory: planning/skill-searches
+  # Реестр установленных/созданных дополнительных skills.
+  # Пример: docs/skills/REGISTRY.md.
+  skillRegistry: docs/skills/REGISTRY.md
+
+# Пути к repository policies и deterministic tooling.
+# Пример: gitPolicy=.harness/git-policy.toml.
+repository:
+  # Настройки GIT COMMIT / PUSH / PR / SYNC.
+  # Пример: .harness/git-policy.toml.
+  gitPolicy: .harness/git-policy.toml
+  # Canonical bootstrap path политики Harness integrity/repository hygiene; relocation не поддерживается.
+  # Формат: фиксированное значение .harness/harness-policy.toml.
+  harnessPolicy: .harness/harness-policy.toml
+  # Canonical bootstrap path ownership/source policy self-update; relocation не поддерживается.
+  # Формат: фиксированное значение .harness/harness-update.toml.
+  harnessUpdatePolicy: .harness/harness-update.toml
+  # Canonical bootstrap path локального deterministic validator; relocation не поддерживается.
+  # Формат: фиксированное значение .harness/tools/validate.py.
+  harnessValidation: .harness/tools/validate.py
+  # Canonical bootstrap path baseline GitHub Actions workflow; relocation не поддерживается.
+  # Формат: фиксированное значение .github/workflows/harness-integrity.yml.
+  harnessCI: .github/workflows/harness-integrity.yml

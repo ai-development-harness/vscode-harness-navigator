@@ -1,0 +1,239 @@
+# Deterministic integrity policy, используемая локально GIT COMMIT / GIT PUSH и Harness CI.
+
+# Версия схемы policy-файла.
+# Пример: 1; меняется только при несовместимом изменении структуры config.
+version = 1
+
+# Файлы, без которых repository больше не считается валидным экземпляром Harness.
+# Пример: удаление `.harness/docs/EXECUTION_PROTOCOL.md` или runtime adapter должно ломать CI.
+required_files = [
+  "AGENTS.md",
+  ".harness/harness-update-graph.json",
+  ".harness/command-transitions.json",
+  "CLAUDE.md",
+  "README.md",
+  "PROJECT_BRIEF.example.md",
+  "AGENTS.local.example.md",
+  ".gitignore",
+  ".harness/manifest.yaml",
+  ".codex/config.toml",
+  ".codex/agents/harness-updater.toml",
+  ".claude/README.md",
+  ".claude/settings.json",
+  ".claude/agents/harness-updater.md",
+  ".harness/docs/README.md",
+  ".harness/docs/VALIDATORS.md",
+  ".harness/docs/COMMANDS.md",
+  ".harness/docs/COMMAND_SYNTAX.md",
+  ".harness/docs/COMMAND_TRANSITIONS.md",
+  ".harness/docs/EXECUTION_STATUS.md",
+  ".harness/docs/DOCUMENT_MODEL.md",
+  ".harness/docs/GLOSSARY.md",
+  ".harness/docs/GIT_WORKFLOW.md",
+  ".harness/docs/LANGUAGE_POLICY.md",
+  ".harness/docs/QUICK_CHANGES.md",
+  ".harness/docs/GITHUB_TEMPLATES.md",
+  ".harness/docs/UPDATES.md",
+  ".harness/docs/CLAUDE_CODE.md",
+  ".harness/docs/EXECUTION_PROTOCOL.md",
+  ".github/pull_request_template.md",
+  ".harness/tools/validate.py",
+  ".harness/tools/harness_config.py",
+  ".harness/tools/harness-config-self-test.py",
+  ".harness/tools/document_contract.py",
+  ".harness/tools/project_integrity.py",
+  ".harness/tools/project_migration.py",
+  ".harness/tools/template_contract.py",
+  ".harness/tools/migrate-project-schema.py",
+  ".harness/tools/finalize-project-init.py",
+  ".harness/tools/planning-state.py",
+  ".harness/tools/projection_contract.py",
+  ".harness/tools/sync-projections.py",
+  ".harness/tools/review_contract.py",
+  ".harness/tools/review_gates.py",
+  ".harness/tools/report_contract.py",
+  ".harness/tools/report-contract-self-test.py",
+  ".harness/tools/repository-hardening-self-test.py",
+  ".harness/tools/command_transitions.py",
+  ".harness/tools/command_references.py",
+  ".harness/tools/command-references-self-test.py",
+  ".harness/tools/check-command-references.py",
+  ".harness/tools/validate-command.py",
+  ".harness/tools/execution-state.py",
+  ".harness/tools/resolve-next-command.py",
+  ".harness/tools/execution_status.py",
+  ".harness/tools/execution-self-test.py",
+  ".harness/tools/planning_contract.py",
+  ".harness/tools/planning-contract-self-test.py",
+  ".harness/tools/git_preflight.py",
+  ".harness/tools/git-preflight.py",
+  ".harness/tools/git-preflight-self-test.py",
+  ".harness/tools/git-policy-self-test.py",
+  ".harness/tools/harness_update.py",
+  ".harness/tools/harness-update.py",
+  ".harness/tools/harness-update-self-test.py",
+  ".harness/tools/update-migration-self-test.py",
+  ".gitmessage",
+]
+
+# Workflow skills, которые являются частью core Harness protocol и не должны случайно исчезнуть.
+# Пример: `run-step` обязателен, даже если конкретный проект чаще использует ручной PLAN/IMPLEMENT/REVIEW.
+required_skills = [
+  "init-project",
+  "add-plan-step",
+  "find-skill",
+  "install-skill",
+  "create-skill",
+  "plan-step",
+  "implement-step",
+  "review-step",
+  "fix-step",
+  "run-step",
+  "audit-step",
+  "project-status",
+  "next-step",
+  "reconcile-project",
+  "release-check",
+  "requirements-review",
+  "architecture-change",
+  "documentation-sync",
+  "code-review",
+  "security-review",
+  "write-tests",
+  "git-workflow",
+  "quick-fix",
+  "generate-github-templates",
+  "update-harness",
+]
+
+# Канонические role identifiers, которые обязаны существовать во всех поддерживаемых runtime adapters.
+# Пример: `reviewer` должен иметь и Codex binding, и Claude Code subagent profile.
+required_agents = [
+  "initializer",
+  "architect",
+  "planner",
+  "implementer",
+  "reviewer",
+  "security_reviewer",
+  "test_reviewer",
+  "docs",
+  "mechanic",
+  "skill_curator",
+  "git_operator",
+  "harness_updater",
+]
+
+# Команды execution/Git surface, которые обязаны оставаться в machine-readable transition graph и canonical docs.
+# Maintenance-команды self-update проверяются отдельными update skill/docs и не дублируются в project execution protocol.
+# Пример: если при рефакторинге исчезнет `STEP ADD:`, Harness validator должен это заметить.
+required_commands = [
+  "PROJECT INIT",
+  "STEP ADD:",
+  "SKILL FIND:",
+  "SKILL INSTALL:",
+  "SKILL CREATE:",
+  "GITHUB GENERATE TEMPLATES",
+  "PROJECT QUICK FIX:",
+  "STEP PLAN STEP-NNN",
+  "STEP IMPLEMENT STEP-NNN",
+  "STEP REVIEW STEP-NNN",
+  "STEP FIX STEP-NNN",
+  "STEP RUN STEP-NNN",
+  "STEP AUDIT STEP-NNN",
+  "PROJECT STATUS",
+  "STEP NEXT",
+  "PROJECT RECONCILE",
+  "RELEASE CHECK",
+  "GIT CHECK",
+  "GIT COMMIT",
+  "GIT PUSH",
+  "GIT PR",
+  "GIT SYNC",
+]
+
+# Glob-patterns файлов, которые не должны быть tracked Git.
+# Пример: local brief, private runtime overrides, `.env`, private keys, dependencies/build/cache/log artifacts.
+forbidden_tracked_globs = [
+  "PROJECT_BRIEF.local.md",
+  "AGENTS.local.md",
+  "CLAUDE.local.md",
+  ".project/local/**",
+  ".harness/local/**",
+  ".codex/local/**",
+  ".claude/local/**",
+  ".claude/settings.local.json",
+  ".env",
+  ".env.*",
+  "*.pem",
+  "*.key",
+  "id_rsa",
+  "id_ed25519",
+  "node_modules/**",
+  "dist/**",
+  "build/**",
+  "coverage/**",
+  ".cache/**",
+  "__pycache__/**",
+  ".venv/**",
+  "*.log",
+  "*.tmp",
+  "*.swp",
+]
+
+# Явные исключения из forbidden patterns.
+# Пример: `.env.example` разрешён как безопасный документированный шаблон без secrets.
+allowed_tracked_globs = [
+  ".env.example",
+]
+
+# Пути, для которых validator применяет lightweight text-format hygiene checks.
+# Пример: trailing whitespace/final newline проверяются в Harness-managed docs/config/tooling, а не автоматически во всём будущем product code.
+format_paths = [
+  "AGENTS.md",
+  "CLAUDE.md",
+  "AGENTS.local.example.md",
+  "README.md",
+  ".harness",
+  ".codex",
+  ".claude",
+  "planning/README.md",
+  "planning/harness-updates",
+  ".github",
+]
+
+# Config-файлы, где каждый параметр обязан иметь человекочитаемый комментарий и пример либо описание формата рядом с настройкой.
+# Пример: YAML/TOML допускают comments; strict JSON Claude settings документируются отдельно в CLAUDE_CODE.md.
+documented_config_globs = [
+  ".harness/*.toml",
+  ".harness/*.yaml",
+  ".codex/*.toml",
+  ".codex/agents/*.toml",
+  ".github/workflows/*.yml",
+  ".github/workflows/*.yaml",
+]
+
+# Проверять ли наличие comment block непосредственно перед каждым YAML/TOML параметром.
+# Пример: true не позволяет добавить `timeout = 30` без объяснения назначения.
+check_config_parameter_comments = true
+# Требовать ли в comment block параметра строку `Пример:` / `Example:` либо `Формат:` / `Format:`.
+# Пример: true заставляет показывать допустимый/типичный вариант или ожидаемый формат прямо рядом с настройкой.
+check_config_parameter_examples = true
+
+# Максимальный размер одного tracked file до ошибки/предупреждения validator согласно реализации.
+# Пример: 10 MB помогает ловить случайно добавленные binaries/artifacts.
+max_tracked_file_size_mb = 10
+# Проверять ли, что Harness-managed text files декодируются как UTF-8.
+# Пример: true.
+check_utf8 = true
+# Требовать ли финальный newline в проверяемых text files.
+# Пример: true улучшает diff/tool compatibility.
+check_final_newline = true
+# Запрещать ли trailing whitespace в проверяемых text files.
+# Пример: true.
+check_trailing_whitespace = true
+# Проверять ли tracked text files на типичные маркеры приватных ключей.
+# Пример: true блокирует случайное добавление PEM/OpenSSH private key material.
+check_private_key_material = true
+# Искать ли неразрешённые Git merge-conflict markers `<<<<<<<`, `=======`, `>>>>>>>`.
+# Пример: true блокирует случайный commit незавершённого conflict resolution.
+check_merge_markers = true

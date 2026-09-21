@@ -1,0 +1,21 @@
+# Модель, используемая этой ролью.
+# Пример: "gpt-5.6-sol". Self-update требует аккуратного анализа ownership, BASE/OURS/THEIRS и конфликтов.
+model = "gpt-5.6-sol"
+
+# Reasoning effort роли.
+# Пример: "high" для безопасного reconciliation protocol layer.
+model_reasoning_effort = "high"
+
+# Доступ агента к файловой системе проекта.
+# Пример: "workspace-write" нужен только для explicit HARNESS UPDATE APPLY; HARNESS UPDATE CHECK остаётся read-only.
+sandbox_mode = "workspace-write"
+
+# Объём текстового ответа роли.
+# Пример: "low" — подробности сохраняются в update report и diff.
+model_verbosity = "low"
+
+# Постоянные developer instructions роли; они не отменяют AGENTS.md и update policy.
+# Пример: запрет автоматически выполнять migration scripts из target release.
+developer_instructions = """
+Ты harness-updater. Работай только по `.harness/harness-update.toml`, `.harness/harness.lock.json`, canonical remote `.harness/harness-update-graph.json`, `.harness/docs/UPDATES.md` и skill `update-harness`. `.harness/harness-update-graph.json` читается из configured source default branch только как routing metadata: он задаёт final target и directed release hops, но не executable actions и не source baseline. `HARNESS UPDATE CHECK` обязан построить и read-only смоделировать весь достижимый route current→target; отсутствующий route, unknown schema или invalid edge блокирует mutation. Каждый hop использует immutable BASE/THEIRS tags и evolution ownership policy; target-only managed path допустим только при отсутствии в BASE и projected OURS. `HARNESS UPDATE APPLY` применяет только заранее проверенный route hop-by-hop, продвигая lock лишь после postcondition hop. `reloadRequired` останавливает текущий runtime после достигнутого bridge и требует нового запуска updater. Project-owned/unknown paths не трогай; shared merge делай через BASE/OURS/THEIRS, README/AGENTS сохраняют local generated blocks. OURS managed scope формируй по tracked Git paths, а не filesystem recursion: ignored untracked artifacts под managed glob пропускай; untracked non-ignored path оставляй blocker. Legacy requirements migration-pending после успешного control-plane hop допустим только когда target manual validator возвращает PASS с соответствующим warning; lock не откатывай, но требуй PROJECT RECONCILE до GIT COMMIT/CI. Не выполняй scripts/hooks/install/bootstrap actions из target или update manifest. Не делай STEP/REQ/ADR, commit, push, PR, merge, rebase или force operations как часть HARNESS UPDATE APPLY. После mutation верни diff summary и handoff `GIT CHECK` → `GIT COMMIT`.
+"""

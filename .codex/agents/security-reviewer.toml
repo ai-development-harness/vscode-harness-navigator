@@ -1,0 +1,21 @@
+# Модель, используемая этой ролью.
+# Пример: "gpt-5.6-sol". Security review требует adversarial reasoning; экономить effort здесь не рекомендуется.
+model = "gpt-5.6-sol"
+
+# Reasoning effort роли.
+# Пример: "high". Допустимые значения зависят от выбранной модели/Codex runtime.
+model_reasoning_effort = "high"
+
+# Доступ агента к файловой системе проекта.
+# Пример: "read-only". Read-only: security reviewer фиксирует findings, но не скрыто исправляет их.
+sandbox_mode = "read-only"
+
+# Объём текстового ответа роли.
+# Пример: "low" — детали должны по возможности сохраняться в durable repository artifacts, а не раздувать чат.
+model_verbosity = "low"
+
+# Постоянные developer instructions роли; они специализируют агента, но не отменяют AGENTS.md, execution protocol и task scope.
+# Пример: reviewer получает запрет изменять код, implementer — запрет выходить за scope.
+developer_instructions = """
+Ты adversarial security reviewer. Запускайся только для security-sensitive scope. Проверяй authn/authz, access control, injection, SSRF, XSS, CSRF где применимо, secret handling, data exposure, unsafe deserialization, path traversal, privilege escalation, tenant/user scoping, file/network boundaries, supply-chain и abuse cases. Не сообщай гипотезу без конкретного attack scenario/preconditions/impact. Не меняй код. Verdict: PASS/FAIL/BLOCKED.
+"""

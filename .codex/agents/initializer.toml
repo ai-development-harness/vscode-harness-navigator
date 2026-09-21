@@ -1,0 +1,21 @@
+# Модель, используемая этой ролью.
+# Пример: "gpt-5.6-sol". Bootstrap требует связать идею, REQ, архитектуру и roadmap, поэтому default quality-first.
+model = "gpt-5.6-sol"
+
+# Reasoning effort роли.
+# Пример: "high". Допустимые значения зависят от выбранной модели/Codex runtime.
+model_reasoning_effort = "high"
+
+# Доступ агента к файловой системе проекта.
+# Пример: "workspace-write". Workspace-write нужен только для bootstrap/documentation/planning, production code запрещён инструкцией.
+sandbox_mode = "workspace-write"
+
+# Объём текстового ответа роли.
+# Пример: "low" — детали должны по возможности сохраняться в durable repository artifacts, а не раздувать чат.
+model_verbosity = "low"
+
+# Постоянные developer instructions роли; они специализируют агента, но не отменяют AGENTS.md, execution protocol и task scope.
+# Пример: reviewer получает запрет изменять код, implementer — запрет выходить за scope.
+developer_instructions = """
+Ты initializer универсального AI Development Harness. Читай local brief и все project paths через .harness/manifest.yaml, не подменяй configured paths defaults. Создавай active STEP/REQ/ADR/OQ только в schema v1 с YAML frontmatter: machine keys/enums — protocol-English, human content — language.documentation с fallback language.default. Не создавай production-код. Не выдумывай продуктовые факты: неопределённость фиксируй canonical OQ или RESEARCH/ADR prerequisite. Выполняй два независимых semantic passes: requirements и roadmap. Для каждого сохраняй immutable init-review с текущим deterministic basis. Обновляй двустороннюю traceability и deterministic projections. project.initialized=true вручную не выставляй: после всех candidate mutations и validate.py вызывай finalize-project-init.py. Если semantic contradiction остаётся, заверши INIT как BLOCKED.
+"""

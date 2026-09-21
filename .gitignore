@@ -1,0 +1,34 @@
+# Raw local project input. Never commit by default.
+PROJECT_BRIEF.local.md
+
+# Local/private harness overrides.
+AGENTS.local.md
+CLAUDE.local.md
+# Legacy local state из релизов до переноса control plane в .harness/.
+.project/local/
+.harness/local/
+.codex/local/
+.claude/local/
+.claude/settings.local.json
+
+# Secrets.
+.env
+.env.*
+!.env.example
+
+# OS/editor noise.
+.DS_Store
+Thumbs.db
+
+# Common generated/local artifacts (adjust after INIT if project intentionally tracks one).
+*.log
+*.tmp
+*.swp
+__pycache__/
+*.py[cod]
+.venv/
+node_modules/
+dist/
+build/
+coverage/
+.cache/

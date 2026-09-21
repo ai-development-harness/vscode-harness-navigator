@@ -1,0 +1,304 @@
+{
+  "schemaVersion": 1,
+  "validationOrder": [
+    "tokenize",
+    "normalize",
+    "transition-table",
+    "runtime-preconditions",
+    "dispatch"
+  ],
+  "chainSeparator": " > ",
+  "domains": {
+    "PROJECT": {
+      "chainEnabled": false,
+      "inheritTarget": false,
+      "continuationAliases": {},
+      "commands": {
+        "INIT": {
+          "canonical": "PROJECT INIT",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none"
+        },
+        "STATUS": {
+          "canonical": "PROJECT STATUS",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none"
+        },
+        "RECONCILE": {
+          "canonical": "PROJECT RECONCILE",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none"
+        },
+        "QUICK FIX": {
+          "canonical": "PROJECT QUICK FIX:",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "required"
+        }
+      },
+      "transitions": []
+    },
+    "STEP": {
+      "chainEnabled": true,
+      "inheritTarget": true,
+      "continuationAliases": {},
+      "commands": {
+        "ADD": {
+          "canonical": "STEP ADD:",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "required"
+        },
+        "NEXT": {
+          "canonical": "STEP NEXT",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none"
+        },
+        "PLAN": {
+          "canonical": "STEP PLAN STEP-NNN",
+          "chainAllowed": true,
+          "target": "step",
+          "input": "none"
+        },
+        "IMPLEMENT": {
+          "canonical": "STEP IMPLEMENT STEP-NNN",
+          "chainAllowed": true,
+          "target": "step",
+          "input": "none"
+        },
+        "REVIEW": {
+          "canonical": "STEP REVIEW STEP-NNN",
+          "chainAllowed": true,
+          "target": "step",
+          "input": "none"
+        },
+        "FIX": {
+          "canonical": "STEP FIX STEP-NNN",
+          "chainAllowed": true,
+          "target": "step",
+          "input": "none"
+        },
+        "RUN": {
+          "canonical": "STEP RUN STEP-NNN",
+          "chainAllowed": false,
+          "target": "step",
+          "input": "none"
+        },
+        "AUDIT": {
+          "canonical": "STEP AUDIT STEP-NNN",
+          "chainAllowed": false,
+          "target": "step",
+          "input": "none"
+        }
+      },
+      "transitions": [
+        {
+          "from": "PLAN",
+          "to": "IMPLEMENT",
+          "onPreviousResult": [
+            "SUCCESS"
+          ],
+          "runtimePreconditions": []
+        },
+        {
+          "from": "IMPLEMENT",
+          "to": "REVIEW",
+          "onPreviousResult": [
+            "SUCCESS"
+          ],
+          "runtimePreconditions": []
+        },
+        {
+          "from": "REVIEW",
+          "to": "FIX",
+          "onPreviousResult": [
+            "FAIL"
+          ],
+          "runtimePreconditions": []
+        },
+        {
+          "from": "FIX",
+          "to": "REVIEW",
+          "onPreviousResult": [
+            "SUCCESS"
+          ],
+          "runtimePreconditions": []
+        }
+      ]
+    },
+    "SKILL": {
+      "chainEnabled": false,
+      "inheritTarget": false,
+      "continuationAliases": {},
+      "commands": {
+        "FIND": {
+          "canonical": "SKILL FIND:",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "required"
+        },
+        "INSTALL": {
+          "canonical": "SKILL INSTALL:",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "required"
+        },
+        "CREATE": {
+          "canonical": "SKILL CREATE:",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "required"
+        }
+      },
+      "transitions": []
+    },
+    "GITHUB": {
+      "chainEnabled": false,
+      "inheritTarget": false,
+      "continuationAliases": {},
+      "commands": {
+        "GENERATE TEMPLATES": {
+          "canonical": "GITHUB GENERATE TEMPLATES",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none"
+        }
+      },
+      "transitions": []
+    },
+    "RELEASE": {
+      "chainEnabled": false,
+      "inheritTarget": false,
+      "continuationAliases": {},
+      "commands": {
+        "CHECK": {
+          "canonical": "RELEASE CHECK",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none"
+        }
+      },
+      "transitions": []
+    },
+    "HARNESS": {
+      "chainEnabled": true,
+      "inheritTarget": true,
+      "continuationAliases": {
+        "APPLY": "UPDATE APPLY"
+      },
+      "commands": {
+        "UPDATE CHECK": {
+          "canonical": "HARNESS UPDATE CHECK",
+          "chainAllowed": true,
+          "target": "release-optional",
+          "input": "none"
+        },
+        "UPDATE APPLY": {
+          "canonical": "HARNESS UPDATE APPLY",
+          "chainAllowed": true,
+          "target": "release-optional",
+          "input": "none"
+        }
+      },
+      "transitions": [
+        {
+          "from": "UPDATE CHECK",
+          "to": "UPDATE APPLY",
+          "onPreviousResult": [
+            "PASS"
+          ],
+          "runtimePreconditions": [
+            "matching-update-target-and-route"
+          ]
+        }
+      ]
+    },
+    "GIT": {
+      "chainEnabled": true,
+      "inheritTarget": false,
+      "continuationAliases": {},
+      "commands": {
+        "CHECK": {
+          "canonical": "GIT CHECK",
+          "chainAllowed": true,
+          "target": "none",
+          "input": "none"
+        },
+        "COMMIT": {
+          "canonical": "GIT COMMIT",
+          "chainAllowed": true,
+          "target": "none",
+          "input": "optional"
+        },
+        "PUSH": {
+          "canonical": "GIT PUSH",
+          "chainAllowed": true,
+          "target": "none",
+          "input": "none"
+        },
+        "PR": {
+          "canonical": "GIT PR",
+          "chainAllowed": true,
+          "target": "none",
+          "input": "none"
+        },
+        "SYNC": {
+          "canonical": "GIT SYNC",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none"
+        }
+      },
+      "transitions": [
+        {
+          "from": "CHECK",
+          "to": "COMMIT",
+          "onPreviousResult": [
+            "PASS"
+          ],
+          "runtimePreconditions": []
+        },
+        {
+          "from": "CHECK",
+          "to": "PUSH",
+          "onPreviousResult": [
+            "PASS"
+          ],
+          "runtimePreconditions": [
+            "git-push-ready"
+          ]
+        },
+        {
+          "from": "CHECK",
+          "to": "PR",
+          "onPreviousResult": [
+            "PASS"
+          ],
+          "runtimePreconditions": [
+            "git-pr-ready"
+          ]
+        },
+        {
+          "from": "COMMIT",
+          "to": "PUSH",
+          "onPreviousResult": [
+            "SUCCESS"
+          ],
+          "runtimePreconditions": []
+        },
+        {
+          "from": "PUSH",
+          "to": "PR",
+          "onPreviousResult": [
+            "SUCCESS"
+          ],
+          "runtimePreconditions": []
+        }
+      ]
+    }
+  }
+}

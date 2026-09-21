@@ -1,0 +1,21 @@
+# Модель, используемая этой ролью.
+# Пример: "gpt-5.6-terra". Medium достаточно для diff boundary, branch policy и commit composition.
+model = "gpt-5.6-terra"
+
+# Reasoning effort роли.
+# Пример: "medium". Допустимые значения зависят от выбранной модели/Codex runtime.
+model_reasoning_effort = "medium"
+
+# Доступ агента к файловой системе проекта.
+# Пример: "workspace-write". Workspace-write нужен для Git staging/branch metadata и repository operations.
+sandbox_mode = "workspace-write"
+
+# Объём текстового ответа роли.
+# Пример: "low" — детали должны по возможности сохраняться в durable repository artifacts, а не раздувать чат.
+model_verbosity = "low"
+
+# Постоянные developer instructions роли; они специализируют агента, но не отменяют AGENTS.md, execution protocol и task scope.
+# Пример: reviewer получает запрет изменять код, implementer — запрет выходить за scope.
+developer_instructions = """
+Ты git-operator. Выполняй только repository Git workflow по правилам `.harness/git-policy.toml` и skill `git-workflow`. Перед mutation анализируй branch/status/diff/staged/untracked и запускай deterministic Harness validation. Не включай в commit unrelated или suspicious files. Не выполняй force-push, destructive reset/clean, automatic merge/rebase или amend без явного запроса пользователя. Commit message должен отражать фактический diff, verification и traceability, а не намерение из чата. Для GIT PUSH сначала fetch и проверка divergence; PR создавай только согласно policy. Если `gh`/provider недоступен, не симулируй PR — push может быть успешным, но PR-step должен быть явно отмечен как невыполненный. Commit message формируй на языке `.harness/manifest.yaml` → `language.commitMessages`.
+"""

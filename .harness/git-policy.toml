@@ -1,0 +1,168 @@
+# Git workflow policy AI Development Harness.
+# Safe defaults: no force-push, no automatic merge/rebase, protected branches не публикуются случайно.
+
+# Версия схемы этого config-файла, а не release-версия Harness.
+# Пример: 1. Меняется только при несовместимом изменении структуры git-policy.toml.
+version = 1
+
+[commit]
+# Язык commit message задаётся централизованно в `.harness/manifest.yaml` → `language.commitMessages`.
+# Пример: `ru` создаёт русский subject/body при неизменных Conventional Commit type/scope.
+# Формат subject commit message.
+# Пример: "conventional" → `feat(auth): добавь refresh rotation`.
+style = "conventional"
+# Как COMMIT выбирает файлы для staging.
+# Пример: "all-safe" = выбрать все относящиеся к одному logical change безопасные файлы; варианты: all-safe | tracked-only | staged-only.
+stage_mode = "all-safe"
+# Максимальная длина первой строки commit message.
+# Пример: 72 символа для читаемого Git history.
+subject_max_length = 72
+# Требовать ли подробный body помимо Conventional Commit subject.
+# Пример: true → Context/Changes/Verification/Traceability включаются при наличии данных.
+require_body = true
+# Запускать ли Harness validator перед созданием commit.
+# Пример: true блокирует commit при нарушении integrity/hygiene policy.
+require_harness_validation = true
+# Запрещать ли смешивание независимых logical changes в одном commit.
+# Пример: true → агент предложит несколько commits вместо одного dump commit.
+require_single_logical_change = true
+# Добавлять ли выполненные verification commands/results в commit body.
+# Пример: true → `yarn test — PASS` попадает в Verification.
+include_verification = true
+# Добавлять ли STEP/REQ/ADR references в commit body, если они относятся к diff.
+# Пример: true → `STEP-024`, `REQ-017`, `ADR-006`.
+include_traceability = true
+# Разрешать ли empty commits без файловых изменений.
+# Пример: false — безопасный default; true может быть нужен только специальным CI/release workflows.
+allow_empty = false
+# Подписывать ли commit средствами Git/GPG/SSH согласно локальной конфигурации.
+# Пример: false не требует настроенного signing key; true имеет смысл только если signing уже настроен пользователем.
+sign = false
+
+[commit.types]
+# Тип для новой пользовательской/продуктовой возможности. Пример: `feat(search): добавь фильтр`.
+feat = "Новая пользовательская/продуктовая возможность"
+# Тип для исправления дефекта. Пример: `fix(auth): исправь истечение сессии`.
+fix = "Исправление дефекта"
+# Тип только для документации. Пример: `docs(api): уточни пример запроса`.
+docs = "Только документация"
+# Тип для изменения структуры кода без намеренного изменения поведения. Пример: `refactor(core): выдели mapper`.
+refactor = "Рефакторинг без намеренного изменения поведения"
+# Тип для добавления/изменения тестов без product change. Пример: `test(auth): добавь edge cases`.
+test = "Тесты"
+# Тип для обслуживания repository/tooling. Пример: `chore(repo): обнови шаблоны`.
+chore = "Обслуживание репозитория/инструментов"
+# Тип для CI workflow. Пример: `ci: добавь harness gate`.
+ci = "CI/CD"
+# Тип для build/dependency/tooling configuration. Пример: `build: обнови bundler config`.
+build = "Build/dependency/tooling"
+# Тип для измеримого performance improvement. Пример: `perf(query): сократи число запросов`.
+perf = "Производительность"
+# Тип только для formatting/style без behavior change. Пример: `style: отформатируй configs`.
+style = "Форматирование без изменения поведения"
+# Тип для явного отката предыдущего commit. Пример: `revert: откати feat(search)`.
+revert = "Откат"
+
+[branch]
+# Ветки, на которых действует повышенная защита Harness.
+# Пример: ["main", "master"]; добавь "develop", если прямые commits туда также запрещены.
+protected = ["main", "master"]
+# Что делать при COMMIT на protected branch.
+# Пример: "auto-create" создаёт новую typed branch; варианты: auto-create | stay | block.
+when_on_protected = "auto-create"
+# Разрешить ли самый первый commit пустого нового repository прямо в protected branch.
+# Пример: true упрощает initial bootstrap commit; false заставит создать feature/chore branch даже для него.
+allow_initial_commit_on_protected = true
+# Формат автоматически создаваемого имени ветки.
+# Пример: `{prefix}/{slug}` → `feature/user-export`.
+name_pattern = "{prefix}/{slug}"
+# Максимальная длина смысловой slug-части имени ветки.
+# Пример: 48 ограничивает слишком длинные auto-generated branch names.
+slug_max_length = 48
+
+[branch.prefixes]
+# Prefix ветки для feat commits. Пример: `feature/user-export`.
+feat = "feature"
+# Prefix ветки для fix commits. Пример: `bugfix/session-expiry`.
+fix = "bugfix"
+# Prefix ветки для docs commits. Пример: `docs/plugin-guide`.
+docs = "docs"
+# Prefix ветки для refactor commits. Пример: `refactor/query-layer`.
+refactor = "refactor"
+# Prefix ветки для test commits. Пример: `test/auth-edge-cases`.
+test = "test"
+# Prefix ветки для chore commits. Пример: `chore/repo-cleanup`.
+chore = "chore"
+# Prefix ветки для CI changes. Пример: `ci/harness-integrity`.
+ci = "ci"
+# Prefix ветки для build changes. Пример: `build/docker-image`.
+build = "build"
+# Prefix ветки для performance changes. Пример: `perf/query-cache`.
+perf = "perf"
+# Prefix ветки для style-only changes. Пример: `style/format-config`.
+style = "style"
+# Prefix ветки для revert commits. Пример: `revert/user-export`.
+revert = "revert"
+
+[push]
+# Git remote, куда PUSH отправляет текущую ветку.
+# Пример: "origin".
+remote = "origin"
+# Устанавливать ли upstream branch при первом push новой ветки.
+# Пример: true эквивалентно поведению `git push -u origin <branch>`.
+set_upstream = true
+# Делать ли `git fetch` перед анализом ahead/behind/divergence.
+# Пример: true уменьшает риск push на устаревшее представление remote.
+fetch_before_push = true
+# Политика force push.
+# Пример: "never" — рекомендуемое значение.
+force = "never"
+# Публиковать ли Git tags вместе с обычным PUSH.
+# Пример: false; release tagging должен быть отдельным явным действием.
+push_tags = false
+# Разрешать ли обычный PUSH прямо в protected branch.
+# Пример: false — разработка идёт через branch/PR.
+allow_protected = false
+# Разрешить ли initial bootstrap push первого commit в protected branch.
+# Пример: true удобно для только что созданного GitHub repository.
+allow_initial_push_to_protected = true
+# Запускать ли Harness validator непосредственно перед PUSH.
+# Пример: true.
+require_harness_validation = true
+# Требовать ли полностью clean worktree перед PUSH уже существующих commits.
+# Пример: false позволяет иметь локальные неотносящиеся незакоммиченные изменения, если push сам безопасен.
+require_clean_worktree = false
+
+[pull_request]
+# Что делать после успешного PUSH.
+# Пример: "create-if-missing"; варианты: never | ask | create-if-missing.
+after_push = "create-if-missing"
+# Provider Pull Request API/tooling.
+# Пример: "github" для GitHub repository.
+provider = "github"
+# Предпочтительный локальный инструмент создания/поиска PR.
+# Пример: "gh" — GitHub CLI; при недоступности PR-step должен быть честно BLOCKED.
+preferred_tool = "gh"
+# Base branch новых PR.
+# Пример: "main".
+base = "main"
+# Создавать ли новые PR как draft.
+# Пример: false; true подходит workflow с ранним draft-review.
+draft = false
+# Переиспользовать ли существующий открытый PR той же head branch.
+# Пример: true предотвращает дубли PR.
+reuse_existing = true
+# Строить ли PR title из фактического commit/изменения.
+# Пример: true.
+title_from_commit = true
+# Шаблон тела PR.
+# Пример: `.github/pull_request_template.md`.
+body_template = ".github/pull_request_template.md"
+
+[sync]
+# Remote, который SYNC должен fetch перед расчётом ahead/behind.
+# Пример: "origin".
+fetch_remote = "origin"
+# Уровень автоматизации SYNC.
+# Пример: "report" только показывает состояние; "ff-only" разрешает безопасный fast-forward.
+mode = "report"
