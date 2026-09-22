@@ -1,4 +1,5 @@
 {
   "extension.displayName": "Harness Navigator",
-  "extension.description": "Read-only navigation and reference for AI Development Harness projects in VS Code."
+  "extension.description": "Read-only navigation and reference for AI Development Harness projects in VS Code.",
+  "command.showDiagnostics.title": "Harness: Show Diagnostics"
 }

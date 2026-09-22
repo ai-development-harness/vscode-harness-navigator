@@ -1,4 +1,18 @@
 {
   "Harness Navigator extension activated.": "Harness Navigator extension activated.",
-  "Harness Navigator localization fallback is active.": "Harness Navigator localization fallback is active."
+  "Harness Navigator localization fallback is active.": "Harness Navigator localization fallback is active.",
+  "Harness Navigator diagnostics: {0} workspace roots inspected.": "Harness Navigator diagnostics: {0} workspace roots inspected.",
+  "Harness manifest is absent.": "Harness manifest is absent.",
+  "Harness manifest must contain an object.": "Harness manifest must contain an object.",
+  "Harness manifest cannot be parsed.": "Harness manifest cannot be parsed.",
+  "Harness manifest cannot be read.": "Harness manifest cannot be read.",
+  "Harness manifest is missing a required field: {0}.": "Harness manifest is missing a required field: {0}.",
+  "Harness manifest contains an invalid release: {0}.": "Harness manifest contains an invalid release: {0}.",
+  "Harness manifest must be a regular file.": "Harness manifest must be a regular file.",
+  "Harness manifest exceeds {0} bytes.": "Harness manifest exceeds {0} bytes.",
+  "Harness manifest schema is not supported: {0}.": "Harness manifest schema is not supported: {0}.",
+  "Harness release is not supported: {0}.": "Harness release is not supported: {0}.",
+  "A configured path is blocked by workspace containment.": "A configured path is blocked by workspace containment.",
+  "Manifest resolves outside of the workspace root.": "Manifest resolves outside of the workspace root.",
+  "Harness manifest is valid.": "Harness manifest is valid."
 }

@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import { createLifecycleRegistry, LifecycleRegistry } from './lifecycle/disposableRegistry';
+import { ProjectStateService } from './projectModel/projectStateService';
+import type { ProjectState } from './projectModel/projectState';
 
 /**
  * Минимальный, test-observable результат активации. Намеренно ограничен
@@ -13,14 +15,15 @@ export interface ActivationResult {
   readonly registeredDisposableCount: number;
   readonly activatedLogMessage: string;
   readonly fallbackLogMessage: string;
+  readonly projectStates: readonly ProjectState[];
 }
 
 let activeRegistry: LifecycleRegistry | undefined;
 
 /**
  * Точка входа расширения. Намеренно не читает workspace, не запускает
- * процессы, не выполняет команды Harness и не создаёт product-сервисы:
- * STEP-001 закладывает только extension lifecycle и границу локализации.
+ * процессы или не выполняет команды Harness. STEP-002 добавляет только
+ * read-only detection manifest и вывод его производного состояния.
  * Каждый disposable, которым владеет это расширение, создаётся здесь и
  * проходит через lifecycle-реестр.
  */
@@ -32,6 +35,16 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
   // при деактивации; не хранит product-состояние и не выполняет I/O.
   registry.register(markerDisposable());
 
+  const output = registry.register(vscode.window.createOutputChannel('Harness Navigator'));
+  const projectStates = registry.register(
+    new ProjectStateService(vscode.workspace.workspaceFolders, output),
+  );
+  registry.register(
+    vscode.commands.registerCommand('harnessNavigator.showDiagnostics', () =>
+      projectStates.showDiagnostics(),
+    ),
+  );
+
   activeRegistry = registry;
 
   const activatedLogMessage = vscode.l10n.t('Harness Navigator extension activated.');
@@ -42,6 +55,7 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
     registeredDisposableCount: registry.count,
     activatedLogMessage,
     fallbackLogMessage,
+    projectStates: projectStates.all,
   };
 }
 

@@ -16,6 +16,7 @@ steps:
   - STEP-002
   - STEP-003
   - STEP-007
+  - STEP-008
 ---
 
 # ADR-001 — Read-only граница и Harness как источник истины
