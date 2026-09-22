@@ -14,5 +14,10 @@
   "Harness release is not supported: {0}.": "Harness release is not supported: {0}.",
   "A configured path is blocked by workspace containment.": "A configured path is blocked by workspace containment.",
   "Manifest resolves outside of the workspace root.": "Manifest resolves outside of the workspace root.",
-  "Harness manifest is valid.": "Harness manifest is valid."
+  "Harness manifest is valid.": "Harness manifest is valid.",
+  "A configured artifact directory is unavailable: {0}.": "A configured artifact directory is unavailable: {0}.",
+  "A Harness artifact cannot be parsed: {0}.": "A Harness artifact cannot be parsed: {0}.",
+  "A duplicate Harness artifact identifier was found: {0}.": "A duplicate Harness artifact identifier was found: {0}.",
+  "A Harness artifact contains an unknown reference: {0}.": "A Harness artifact contains an unknown reference: {0}.",
+  "The requirements status projection cannot be read.": "The requirements status projection cannot be read."
 }

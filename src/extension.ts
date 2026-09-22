@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { createLifecycleRegistry, LifecycleRegistry } from './lifecycle/disposableRegistry';
 import { ProjectStateService } from './projectModel/projectStateService';
 import type { ProjectState } from './projectModel/projectState';
+import type { ArtifactSnapshot } from './projectModel/artifactIndex';
 
 /**
  * Минимальный, test-observable результат активации. Намеренно ограничен
@@ -19,11 +20,12 @@ export interface ActivationResult {
 }
 
 let activeRegistry: LifecycleRegistry | undefined;
+let activeProjectStates: ProjectStateService | undefined;
 
 /**
  * Точка входа расширения. Намеренно не читает workspace, не запускает
- * процессы или не выполняет команды Harness. STEP-002 добавляет только
- * read-only detection manifest и вывод его производного состояния.
+ * процессы или не выполняет команды Harness. STEP-003 добавляет только
+ * read-only derived indexes и их lifecycle без записи canonical files.
  * Каждый disposable, которым владеет это расширение, создаётся здесь и
  * проходит через lifecycle-реестр.
  */
@@ -44,8 +46,16 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
       projectStates.showDiagnostics(),
     ),
   );
+  registry.register(
+    vscode.commands.registerCommand('harnessNavigator.refresh', () => {
+      for (const folder of vscode.workspace.workspaceFolders ?? []) {
+        projectStates.refreshRoot(folder);
+      }
+    }),
+  );
 
   activeRegistry = registry;
+  activeProjectStates = projectStates;
 
   const activatedLogMessage = vscode.l10n.t('Harness Navigator extension activated.');
   const fallbackLogMessage = vscode.l10n.t('Harness Navigator localization fallback is active.');
@@ -68,6 +78,13 @@ export function getActiveRegistrationCount(): number {
   return activeRegistry?.count ?? 0;
 }
 
+/** Узкая read-only observability для Extension Host tests и будущих consumers. */
+export function getActiveArtifactSnapshot(
+  folder: vscode.WorkspaceFolder,
+): ArtifactSnapshot | undefined {
+  return activeProjectStates?.getIndex(folder)?.snapshot();
+}
+
 /**
  * Точка деактивации. Идемпотентна и никогда не бросает исключения:
  * освобождает lifecycle-реестр, созданный в `activate`, и безопасна для
@@ -79,6 +96,7 @@ export function deactivate(): void {
     activeRegistry?.dispose();
   } finally {
     activeRegistry = undefined;
+    activeProjectStates = undefined;
   }
 }
 

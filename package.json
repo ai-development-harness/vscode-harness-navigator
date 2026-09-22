@@ -27,6 +27,10 @@
       {
         "command": "harnessNavigator.showDiagnostics",
         "title": "%command.showDiagnostics.title%"
+      },
+      {
+        "command": "harnessNavigator.refresh",
+        "title": "%command.refresh.title%"
       }
     ]
   },

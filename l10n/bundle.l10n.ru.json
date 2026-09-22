@@ -13,5 +13,10 @@
   "Harness release is not supported: {0}.": "Версия Harness не поддерживается: {0}.",
   "A configured path is blocked by workspace containment.": "Настроенный путь заблокирован границей workspace.",
   "Manifest resolves outside of the workspace root.": "Manifest разрешается за пределы корня workspace.",
-  "Harness manifest is valid.": "Manifest Harness корректен."
+  "Harness manifest is valid.": "Manifest Harness корректен.",
+  "A configured artifact directory is unavailable: {0}.": "Настроенный каталог артефактов недоступен: {0}.",
+  "A Harness artifact cannot be parsed: {0}.": "Не удалось разобрать артефакт Harness: {0}.",
+  "A duplicate Harness artifact identifier was found: {0}.": "Обнаружен дублирующийся идентификатор артефакта Harness: {0}.",
+  "A Harness artifact contains an unknown reference: {0}.": "Артефакт Harness содержит неизвестную ссылку: {0}.",
+  "The requirements status projection cannot be read.": "Не удалось прочитать проекцию статусов требований."
 }

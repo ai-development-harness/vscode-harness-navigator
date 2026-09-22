@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { ARTIFACT_DIAGNOSTIC_MESSAGES } from '../../src/projectModel/artifactIndex';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../..');
@@ -35,6 +36,13 @@ test('ни одно значение bundle не пустое', () => {
     for (const [key, value] of Object.entries(bundle)) {
       assert.ok(value.length > 0, `key "${key}" has an empty value`);
     }
+  }
+});
+
+test('ключи диагностик артефактов присутствуют в обоих runtime bundle', () => {
+  for (const key of ARTIFACT_DIAGNOSTIC_MESSAGES) {
+    assert.ok(bundleL10nEn[key] !== undefined, `English key: ${key}`);
+    assert.ok(bundleL10nRu[key] !== undefined, `Russian key: ${key}`);
   }
 });
 
