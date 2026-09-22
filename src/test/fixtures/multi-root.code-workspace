@@ -1,0 +1,8 @@
+{
+  "folders": [
+    { "path": "valid-project" },
+    { "path": "ordinary-folder" },
+    { "path": "invalid-release-project" },
+    { "path": "non-regular-manifest-project" }
+  ]
+}

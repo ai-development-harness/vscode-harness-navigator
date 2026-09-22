@@ -1,3 +1,17 @@
 {
-  "Harness Navigator extension activated.": "Расширение Harness Navigator активировано."
+  "Harness Navigator extension activated.": "Расширение Harness Navigator активировано.",
+  "Harness Navigator diagnostics: {0} workspace roots inspected.": "Harness Navigator: проверено корней workspace: {0}.",
+  "Harness manifest is absent.": "Manifest Harness отсутствует.",
+  "Harness manifest must contain an object.": "Manifest Harness должен содержать объект.",
+  "Harness manifest cannot be parsed.": "Не удалось разобрать manifest Harness.",
+  "Harness manifest cannot be read.": "Не удалось прочитать manifest Harness.",
+  "Harness manifest is missing a required field: {0}.": "В manifest Harness отсутствует обязательное поле: {0}.",
+  "Harness manifest contains an invalid release: {0}.": "Manifest Harness содержит некорректную версию release: {0}.",
+  "Harness manifest must be a regular file.": "Manifest Harness должен быть обычным файлом.",
+  "Harness manifest exceeds {0} bytes.": "Размер manifest Harness превышает {0} байт.",
+  "Harness manifest schema is not supported: {0}.": "Schema manifest Harness не поддерживается: {0}.",
+  "Harness release is not supported: {0}.": "Версия Harness не поддерживается: {0}.",
+  "A configured path is blocked by workspace containment.": "Настроенный путь заблокирован границей workspace.",
+  "Manifest resolves outside of the workspace root.": "Manifest разрешается за пределы корня workspace.",
+  "Harness manifest is valid.": "Manifest Harness корректен."
 }

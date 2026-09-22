@@ -6,8 +6,12 @@ source: brief
 steps:
   - STEP-002
   - STEP-007
+  - STEP-008
+  - STEP-009
 adrs:
   - ADR-001
+  - ADR-005
+  - ADR-006
 ---
 
 # REQ-002 — Определение Harness-проекта и совместимость

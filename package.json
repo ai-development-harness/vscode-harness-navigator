@@ -22,7 +22,14 @@
   "activationEvents": [
     "onStartupFinished"
   ],
-  "contributes": {},
+  "contributes": {
+    "commands": [
+      {
+        "command": "harnessNavigator.showDiagnostics",
+        "title": "%command.showDiagnostics.title%"
+      }
+    ]
+  },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.unit.json && tsc --noEmit -p tsconfig.test.json",
     "lint": "eslint src tests esbuild.js eslint.config.mjs .vscode-test.mjs",
@@ -40,6 +47,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/js-yaml": "^4.0.9",
     "@types/mocha": "^10.0.10",
     "@types/node": "^24.13.6",
     "@types/vscode": "^1.85.0",
@@ -54,6 +62,9 @@
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.70.0"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
   },
   "packageManager": "yarn@4.10.3+sha512.c38cafb5c7bb273f3926d04e55e1d8c9dfa7d9c3ea1f36a4868fa028b9e5f72298f0b7f401ad5eb921749eb012eb1c3bb74bf7503df3ee43fd600d14a018266f"
 }

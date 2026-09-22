@@ -46,6 +46,7 @@
 - [ADR-002](adr/ADR-002-shared-project-indexes.md) — единые Artifact и Reference indexes.
 - [ADR-003](adr/ADR-003-command-catalog-from-graph.md) — Command Catalog из command graph.
 - [ADR-004](adr/ADR-004-native-vscode-ui-and-local-runtime.md) — нативный VS Code UI и локальный offline runtime.
+- [ADR-006](adr/ADR-006-step-002-platform-containment-bridge.md) — прямой platform-scoped contract для STEP-002.
 
 ## Известный architecture debt / drift
 
