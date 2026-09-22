@@ -10,6 +10,11 @@ export type ProjectDiagnosticCategory =
   | 'UnsupportedHarnessVersion'
   | 'UnsupportedSchema'
   | 'ConfigurationBlocked'
+  | 'ArtifactDirectoryMissing'
+  | 'ArtifactParseError'
+  | 'DuplicateArtifactId'
+  | 'InvalidArtifactReference'
+  | 'ProjectionReadError'
   | 'UnexpectedInternalError';
 
 export interface ProjectDiagnostic {

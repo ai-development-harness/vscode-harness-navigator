@@ -4,13 +4,13 @@
 
 | REQ | Название | Статус | Реализующие STEP | Evidence |
 |---|---|---|---|---|
-| [REQ-001](REQ-001-read-only-source-of-truth.md) | Read-only граница и источник истины | partial | STEP-001, STEP-002, STEP-003, STEP-004, STEP-005, STEP-006, STEP-007 | sha256:1b72707d952e6bef626e3631547a5a38e391a1823bbaf0cd7e70d9e9b2c3ee38, sha256:4726040fb8763ae4a8caf09321660b9038d64d45f7f87c7c71993c2c5767bd8e |
+| [REQ-001](REQ-001-read-only-source-of-truth.md) | Read-only граница и источник истины | partial | STEP-001, STEP-002, STEP-003, STEP-004, STEP-005, STEP-006, STEP-007 | sha256:1b72707d952e6bef626e3631547a5a38e391a1823bbaf0cd7e70d9e9b2c3ee38, sha256:4726040fb8763ae4a8caf09321660b9038d64d45f7f87c7c71993c2c5767bd8e, sha256:2d8a745cbfde0126f726436aefe4f80cea30289b0039fb6a75b3f26d44c1b3b1 |
 | [REQ-002](REQ-002-project-detection-and-compatibility.md) | Определение Harness-проекта и совместимость | partial | STEP-002, STEP-007, STEP-008, STEP-009 | sha256:4726040fb8763ae4a8caf09321660b9038d64d45f7f87c7c71993c2c5767bd8e, sha256:b434d9c33d39ce6b8f5ab77aa239444771998c85c418a05922de6c0cccb8a652, sha256:992180766b21f6858d71aaf2667a913472620e671c20bcdb4dcd9f4baafe7866 |
-| [REQ-003](REQ-003-artifact-index-and-statuses.md) | Индексация артефактов и статусов | planned | STEP-003, STEP-007 | — |
+| [REQ-003](REQ-003-artifact-index-and-statuses.md) | Индексация артефактов и статусов | partial | STEP-003, STEP-007 | sha256:2d8a745cbfde0126f726436aefe4f80cea30289b0039fb6a75b3f26d44c1b3b1 |
 | [REQ-004](REQ-004-artifact-and-focus-views.md) | Нативные views артефактов и фокуса | planned | STEP-004, STEP-007 | — |
 | [REQ-005](REQ-005-harness-id-navigation.md) | Навигация по Harness ID | planned | STEP-005, STEP-007 | — |
 | [REQ-006](REQ-006-relations-and-references.md) | Связи и поиск упоминаний | planned | STEP-005, STEP-007 | — |
 | [REQ-007](REQ-007-command-catalog.md) | Read-only каталог Harness-команд | planned | STEP-006, STEP-007 | — |
-| [REQ-008](REQ-008-localization-and-diagnostics.md) | Локализация и диагностируемая деградация | partial | STEP-001, STEP-002, STEP-003, STEP-004, STEP-005, STEP-006, STEP-007, STEP-008 | sha256:1b72707d952e6bef626e3631547a5a38e391a1823bbaf0cd7e70d9e9b2c3ee38, sha256:4726040fb8763ae4a8caf09321660b9038d64d45f7f87c7c71993c2c5767bd8e, sha256:b434d9c33d39ce6b8f5ab77aa239444771998c85c418a05922de6c0cccb8a652 |
-| [REQ-009](REQ-009-incremental-offline-operation.md) | Incremental и offline работа | planned | STEP-003, STEP-007 | — |
+| [REQ-008](REQ-008-localization-and-diagnostics.md) | Локализация и диагностируемая деградация | partial | STEP-001, STEP-002, STEP-003, STEP-004, STEP-005, STEP-006, STEP-007, STEP-008 | sha256:1b72707d952e6bef626e3631547a5a38e391a1823bbaf0cd7e70d9e9b2c3ee38, sha256:4726040fb8763ae4a8caf09321660b9038d64d45f7f87c7c71993c2c5767bd8e, sha256:2d8a745cbfde0126f726436aefe4f80cea30289b0039fb6a75b3f26d44c1b3b1, sha256:b434d9c33d39ce6b8f5ab77aa239444771998c85c418a05922de6c0cccb8a652 |
+| [REQ-009](REQ-009-incremental-offline-operation.md) | Incremental и offline работа | partial | STEP-003, STEP-007 | sha256:2d8a745cbfde0126f726436aefe4f80cea30289b0039fb6a75b3f26d44c1b3b1 |
 | [REQ-010](REQ-010-quality-and-testability.md) | Качество реализации и проверяемость | partial | STEP-001, STEP-007 | sha256:1b72707d952e6bef626e3631547a5a38e391a1823bbaf0cd7e70d9e9b2c3ee38 |

@@ -1,5 +1,6 @@
 {
   "extension.displayName": "Harness Navigator",
   "extension.description": "Read-only навигация и справка по проектам AI Development Harness в VS Code.",
-  "command.showDiagnostics.title": "Harness: Показать диагностику"
+  "command.showDiagnostics.title": "Harness: Показать диагностику",
+  "command.refresh.title": "Harness: Обновить"
 }
