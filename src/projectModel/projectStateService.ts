@@ -1,7 +1,15 @@
 import * as vscode from 'vscode';
 import { detectProject } from './manifestService';
 import { ArtifactIndex, handleArtifactWatcherEvent } from './artifactIndex';
-import type { ConfiguredPaths, ProjectState, ValidProjectState } from './projectState';
+import type {
+  ConfiguredPaths,
+  ProjectDiagnostic,
+  ProjectState,
+  ValidProjectState,
+} from './projectState';
+
+/** Внешний источник diagnostics для valid root (например Command Catalog). */
+export type DiagnosticSource = (folder: vscode.WorkspaceFolder) => readonly ProjectDiagnostic[];
 
 /**
  * Хранит только производные in-memory результаты detection, разделённые по
@@ -13,6 +21,7 @@ export class ProjectStateService implements vscode.Disposable {
   private readonly indexes = new Map<string, ArtifactIndex>();
   private readonly manifestWatchers: vscode.FileSystemWatcher[] = [];
   private readonly artifactWatchers = new Map<string, vscode.FileSystemWatcher[]>();
+  private readonly diagnosticSources = new Set<DiagnosticSource>();
   private readonly projectModelChangeEmitter = new vscode.EventEmitter<void>();
 
   /**
@@ -94,6 +103,17 @@ export class ProjectStateService implements vscode.Disposable {
     return this.indexes.get(folder.uri.toString());
   }
 
+  /**
+   * Подключает внешний источник diagnostics. Он вызывается только для valid
+   * roots и не влияет на `ProjectState`/ArtifactIndex.
+   */
+  registerDiagnosticSource(source: DiagnosticSource): vscode.Disposable {
+    this.diagnosticSources.add(source);
+    return new vscode.Disposable(() => {
+      this.diagnosticSources.delete(source);
+    });
+  }
+
   showDiagnostics(): DiagnosticsReport {
     const states = this.all;
     const summary = vscode.l10n.t(
@@ -119,6 +139,17 @@ export class ProjectStateService implements vscode.Disposable {
         lines.push(line);
       }
     }
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      if (this.getState(folder)?.kind !== 'valid') continue;
+      for (const source of this.diagnosticSources) {
+        for (const item of source(folder)) {
+          const explanation = vscode.l10n.t(item.message, ...item.messageArguments);
+          const line = `${folder.uri.toString()}: ${item.category} — ${explanation}`;
+          this.output.appendLine(line);
+          lines.push(line);
+        }
+      }
+    }
     this.output.show(true);
     return { states, summary, lines };
   }
@@ -128,6 +159,7 @@ export class ProjectStateService implements vscode.Disposable {
     for (const watcher of this.manifestWatchers.splice(0)) watcher.dispose();
     this.states.clear();
     this.indexes.clear();
+    this.diagnosticSources.clear();
     this.projectModelChangeEmitter.dispose();
   }
 

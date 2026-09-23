@@ -20,5 +20,8 @@
   "configuration.filterPhase.description": "Show only STEP artifacts with this phase in the Harness Artifacts view.",
   "command.findAllReferences.title": "Harness: Find All References",
   "command.showRelations.title": "Harness: Show Relations",
-  "semanticToken.harnessArtifactId.description": "Harness artifact identifier"
+  "semanticToken.harnessArtifactId.description": "Harness artifact identifier",
+  "view.commands.name": "Harness Commands",
+  "command.findCommand.title": "Harness: Find Command",
+  "command.copyCommand.title": "Harness: Copy Command"
 }
