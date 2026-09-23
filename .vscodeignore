@@ -1,6 +1,5 @@
 **
 !dist/extension.js
-!dist/extension.js.map
 !package.json
 !package.nls.json
 !package.nls.ru.json

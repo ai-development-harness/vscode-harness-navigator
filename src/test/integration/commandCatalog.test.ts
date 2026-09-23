@@ -1,5 +1,6 @@
 import * as assert from 'node:assert/strict';
 import * as vscode from 'vscode';
+import { assertIsolatedWorkspace } from './support/workspaceGuard';
 
 const encoder = new TextEncoder();
 const EXTENSION_ID = 'ai-development-harness.vscode-harness-navigator';
@@ -139,6 +140,8 @@ const reqDoc = (id: string) =>
   `---\nschema: 1\nid: ${id}\nstatus: draft\n---\n\n# ${id} — Требование\n`;
 
 suite('Command Catalog (Extension Host)', () => {
+  suiteSetup(() => assertIsolatedWorkspace());
+
   let extensionModule: ExtensionModule;
   let valid: vscode.WorkspaceFolder;
   let graphUri: vscode.Uri;

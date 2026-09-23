@@ -23,5 +23,6 @@
   "semanticToken.harnessArtifactId.description": "Идентификатор артефакта Harness",
   "view.commands.name": "Команды Harness",
   "command.findCommand.title": "Harness: Найти команду",
-  "command.copyCommand.title": "Harness: Скопировать команду"
+  "command.copyCommand.title": "Harness: Скопировать команду",
+  "view.summary.name": "Сводка Harness"
 }

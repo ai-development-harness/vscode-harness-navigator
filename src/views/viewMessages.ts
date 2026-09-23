@@ -36,6 +36,18 @@ const MESSAGES = {
   filterFieldPhase: 'Phase',
   filterValuePlaceholder: 'Select a value for {0}',
   filterClearOption: 'Any (clear this filter)',
+  statusBarText: 'Harness · {0} active · {1} blocked · {2} OQ',
+  statusBarTextCategory: 'Harness · {0}',
+  statusBarTooltipRootCategory: '{0}: {1}',
+  statusBarName: 'Harness Navigator summary',
+  statusBarTooltipRoot:
+    '{0}: release {1}, {2} STEP, {3} REQ, {4} ADR, {5} open OQ, {6} diagnostics',
+  statusBarTooltipHint: 'Click to open the Harness Navigator view.',
+  summaryRelease: 'Harness release',
+  summaryOpenQuestions: 'Open OQ',
+  summaryInProgress: 'In progress',
+  summaryBlocked: 'Blocked',
+  summaryDiagnostics: 'Diagnostics',
   filterPhaseInputPrompt: 'Enter the STEP phase to filter by, or leave empty to clear it',
 } as const;
 

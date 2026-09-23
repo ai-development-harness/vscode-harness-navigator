@@ -54,6 +54,24 @@ export default tseslint.config(
     },
   },
   {
+    // Release/test tooling scripts (TypeScript, запускаются через tsx).
+    files: ['scripts/**/*.ts'],
+    extends: [js.configs.recommended, ...tseslint.configs.recommendedTypeChecked],
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.scripts.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
+      '@typescript-eslint/no-non-null-assertion': 'error',
+    },
+  },
+  {
     // Для plain Node/CommonJS tooling scripts type-aware linting не нужен.
     files: ['esbuild.js'],
     extends: [js.configs.recommended],

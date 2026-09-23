@@ -3,9 +3,11 @@
 ## Prerequisites
 
 - Node.js >= 20 (проект разрабатывается на Node 24).
-- Corepack-managed Yarn (Berry) с `node-modules` linker. Один раз выполните `corepack enable`,
+- Corepack-managed Yarn 4 (Berry) с `node-modules` linker. Один раз выполните `corepack enable`,
   после чего `yarn` внутри репозитория автоматически использует версию, зафиксированную в
   `package.json#packageManager`.
+- Python 3.11+ — только для Harness tools/validators (`python3 .harness/tools/validate.py`,
+  `sync-projections.py`); сам код расширения Python не использует.
 - Yarn настроен на `node-modules` linker в `.yarnrc.yml`. Plug'n'Play намеренно не используется:
   он несовместим с packaging через `@vscode/vsce` и с тем, как `@vscode/test-electron` загружает
   расширение в реальный Extension Host.
@@ -13,105 +15,111 @@
 ## Local setup
 
 ```bash
-yarn install
+yarn install --immutable
 ```
 
-Эта команда устанавливает зависимости в `node_modules/` по зафиксированному `yarn.lock`.
+Устанавливает зависимости в `node_modules/` строго по зафиксированному `yarn.lock`.
 
 ## Development commands
 
 | Command | Назначение |
 | --- | --- |
-| `yarn typecheck` | Строгая проверка типов TypeScript для source, unit и integration tests (без emit). |
-| `yarn lint` | ESLint (type-aware) для `src/`, `tests/` и собственных tooling-скриптов репозитория. |
+| `yarn typecheck` | Строгая проверка типов TypeScript для source, unit tests, integration tests и `scripts/` (без emit). |
+| `yarn lint` | ESLint (type-aware) для `src/`, `tests/`, `scripts/` и корневых config-файлов. |
 | `yarn format` | Проверка форматирования Prettier (файлы не переписываются). |
 | `yarn format:fix` | Применение форматирования Prettier. |
-| `yarn build:dev` | esbuild-сборка `src/extension.ts` в `dist/extension.js` с sourcemap, без минификации. |
-| `yarn build` | Production esbuild-сборка: CommonJS, `--external:vscode`, минификация, без sourcemap. |
-| `yarn compile:tests` | Компилирует `src/test/**/*.ts` (integration tests) в `out/test/**` через `tsc`. |
-| `yarn test:unit` | Запускает unit-слой тестов (обычный Node-процесс, без Extension Host). |
-| `yarn test:integration` | Собирает dev-bundle, компилирует integration tests, затем запускает их в реальном изолированном Extension Host через `@vscode/test-cli`/`@vscode/test-electron`. |
-| `yarn test` | Запускает оба слоя тестов (`test:unit`, затем `test:integration`). |
-| `yarn package` | Упаковывает расширение в `.vsix` через `@vscode/vsce` (production-сборка запускается автоматически через скрипт `vscode:prepublish`). |
+| `yarn test:unit` | Unit-слой (обычный Node-процесс, без Extension Host). |
+| `yarn test:integration` | `build:dev` → `compile:tests` → подготовка `out/test-workspace` → Extension Host профили `integration-en`, `integration-ru`, `mvp-en`, `mvp-ru`. |
+| `yarn test` | `test:unit`, затем `test:integration`. |
+| `yarn build:dev` | Очищает `dist`/`out` и собирает dev bundle `dist/extension.js` (sourcemap, без минификации). |
+| `yarn build` | Очищает `dist`/`out` и собирает production bundle (минификация, без sourcemap). |
+| `yarn compile:tests` | Компилирует `src/test/**/*.ts` в `out/test/**` через `tsc`. |
+| `yarn package` | Собирает `vscode-harness-navigator-<version>.vsix` через `@vscode/vsce` (production-сборка запускается `vscode:prepublish`). |
+| `yarn inspect:package` | Читает VSIX (zero-dependency ZIP reader, без исполнения), печатает entries с SHA-256 и завершается с кодом 1 при нарушении allowlist, bundle-правил или secret heuristics. |
+| `yarn test:packaged` | `compile:tests` → извлечение VSIX в `out/packaged/extension` → подготовка `out/test-workspace` → Extension Host профили `packaged-en`, `packaged-ru` против извлечённого production bundle. Не пересобирает bundle: сначала выполните `yarn build && yarn package`. |
 
-## Запуск / отладка Extension Host вручную
+Integration и packaged suites запускают реальный VS Code Extension Host и требуют display. На
+headless Linux используйте `xvfb-run -a yarn test:integration` и `xvfb-run -a yarn test:packaged`.
+При первом запуске `@vscode/test-electron` скачивает test-сборку VS Code в `.vscode-test/`
+(это сеть test tooling, а не runtime расширения); с заполненным кэшем прогон возможен offline.
 
-1. Откройте этот репозиторий в VS Code.
-2. Выполните `yarn build:dev`, чтобы создать `dist/extension.js`. Это one-shot сборка: после
-   изменения исходников выполните её повторно перед новым запуском Extension Development Host.
-3. Нажмите `F5` (или *Run and Debug → Run Extension*), чтобы запустить окно Extension
-   Development Host с загруженным расширением. VS Code использует `package.json#main`
-   (`./dist/extension.js`) как точку входа.
-4. Breakpoints, установленные в `src/extension.ts`, срабатывают благодаря sourcemap,
-   создаваемому `build:dev`.
+## Запуск Extension Development Host вручную
 
-Пока не существует product UI, который можно было бы «покликать» вручную: STEP-001 закладывает
-только extension lifecycle (`activate`/`deactivate`) и границу локализации. Активация происходит
-незаметно на `onStartupFinished` и не читает workspace, не запускает процессы и не выполняет ни
-одной команды Harness.
+1. Откройте репозиторий в VS Code и выполните `yarn build:dev`.
+2. Нажмите `F5` (*Run Extension* из `.vscode/launch.json`) — откроется Extension Development
+   Host с загруженным расширением; точка входа — `package.json#main` (`./dist/extension.js`).
+3. Для ручной проверки MVP откройте `src/test/fixtures/mvp/mvp-valid` (или подготовленную копию
+   `out/test-workspace/mvp/mvp.code-workspace`) в Extension Development Host в RU и EN локали,
+   светлой и тёмной теме: Status Bar item читаем и использует theme colors, по click открывает
+   Harness View, Summary view показывает release и counts.
 
 ## Структура тестов
 
-Два независимо запускаемых слоя, оба вызываются через `yarn test`:
+- **Unit** — `tests/unit/*.test.ts` (`node --import tsx --test`), без Extension Host. Покрывает
+  parsing/indexes/containment (включая capability injection для non-Linux), view models,
+  Status Bar/Summary model, Command Catalog, локализацию, атрибуцию stack для boundary spies и
+  правила package inspection.
+- **Integration** — `src/test/integration/*.test.ts` (профили `integration-*`) и
+  `src/test/integration/mvp/*.test.ts` (профили `mvp-*` и `packaged-*`): detection states,
+  containment, taxonomy, views/providers/catalog, watcher refresh без restart, multi-root
+  lifecycle, boundary suite (offline/no-shell/no-mutation через runtime spies) и RU/EN.
+  Общие helpers — `src/test/integration/support/`.
 
-- **Unit-слой** — `tests/unit/*.test.ts`, запускается напрямую встроенным test runner Node через
-  `tsx` (`node --import tsx --test`). Без Extension Host, без модуля `vscode`. Покрывает:
-  - паритет ключей между `package.nls.json`/`package.nls.ru.json` и то, что
-    русский runtime bundle является подмножеством English fallback bundle;
-  - наличие намеренно отсутствующего в русском runtime bundle fallback key;
-  - guard против попадания canonical Harness ID/enum-значений/command names в переводимые
-    значения bundle;
-  - регистрацию, disposal, порядок disposal, идемпотентность и устойчивость к исключениям
-    lifecycle-реестра.
-- **Integration-слой** — `src/test/integration/*.test.ts`, компилируется в
-  `out/test/integration` через `tsc -p tsconfig.test.json` и запускается в реальном изолированном
-  Extension Host, который поднимает `@vscode/test-cli` (`.vscode-test.mjs`) через
-  `@vscode/test-electron`. При первом запуске это скачивает локальную test-сборку VS Code
-  (далее кэшируется в `.vscode-test/`). Покрывает:
-  - расширение обнаруживается по своему manifest id;
-  - активация возвращает документированный test-observable результат, включая
-    локализованную runtime-строку и английский fallback;
-  - English и Russian Extension Host запускаются с `--locale en` и `--locale ru`;
-  - `deactivate()` освобождает registrations до нуля, безопасен и идемпотентен.
+### Изолированный test workspace
 
-## Lint / formatting / type checking
+`scripts/prepare-test-workspace.ts` удаляет и заново копирует `src/test/fixtures` в
+`out/test-workspace/` (записи вне этого каталога запрещены) и генерирует то, что нельзя хранить
+в Git: `node_modules/` MVP-фикстуры (в исходниках — `_node_modules`), static symlink-фикстуры,
+manifest с абсолютным configured path и (POSIX, не root) каталог `.harness` без права поиска.
+Если OS отказывает в создании symlink/chmod, скрипт пишет `out/test-workspace/mvp/skipped-fixtures.json`,
+а соответствующие проверки явно пропускаются с причиной. Extension Host tests не изменяют tracked
+`src/test/fixtures`; каждая suite проверяет, что workspace лежит в `out/test-workspace`.
 
-- `yarn typecheck` — строгий TypeScript (`strict`, `noUncheckedIndexedAccess`,
-  `exactOptionalPropertyTypes`) для исходного кода, unit и integration tests.
-- `yarn lint` — ESLint 10 с type-aware конфигом `recommendedTypeChecked` из `typescript-eslint`,
-  плюс `eslint-config-prettier`, отключающий стилистические правила, конфликтующие с Prettier.
-- `yarn format` / `yarn format:fix` — Prettier, ограниченный файлами, которыми владеет этот
-  проект (`src/`, `tests/`, `l10n/*.json`, `package.nls*.json`, корневые config-файлы), чтобы
-  посторонняя документация не переформатировалась как побочный эффект.
+### Packaged профили
 
-## Build
+`scripts/prepare-packaged-extension.ts` извлекает `extension/**` из VSIX в `out/packaged/extension`,
+пишет `out/packaged/extracted-entries.json` (SHA-256 entries) и копирует скомпилированные suites в
+`out/packaged/extension/__packaged_tests__/`. Extension Host выдаёт отдельный instance `vscode` API
+на расширение, поэтому suites обязаны лежать внутри расширения, чтобы boundary spies были видны
+bundle. `__packaged_tests__` — единственное дополнение к содержимому VSIX и в bundle не входит.
 
-`yarn build:dev` и `yarn build` оба запускают `esbuild.js`, который собирает `src/extension.ts` в
-единый CommonJS `dist/extension.js`, ориентируясь на Node runtime Extension Host в VS Code и
-исключая модуль `vscode` (он подставляется host-ом в runtime). `--production` (используется
-`yarn build`) минифицирует сборку и не создаёт sourcemap; режим по умолчанию (dev) сохраняет
-sourcemap и пропускает минификацию.
+## Build и packaging
 
-## Packaging
+`esbuild.js` собирает `src/extension.ts` в единый CommonJS `dist/extension.js` (Node runtime,
+`vscode` исключён). `.vscodeignore` ограничивает VSIX production bundle, manifest, `package.nls*`,
+`l10n/`, `README.md` и `LICENSE`; sourcemap в пакет не входит.
 
-`yarn package` запускает `@vscode/vsce package --no-dependencies` (у расширения нет runtime
-`dependencies`, только `devDependencies`, поэтому определение дерева зависимостей не требуется).
-`vscode:prepublish` автоматически запускает перед этим production-сборку `yarn build`.
-`.vscodeignore` ограничивает итоговый `.vsix` production-bundle, манифестом, ресурсами
-локализации, `README.md` и `LICENSE` — исходники, тесты и `node_modules` исключены.
+## Release checklist (ручной)
+
+1. `yarn install --immutable`
+2. `yarn typecheck`, `yarn lint`, `yarn format`, `yarn test:unit`
+3. `xvfb-run -a yarn test:integration` (на машине с display — `yarn test:integration`)
+4. `yarn build && yarn package`
+5. `yarn inspect:package` — проверить список entries и `0 violations`
+6. `xvfb-run -a yarn test:packaged`
+7. `git diff --check` и `python3 .harness/tools/validate.py --mode manual`
+8. Ручная проверка Status Bar / Summary в Extension Development Host (RU/EN, светлая/тёмная тема).
+
+Этот проект **не** выполняет автоматическую публикацию: `vsce publish`, Git tag, push и release
+находятся вне scope и делаются владельцем вручную. Известное ограничение: `readme.md` внутри VSIX
+пока является README репозитория, а не product-facing marketplace README (вопрос публикации).
+
+## Security / containment
+
+`.harness/manifest.yaml` и configured paths читаются read-only (ADR-007, ADR-005/006): абсолютный
+путь, traversal и static symlink за пределы workspace root блокируются как `ConfigurationBlocked`
+на всех platform; защита от подмены промежуточного ancestor (`/proc/self/fd`) доступна и
+обязательна на Linux; на macOS/Windows корректный project остаётся `valid`, принимается только
+остаточный риск конкурентной подмены ancestor. Runtime-границу (нет shell/network/auth/записи в
+Harness artifacts) доказывают boundary suite и static bundle scan `yarn inspect:package`.
 
 ## Environment / configuration
 
 Переменные окружения и внешняя конфигурация не требуются. Расширение не выполняет сетевых
 обращений, telemetry или запуска shell/процессов.
 
-## Database / migrations
-
-Не применимо.
-
 ## Git и CI
 
 Repository Git workflow задаётся `.harness/docs/GIT_WORKFLOW.md` и `.harness/git-policy.toml`.
-Harness Integrity CI является baseline; project-specific CI (запуск `typecheck`, `lint`,
-`test`, `build`) предполагается добавить после того, как этот toolchain будет проверен как
-стабильный, отдельным, явно ограниченным по scope шагом.
+Harness Integrity CI является baseline; project-specific CI (запуск quality gates и Extension Host
+suites) добавляется отдельным, явно ограниченным по scope шагом.

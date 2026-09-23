@@ -109,5 +109,15 @@
   "Push the current branch": "Push the current branch",
   "Prepare a pull request": "Prepare a pull request",
   "Finish a merged pull request locally": "Finish a merged pull request locally",
-  "Synchronize the local branch with the remote": "Synchronize the local branch with the remote"
+  "Synchronize the local branch with the remote": "Synchronize the local branch with the remote",
+  "Harness · {0} active · {1} blocked · {2} OQ": "Harness · {0} active · {1} blocked · {2} OQ",
+  "Harness · {0}": "Harness · {0}",
+  "{0}: {1}": "{0}: {1}",
+  "Harness Navigator summary": "Harness Navigator summary",
+  "{0}: release {1}, {2} STEP, {3} REQ, {4} ADR, {5} open OQ, {6} diagnostics": "{0}: release {1}, {2} STEP, {3} REQ, {4} ADR, {5} open OQ, {6} diagnostics",
+  "Click to open the Harness Navigator view.": "Click to open the Harness Navigator view.",
+  "Harness release": "Harness release",
+  "In progress": "In progress",
+  "Blocked": "Blocked",
+  "Diagnostics": "Diagnostics"
 }

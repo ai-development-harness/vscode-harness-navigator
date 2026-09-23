@@ -1,5 +1,6 @@
 import * as assert from 'node:assert/strict';
 import * as vscode from 'vscode';
+import { assertIsolatedWorkspace } from './support/workspaceGuard';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -7,6 +8,8 @@ const decoder = new TextDecoder();
 const EXTENSION_ID = 'ai-development-harness.vscode-harness-navigator';
 
 suite('extension lifecycle (Extension Host)', () => {
+  suiteSetup(() => assertIsolatedWorkspace());
+
   test('обнаруживается по своему manifest id', () => {
     const extension = vscode.extensions.getExtension(EXTENSION_ID);
     assert.ok(extension, `extension "${EXTENSION_ID}" was not found by the Extension Host`);

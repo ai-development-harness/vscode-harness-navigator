@@ -13,6 +13,8 @@
 Текущая точка входа в разработку: `STEP PLAN STEP-001`.
 <!-- PROJECT:END -->
 
+Разработка и release-проверки: [docs/development.md](docs/development.md).
+
 ## Зависимости
 
 - Python 3.11+ — обязателен для deterministic tools/validators.
