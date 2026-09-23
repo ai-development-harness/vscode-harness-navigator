@@ -13,6 +13,17 @@ export class ProjectStateService implements vscode.Disposable {
   private readonly indexes = new Map<string, ArtifactIndex>();
   private readonly manifestWatchers: vscode.FileSystemWatcher[] = [];
   private readonly artifactWatchers = new Map<string, vscode.FileSystemWatcher[]>();
+  private readonly projectModelChangeEmitter = new vscode.EventEmitter<void>();
+
+  /**
+   * Единственный сигнал "derived project model устарела": срабатывает в
+   * конце `refreshRoot` (после manifest re-detect и, при valid state, после
+   * `ArtifactIndex.rebuild`) и после `handleArtifactWatcherEvent` внутри
+   * artifact watcher-а. Views подписываются на него, чтобы перерисовать Tree
+   * View без собственного parsing — единственный источник данных остаётся
+   * `getIndex(folder)?.snapshot()`/`this.all`.
+   */
+  readonly onDidChangeProjectModel: vscode.Event<void> = this.projectModelChangeEmitter.event;
 
   constructor(
     workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined,
@@ -57,6 +68,7 @@ export class ProjectStateService implements vscode.Disposable {
       for (const watcher of this.artifactWatchers.get(key) ?? []) watcher.dispose();
       this.artifactWatchers.delete(key);
       this.indexes.delete(key);
+      this.projectModelChangeEmitter.fire();
       return;
     }
     const index = new ArtifactIndex();
@@ -71,6 +83,7 @@ export class ProjectStateService implements vscode.Disposable {
       for (const watcher of this.artifactWatchers.get(key) ?? []) watcher.dispose();
       this.createArtifactWatcher(folder, project);
     }
+    this.projectModelChangeEmitter.fire();
   }
 
   getIndex(folder: vscode.WorkspaceFolder): ArtifactIndex | undefined {
@@ -111,12 +124,14 @@ export class ProjectStateService implements vscode.Disposable {
     for (const watcher of this.manifestWatchers.splice(0)) watcher.dispose();
     this.states.clear();
     this.indexes.clear();
+    this.projectModelChangeEmitter.dispose();
   }
 
   private createArtifactWatcher(folder: vscode.WorkspaceFolder, project: ValidProjectState): void {
     const update = (uri: vscode.Uri) => {
       const index = this.indexes.get(folder.uri.toString());
       if (index !== undefined) handleArtifactWatcherEvent(index, project, uri.fsPath);
+      this.projectModelChangeEmitter.fire();
     };
     // Единственный recursive watcher на весь workspace root покрывает те же
     // Markdown-файлы, что и любой набор per-directory паттернов, потому что
