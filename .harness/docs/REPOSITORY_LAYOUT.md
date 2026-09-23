@@ -36,12 +36,14 @@ planning/**      → default project planning/history layout
 │   ├── harness.lock.json
 │   ├── harness-update-graph.json
 │   ├── command-transitions.json
+│   ├── reasoning-boundaries.json        # generated projection
 │   ├── harness-update.toml
 │   ├── harness-policy.toml
 │   ├── git-policy.toml
 │   ├── docs/
 │   │   ├── README.md
 │   │   ├── VALIDATORS.md
+│   │   ├── REASONING_BOUNDARIES.md      # generated table/diagrams
 │   │   └── ...
 │   ├── tools/
 │   │   ├── harness_config.py
@@ -49,6 +51,7 @@ planning/**      → default project planning/history layout
 │   │   ├── planning_contract.py
 │   │   ├── review_contract.py
 │   │   ├── review_gates.py
+│   │   ├── reasoning_boundaries.py
 │   │   ├── project_integrity.py
 │   │   ├── project_migration.py
 │   │   ├── projection_contract.py

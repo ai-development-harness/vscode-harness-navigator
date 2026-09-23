@@ -745,7 +745,7 @@ def _github_pr_view(root: Path, config: dict[str, Any], selector: str | int) -> 
 def pr_finish_preflight(root: Path, *, pr_data: dict[str, Any] | None = None) -> dict[str, Any]:
     config = policy(root)
     repo = Repo(root)
-    branch = repo.branch()
+    current_branch = repo.branch()
     worktree = repo.status()
     if not worktree["clean"]:
         raise GitPreflightError(
@@ -754,42 +754,37 @@ def pr_finish_preflight(root: Path, *, pr_data: dict[str, Any] | None = None) ->
         )
 
     local_state = _load_pr_state(root)
-    if local_state is not None and local_state["headBranch"] != branch:
-        raise GitPreflightError(
-            "PR_STATE_HEAD_MISMATCH",
-            f"local PR state belongs to {local_state['headBranch']}, current branch is {branch}",
-        )
+    if local_state is not None:
+        allowed_branches = {
+            local_state["headBranch"],
+            local_state["returnBranch"],
+        }
+        if current_branch not in allowed_branches:
+            raise GitPreflightError(
+                "PR_STATE_HEAD_MISMATCH",
+                "current branch is neither PR head nor recorded return branch: "
+                f"{current_branch}",
+            )
 
     remote = _text(config["push"], "remote", section="push")
     _require_remote(repo, remote)
     repo.fetch(remote)
 
-    selector: str | int = local_state["pr"] if local_state is not None else branch
+    selector: str | int = local_state["pr"] if local_state is not None else current_branch
     data = pr_data if pr_data is not None else _github_pr_view(root, config, selector)
 
     number = data.get("number")
     state = data.get("state")
     merged_at = data.get("mergedAt")
-    head_branch = data.get("headRefName")
+    provider_head_branch = data.get("headRefName")
     head_oid = data.get("headRefOid")
     base_branch = data.get("baseRefName")
     if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
         raise GitPreflightError("PR_QUERY_INVALID", "PR number is missing or invalid")
     if state != "MERGED" or not isinstance(merged_at, str) or not merged_at.strip():
         raise GitPreflightError("PR_NOT_MERGED", f"Pull Request #{number} is not merged")
-    if not isinstance(head_branch, str) or head_branch != branch:
-        raise GitPreflightError(
-            "PR_HEAD_MISMATCH",
-            f"merged PR head {head_branch!r} does not match current branch {branch!r}",
-        )
     if not isinstance(head_oid, str) or re.fullmatch(r"[0-9a-fA-F]{40}", head_oid) is None:
         raise GitPreflightError("PR_QUERY_INVALID", "PR headRefOid is missing or invalid")
-    current_head = repo.head()
-    if current_head != head_oid:
-        raise GitPreflightError(
-            "PR_HEAD_SHA_MISMATCH",
-            f"local HEAD {current_head!r} differs from merged PR head {head_oid!r}",
-        )
     if not isinstance(base_branch, str) or not base_branch.strip():
         raise GitPreflightError("PR_QUERY_INVALID", "PR base branch is missing")
 
@@ -804,14 +799,49 @@ def pr_finish_preflight(root: Path, *, pr_data: dict[str, Any] | None = None) ->
                 "PR_STATE_BASE_MISMATCH",
                 f"local PR state base {local_state['baseBranch']} differs from provider base {base_branch}",
             )
+        head_branch = local_state["headBranch"]
         return_branch = local_state["returnBranch"]
     else:
+        head_branch = current_branch
         return_branch = base_branch
 
-    if return_branch == branch:
+    if not isinstance(provider_head_branch, str) or provider_head_branch != head_branch:
+        raise GitPreflightError(
+            "PR_HEAD_MISMATCH",
+            f"merged PR head {provider_head_branch!r} does not match expected branch {head_branch!r}",
+        )
+    if return_branch == head_branch:
         raise GitPreflightError(
             "PR_FINISH_INVALID_RETURN_BRANCH",
             "return branch equals PR head branch",
+        )
+
+    # PR FINISH — многошаговая mutation. После crash текущая ветка уже может
+    # быть returnBranch. В этом случае local PR state + provider MERGED state
+    # позволяют безопасно продолжить оставшиеся sync/delete steps.
+    resumed = current_branch == return_branch
+    head_ref = f"refs/heads/{head_branch}"
+    head_proc = repo.git("rev-parse", "--verify", head_ref, check=False)
+    local_head_oid = head_proc.stdout.strip() if head_proc.returncode == 0 else None
+
+    if current_branch == head_branch:
+        current_head = repo.head()
+        if current_head != head_oid:
+            raise GitPreflightError(
+                "PR_HEAD_SHA_MISMATCH",
+                f"local HEAD {current_head!r} differs from merged PR head {head_oid!r}",
+            )
+    elif resumed:
+        if local_head_oid is not None and local_head_oid != head_oid:
+            raise GitPreflightError(
+                "PR_HEAD_SHA_MISMATCH",
+                f"local PR branch {head_branch} moved after merge: "
+                f"{local_head_oid!r} != {head_oid!r}",
+            )
+    else:
+        raise GitPreflightError(
+            "PR_STATE_HEAD_MISMATCH",
+            f"cannot finish PR from unrelated branch {current_branch}",
         )
 
     local_return = f"refs/heads/{return_branch}"
@@ -842,17 +872,22 @@ def pr_finish_preflight(root: Path, *, pr_data: dict[str, Any] | None = None) ->
             f"{return_branch} contains local commits not present on {remote}/{return_branch}",
         )
 
-    ancestry = repo.git(
-        "merge-base",
-        "--is-ancestor",
-        f"refs/heads/{branch}",
-        remote_return,
-        check=False,
-    )
+    ancestry_merged: bool | None = None
+    if local_head_oid is not None:
+        ancestry = repo.git(
+            "merge-base",
+            "--is-ancestor",
+            head_ref,
+            remote_return,
+            check=False,
+        )
+        ancestry_merged = ancestry.returncode == 0
 
-    steps: list[dict[str, Any]] = [
-        {"operation": "switch-return-branch", "argv": ["git", "switch", return_branch]}
-    ]
+    steps: list[dict[str, Any]] = []
+    if current_branch != return_branch:
+        steps.append(
+            {"operation": "switch-return-branch", "argv": ["git", "switch", return_branch]}
+        )
     if remote_ahead > 0:
         steps.append(
             {
@@ -860,36 +895,39 @@ def pr_finish_preflight(root: Path, *, pr_data: dict[str, Any] | None = None) ->
                 "argv": ["git", "merge", "--ff-only", f"{remote}/{return_branch}"],
             }
         )
-    if ancestry.returncode == 0:
-        delete_step = {
-            "operation": "delete-local-pr-branch",
-            "mode": "git-merged",
-            "argv": ["git", "branch", "-d", branch],
-        }
-    else:
-        # Squash/rebase merge не сохраняет ancestry feature branch. Provider
-        # уже доказал MERGED exact headRefOid, а current local HEAD обязан ему
-        # совпадать. update-ref с old OID работает как compare-and-swap:
-        # удаление произойдёт только если ref всё ещё указывает на проверенный SHA.
-        delete_step = {
-            "operation": "delete-local-pr-branch",
-            "mode": "provider-verified-head",
-            "argv": ["git", "update-ref", "-d", f"refs/heads/{branch}", head_oid],
-        }
-    steps.append(delete_step)
+
+    if local_head_oid is not None:
+        if ancestry_merged:
+            delete_step = {
+                "operation": "delete-local-pr-branch",
+                "mode": "git-merged",
+                "argv": ["git", "branch", "-d", head_branch],
+            }
+        else:
+            # Squash/rebase merge не сохраняет ancestry feature branch. Provider
+            # доказал MERGED exact headRefOid, а local ref выше сверена с этим
+            # OID. update-ref с old OID работает как compare-and-swap.
+            delete_step = {
+                "operation": "delete-local-pr-branch",
+                "mode": "provider-verified-head",
+                "argv": ["git", "update-ref", "-d", head_ref, head_oid],
+            }
+        steps.append(delete_step)
 
     return _result(
         "pr-finish",
         pr=number,
         url=data.get("url"),
-        branch=branch,
+        branch=head_branch,
+        currentBranch=current_branch,
+        resumed=resumed,
         base=base_branch,
         returnBranch=return_branch,
         remote=remote,
         returnBranchAhead=local_ahead,
         returnBranchBehind=remote_ahead,
         mergedHeadOid=head_oid,
-        gitAncestryMerged=ancestry.returncode == 0,
+        gitAncestryMerged=ancestry_merged,
         worktree=worktree,
         stateFile=str(PR_STATE_PATH) if local_state is not None else None,
         deleteStateFileAfterSuccess=local_state is not None,

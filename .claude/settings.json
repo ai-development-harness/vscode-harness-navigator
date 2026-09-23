@@ -3,6 +3,26 @@
   "model": "sonnet",
   "effortLevel": "medium",
   "permissions": {
-    "defaultMode": "default"
+    "defaultMode": "default",
+    "deny": [
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git merge *)",
+      "Bash(git branch -d *)",
+      "Bash(git branch -D *)",
+      "Bash(git update-ref -d *)",
+      "Bash(git reset --hard *)",
+      "Bash(git clean -f*)",
+      "Bash(git clean --force *)",
+      "PowerShell(git commit *)",
+      "PowerShell(git push *)",
+      "PowerShell(git merge *)",
+      "PowerShell(git branch -d *)",
+      "PowerShell(git branch -D *)",
+      "PowerShell(git update-ref -d *)",
+      "PowerShell(git reset --hard *)",
+      "PowerShell(git clean -f*)",
+      "PowerShell(git clean --force *)"
+    ]
   }
 }

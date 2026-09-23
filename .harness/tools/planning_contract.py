@@ -11,7 +11,7 @@ static gate не позволяет вызвать этот review на заве
 Ключевые safety invariants:
 - completion не выводится только из mutable status;
 - Ready требует fresh context_basis + content_hash + matching PASS review;
-- dependency proof и open OQ учитываются до IMPLEMENT;
+- dependency contract и open OQ входят в PLAN; completion proof проверяется непосредственно перед IMPLEMENT;
 - stale/invalid refs не заменяются предположениями;
 - legacy active docs допускаются только явным migration compatibility flow.
 """
@@ -50,6 +50,7 @@ from document_contract import (
     content_hash,
     exact_h1,
     has_unresolved_placeholder,
+    markdown_headings,
     normalize_text,
     parse_document,
     require_nonempty_sections,
@@ -86,6 +87,18 @@ REQUIRED_TASK_SECTIONS = CONTRACT_SECTIONS + (
     "Implementation plan",
     "Evidence",
     "Blocker / Failure reason",
+)
+
+REQ_SECTIONS = ("Requirement", "Rationale", "Acceptance")
+ADR_SECTIONS = (
+    "Context",
+    "Problem",
+    "Decision",
+    "Alternatives considered",
+    "Consequences",
+    "Security implications",
+    "Data / migration implications",
+    "Compatibility / operational implications",
 )
 
 
@@ -160,21 +173,54 @@ def canonical_oq_path(root: Path, oq_id: str) -> Path:
     return matches[0]
 
 
+def _semantic_sections(document: dict[str, Any], names: tuple[str, ...]) -> dict[str, str]:
+    """Вернуть только sections, изменение которых меняет implementation intent."""
+    return {name: document["sections"].get(name, "") for name in names}
+
+
+def requirement_contract_snapshot(document: dict[str, Any]) -> dict[str, Any]:
+    """Semantic REQ snapshot без lifecycle/traceability metadata.
+
+    priority/source и обратные steps/adrs полезны для управления/навигации, но
+    сами по себе не меняют implementation contract уже связанного STEP.
+    """
+    meta = document["frontmatter"]
+    return {
+        "frontmatter": {
+            "schema": meta.get("schema"),
+            "id": meta.get("id"),
+        },
+        "sections": _semantic_sections(document, REQ_SECTIONS),
+    }
+
+
+def adr_contract_snapshot(document: dict[str, Any]) -> dict[str, Any]:
+    """Semantic ADR snapshot без provenance/reverse traceability metadata."""
+    meta = document["frontmatter"]
+    return {
+        "frontmatter": {
+            key: meta.get(key)
+            for key in ("schema", "id", "status", "supersedes", "superseded_by")
+        },
+        "sections": _semantic_sections(document, ADR_SECTIONS),
+    }
+
+
 def task_contract_snapshot(root: Path, step_id: str) -> dict[str, Any]:
+    """Semantic STEP contract без scheduling/lifecycle metadata."""
     task = read_task(root, step_id)
     meta = task["frontmatter"]
     machine = {
         key: meta.get(key)
         for key in (
-            "schema", "id", "type", "priority", "phase", "depends_on",
+            "schema", "id", "type", "depends_on",
             "requirements", "adrs", "architecture_refs", "risk_flags",
         )
     }
     return {
         "frontmatter": machine,
-        "sections": {name: task["sections"].get(name, "") for name in CONTRACT_SECTIONS},
+        "sections": _semantic_sections(task, CONTRACT_SECTIONS),
     }
-
 
 def _heading_slug(title: str) -> str:
     value = title.strip().lower()
@@ -201,20 +247,19 @@ def _architecture_ref_snapshot(root: Path, ref: str) -> dict[str, str]:
         if not fragment:
             raise ValueError(f"architecture ref has empty anchor: {ref}")
         lines = text.replace("\r\n", "\n").split("\n")
+        headings = markdown_headings(text)
         start: int | None = None
         level = 0
-        for index, line in enumerate(lines):
-            heading = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
-            if heading and _heading_slug(heading.group(2)) == fragment:
+        for index, heading_level, title in headings:
+            if _heading_slug(title) == fragment:
                 start = index
-                level = len(heading.group(1))
+                level = heading_level
                 break
         if start is None:
             raise ValueError(f"architecture anchor not found: {ref}")
         end = len(lines)
-        for index in range(start + 1, len(lines)):
-            heading = re.match(r"^(#{1,6})\s+", lines[index])
-            if heading and len(heading.group(1)) <= level:
+        for index, heading_level, _title in headings:
+            if index > start and heading_level <= level:
                 end = index
                 break
         selected = normalize_text("\n".join(lines[start:end]))
@@ -270,8 +315,8 @@ def _evidence_present(task: dict[str, Any]) -> bool:
 # ---------------------------------------------------------------------------
 # Completion proof.
 # Статус STEP сам по себе недостаточен. Proof зависит от type и может включать
-# Evidence, immutable PASS review или accepted ADR. Результат fingerprint-ится,
-# чтобы dependent planning basis менялся при изменении доказательства.
+# Evidence, immutable PASS review или accepted ADR. Proof используется lifecycle/
+# projection/IMPLEMENT gates, но schema-v4 planning basis его не fingerprint-ит.
 # ---------------------------------------------------------------------------
 def step_completion_proof(
     root: Path,
@@ -358,27 +403,30 @@ def step_completion_proof(
 
 
 def planning_context_snapshot(root: Path, step_id: str) -> dict[str, Any]:
+    """Собрать semantic planning context schema v4.
+
+    Snapshot намеренно отделён от lifecycle/traceability state: reverse links,
+    priority/phase и факт completion dependency не должны требовать повторного
+    semantic review уже корректного Implementation plan.
+    """
     task = read_task(root, step_id)
 
-    requirements: dict[str, str] = {}
+    requirements: dict[str, Any] = {}
     for req_id in requirement_ids(task):
         path = canonical_requirement_path(root, req_id)
         document = _parse_canonical_document(path, req_id)
-        requirements[req_id] = content_hash(document["text"])
+        requirements[req_id] = requirement_contract_snapshot(document)
 
-    adrs: dict[str, str] = {}
+    adrs: dict[str, Any] = {}
     for adr_id in adr_ids(task):
         path = canonical_adr_path(root, adr_id)
         document = _parse_canonical_document(path, adr_id)
-        adrs[adr_id] = content_hash(document["text"])
+        adrs[adr_id] = adr_contract_snapshot(document)
 
     dependencies: dict[str, Any] = {}
     for dependency_id in dependency_ids(task):
-        proof = step_completion_proof(root, dependency_id)
         dependencies[dependency_id] = {
             "contract": task_contract_snapshot(root, dependency_id),
-            "completion": proof["snapshot"],
-            "proof_hash": proof["proof_hash"],
         }
 
     architecture = [
@@ -395,7 +443,7 @@ def planning_context_snapshot(root: Path, step_id: str) -> dict[str, Any]:
         }
 
     return {
-        "schema": 3,
+        "schema": 4,
         "step": task_contract_snapshot(root, step_id),
         "requirements": requirements,
         "adrs": adrs,
@@ -403,7 +451,6 @@ def planning_context_snapshot(root: Path, step_id: str) -> dict[str, Any]:
         "architecture_refs": architecture,
         "open_questions": oqs,
     }
-
 
 def planning_context_basis(root: Path, step_id: str) -> str:
     """Hash exact planning context, от которого зависит корректность плана."""
@@ -413,6 +460,77 @@ def planning_context_basis(root: Path, step_id: str) -> str:
 def plan_content_hash(root: Path, step_id: str) -> str:
     task = read_task(root, step_id)
     return content_hash(task["sections"].get("Implementation plan", ""))
+
+
+def implementation_prerequisite_failures(root: Path, step_id: str) -> list[str]:
+    """Детерминированно доказать prerequisites непосредственно перед IMPLEMENT.
+
+    PLAN может быть Ready до завершения dependency. Здесь, на executable
+    boundary, completion proof уже обязателен. Helper не запускает LLM и
+    возвращает точные причины, пригодные для execution runtime precondition.
+    """
+    failures: list[str] = []
+    task = read_task(root, step_id)
+    meta = task["frontmatter"]
+    plan = meta.get("plan")
+
+    if not isinstance(plan, dict) or plan.get("status") != "ready":
+        failures.append("plan-is-not-ready")
+    else:
+        try:
+            current_basis = planning_context_basis(root, step_id)
+        except (DocumentError, ConfigError, OSError, ValueError) as exc:
+            failures.append(f"context-basis-unavailable:{exc}")
+            current_basis = None
+        current_content = plan_content_hash(root, step_id)
+        stored_basis = plan.get("context_basis")
+        stored_content = plan.get("content_hash")
+
+        if current_basis is not None and stored_basis != current_basis:
+            failures.append("plan-context-basis-is-stale")
+        if stored_content != current_content:
+            failures.append("plan-content-hash-is-stale")
+        if _valid_sha256(stored_basis) and _valid_sha256(stored_content):
+            matched = _latest_planning_review_for(
+                root, step_id, stored_basis, stored_content
+            )
+            if matched is None:
+                failures.append("matching-planning-review-pass-is-missing")
+            else:
+                report = matched["path"].relative_to(root).as_posix()
+                if plan.get("reviewed_report") != report:
+                    failures.append("reviewed-report-does-not-match-pass")
+        else:
+            failures.append("plan-fingerprints-are-invalid")
+
+    if str(meta.get("phase")).upper() == "TBD":
+        failures.append("phase-is-tbd")
+
+    for adr_id in adr_ids(task):
+        try:
+            adr = _parse_canonical_document(canonical_adr_path(root, adr_id), adr_id)
+        except (DocumentError, OSError, ValueError) as exc:
+            failures.append(f"adr-unavailable:{adr_id}:{exc}")
+            continue
+        if adr["frontmatter"].get("status") != "accepted":
+            failures.append(f"adr-not-accepted:{adr_id}")
+
+    for item in relevant_open_questions(root, task):
+        if item.get("status") == "open":
+            failures.append(f"open-question:{item.get('id')}")
+
+    for dep_id in dependency_ids(task):
+        try:
+            proof = step_completion_proof(root, dep_id)
+        except (DocumentError, ConfigError, OSError, ValueError) as exc:
+            failures.append(f"dependency-unprovable:{dep_id}:{exc}")
+            continue
+        if not proof["complete"]:
+            failures.append(
+                f"dependency-incomplete:{dep_id}:" + "; ".join(proof["reasons"])
+            )
+
+    return failures
 
 
 def _valid_sha256(value: Any) -> bool:
@@ -708,16 +826,6 @@ def _validate_task(root: Path, step_id: str, task: dict[str, Any], errors: list[
                 errors.append(f"{prefix}: unresolved placeholder in '## {section}'")
         if str(meta.get("phase")).upper() == "TBD":
             errors.append(f"{prefix}: ready plan has phase=TBD")
-        for dep_id in dependency_ids(task):
-            try:
-                proof = step_completion_proof(root, dep_id)
-            except (DocumentError, ConfigError, OSError, ValueError) as exc:
-                errors.append(f"{prefix}: cannot prove dependency {dep_id}: {exc}")
-                continue
-            if not proof["complete"]:
-                errors.append(
-                    f"{prefix}: dependency {dep_id} incomplete: " + "; ".join(proof["reasons"])
-                )
         for item in relevant_open_questions(root, task):
             if item.get("status") == "open":
                 errors.append(f"{prefix}: ready plan is blocked by {item.get('id')}")
@@ -768,6 +876,20 @@ def _validate_task(root: Path, step_id: str, task: dict[str, Any], errors: list[
                     errors.append(
                         f"{prefix}: plan.reviewed_report does not point to matching PASS report"
                     )
+
+    # completed — это не самостоятельное доказательство выполнения. Canonical
+    # lifecycle разрешён только вместе с type-specific durable completion proof:
+    # Evidence, accepted ADR и/или trusted PASS review в зависимости от STEP type.
+    if meta.get("status") == "completed":
+        try:
+            proof = step_completion_proof(root, step_id)
+        except (DocumentError, ConfigError, OSError, ValueError) as exc:
+            errors.append(f"{prefix}: cannot prove completed lifecycle: {exc}")
+        else:
+            for reason in proof["reasons"]:
+                errors.append(
+                    f"{prefix}: completed STEP completion proof failed: {reason}"
+                )
 
 
 # Open Question validator: ID/status/affects targets и обязательные sections.

@@ -22,7 +22,7 @@ import tempfile
 import tomllib
 from typing import Any, Iterable
 
-from document_contract import durable_report_timestamp
+from document_contract import create_durable_report
 from harness_config import (
     ConfigError,
     get,
@@ -40,6 +40,10 @@ UPDATER_RUNTIME_PATHS = {
     ".harness/tools/harness-update.py",
 }
 OWNERSHIP_CLASSES = ("harness_owned", "shared", "marker_merge")
+# Current deterministic updater intentionally supports only projects whose
+# installed Harness baseline is v0.6.0 or newer. Older transitions remain in
+# the graph as immutable release history, not as a supported runtime entrypoint.
+MIN_SUPPORTED_RELEASE = "v0.6.0"
 
 
 class UpdateError(RuntimeError):
@@ -435,6 +439,15 @@ def _semver(tag: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups())
 
 
+def _require_supported_release(tag: str, *, label: str) -> None:
+    """Fail closed when current/adoption release is below the supported floor."""
+    if _semver(tag) < _semver(MIN_SUPPORTED_RELEASE):
+        raise UpdateError(
+            "UNSUPPORTED_HARNESS_RELEASE",
+            f"{label} {tag} is older than minimum supported {MIN_SUPPORTED_RELEASE}",
+        )
+
+
 def _validate_graph(data: dict[str, Any], tag_pattern: str) -> tuple[str, dict[str, Hop]]:
     if data.get("schemaVersion") != 1:
         raise UpdateError("INVALID_UPDATE_GRAPH", "update graph schemaVersion must be 1")
@@ -551,6 +564,8 @@ def resolve_update(root: Path, target: str | None, source: GitSource) -> tuple[d
         raise UpdateError("INVALID_RELEASE_TAG", f"target does not match source.tag_pattern: {requested}")
     if re.fullmatch(tag_pattern, current) is None:
         raise UpdateError("INVALID_UPDATE_LOCK", f"lock source.ref does not match tag pattern: {current}")
+    _require_supported_release(current, label="current release")
+    _require_supported_release(requested, label="target release")
     manifest = load_manifest(root)
     manifest_release = get(manifest, "harness.release")
     if lock.get("release") != manifest_release or current != f"v{manifest_release}":
@@ -758,7 +773,17 @@ def analyze_hop(
         base_mode = _source_permissions(base_entries.get(path), path=path, ref=hop.source) if path in base_entries else None
         target_mode = _source_permissions(target_entries.get(path), path=path, ref=hop.target) if path in target_entries else None
         ours = overrides[path] if overrides is not None and path in overrides else tree.read_bytes(path)
-        if target_class is not None and _local_untracked_collision(tree, tracked, path):
+        # После reload boundary файлы, введённые предыдущим hop, уже принадлежат
+        # текущему immutable BASE, но ещё не обязаны быть добавлены в Git index:
+        # commit выполняется только после завершения всего маршрута обновления.
+        # Поэтому untracked collision применим только к пути, отсутствующему в
+        # BASE текущего release. Иначе безопасное продолжение multi-hop update
+        # ошибочно блокировалось бы сразу после обязательной перезагрузки.
+        if (
+            target_class is not None
+            and base is MISSING
+            and _local_untracked_collision(tree, tracked, path)
+        ):
             raise UpdateError("UNTRACKED_MANAGED_COLLISION", f"untracked non-ignored managed path collision: {path}")
         blocks = target_marker_map.get(path, []) if target_class == "marker_merge" else []
         if target_class == "marker_merge" and not blocks:
@@ -923,19 +948,15 @@ def _run_validator(root: Path, *, phase: str) -> None:
 
 def _write_report(root: Path, *, initial: str, target: str, applied: list[HopPlan], status: str) -> str:
     directory = update_report_directory(root)
-    directory.mkdir(parents=True, exist_ok=True)
-    report_name, created_at = durable_report_timestamp(
-        "UPDATE-",
-        directory=directory,
-    )
-    path = directory / report_name
     route = [initial] + [item.hop.target for item in applied]
     introduced = sorted({p for item in applied for p in item.introduced})
     retired = sorted({p for item in applied for p in item.retired})
     reclassified = sorted({p for item in applied for p in item.reclassified})
     reached = route[-1] if route else initial
     route_yaml = "\n".join(f"  - {item}" for item in route)
-    body = f"""---
+
+    def report_content(created_at: str) -> str:
+        return f"""---
 schema: 1
 kind: harness_update
 initial_release: {initial}
@@ -972,9 +993,13 @@ Reclassified:
 
 {'Reload runtime and repeat HARNESS UPDATE APPLY.' if status != 'UPDATED' else 'No update-specific follow-up.'}
 """
-    path.write_text(body, encoding="utf-8", newline="\n")
-    return path.relative_to(root).as_posix()
 
+    path, _created_at = create_durable_report(
+        "UPDATE-",
+        directory=directory,
+        content_factory=report_content,
+    )
+    return path.relative_to(root).as_posix()
 
 def _bullet_list(items: list[str]) -> str:
     return "\n".join(f"- `{item}`" for item in items) if items else "- none"
@@ -1075,6 +1100,7 @@ def adopt_legacy(root: Path, *, baseline: str, source_url: str | None = None) ->
         raise UpdateError("LOCK_ALREADY_EXISTS", f"update lock already exists: {lock_path.relative_to(root)}")
     if re.fullmatch(tag_pattern, baseline) is None:
         raise UpdateError("INVALID_RELEASE_TAG", f"baseline does not match source.tag_pattern: {baseline}")
+    _require_supported_release(baseline, label="adoption baseline")
 
     manifest = load_manifest(root)
     if get(manifest, "harness.release") != baseline.removeprefix("v"):

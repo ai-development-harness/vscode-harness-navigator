@@ -129,6 +129,25 @@ def main() -> int:
         require_failure(validate(root), "config escapes .codex/agents")
         codex_path.write_text(codex_original, encoding="utf-8")
 
+        # Shared Claude settings обязаны сохранять defense-in-depth запрет
+        # прямого Git PUSH. Canonical policy всё равно остаётся git-action.py,
+        # но adapter не должен тихо потерять restrictive deny rule.
+        claude_path = root / ".claude/settings.json"
+        claude_original = claude_path.read_text(encoding="utf-8")
+        claude_path.write_text(
+            claude_original.replace(
+                '      "Bash(git push *)",\n',
+                "",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        require_failure(
+            validate(root),
+            "Claude settings missing required Git deny rules: Bash(git push *)",
+        )
+        claude_path.write_text(claude_original, encoding="utf-8")
+
     print("REPOSITORY HARDENING SELF-TEST: PASS")
     return 0
 

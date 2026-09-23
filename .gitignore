@@ -5,7 +5,6 @@ PROJECT_BRIEF.local.md
 AGENTS.local.md
 CLAUDE.local.md
 # Legacy local state из релизов до переноса control plane в .harness/.
-.project/local/
 .harness/local/
 .codex/local/
 .claude/local/

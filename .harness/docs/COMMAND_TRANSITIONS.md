@@ -116,7 +116,17 @@ INVALID_CHAIN
 
 ### 5. Dispatch
 
-Только после успешной structural validation Harness выбирает соответствующий skill/runtime role и начинает command semantics.
+Только после успешной структурной проверки Harness выбирает точный способ выполнения: детерминированный обработчик либо смысловую работу модели через соответствующий навык.
+
+## Граница вычислений модели
+
+Каждая каноническая команда обязана содержать поле `reasoning`:
+
+- `mode=none` — модель не вызывается;
+- `mode=required` — смысловая работа модели обязательна;
+- `mode=conditional` — существует безопасный сценарий без отдельного вызова модели.
+
+Там же перечисляются работа модели, работа скриптов и быстрые пути. Для условного пути указывается конкретная функция реализации. Harness Integrity проверяет наличие этой функции и актуальность автоматически сгенерированных [таблицы и диаграмм](REASONING_BOUNDARIES.md).
 
 ## Result model
 
@@ -161,7 +171,7 @@ Edge `REVIEW → FIX` разрешён именно при `FAIL`. Поэтом�
 | `STEP LIST` | no | — | standalone-only |
 | `STEP SHOW STEP-NNN` | no | — | standalone-only |
 | `STEP NEXT` | no | — | standalone-only |
-| `STEP PLAN STEP-NNN` | yes | STEP IMPLEMENT | IMPLEMENT: result=SUCCESS; pre=— |
+| `STEP PLAN STEP-NNN` | yes | STEP IMPLEMENT | IMPLEMENT: result=SUCCESS; pre=step-implement-ready |
 | `STEP IMPLEMENT STEP-NNN` | yes | STEP REVIEW | REVIEW: result=SUCCESS; pre=— |
 | `STEP REVIEW STEP-NNN` | yes | STEP FIX | FIX: result=FAIL; pre=— |
 | `STEP FIX STEP-NNN` | yes | STEP REVIEW | REVIEW: result=SUCCESS; pre=— |

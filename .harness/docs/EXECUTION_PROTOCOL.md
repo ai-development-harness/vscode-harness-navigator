@@ -8,32 +8,63 @@
 
 ## 0. Command interface и цепочки
 
-### 0.1. Command Transition System — structural gate всегда первым
+### 0.1. Canonical runtime boundary
 
-Harness использует **Command Transition System (CTS)**. Для canonical command первым выполняется deterministic structural validation по `.harness/command-transitions.json`. Команда является action/transition request; фактическое state берётся из repository/runtime facts:
+Обычный runtime **не** выполняет structural validation, execution registration, resolver и skill routing отдельными reasoning-шагами. Raw canonical command передаётся единой deterministic boundary:
 
 ```bash
-python3 .harness/tools/validate-command.py --json -- '<raw canonical command>'
+python3 .harness/tools/harness-dispatch.py start --command '<raw canonical command>'
 ```
 
-До PASS этого gate запрещено:
+Dispatcher использует `.harness/command-transitions.json` как единый registry syntax/transitions/**dispatch**. До structural PASS никакая execution или mutation не создаётся.
 
-- выбирать command-specific skill;
-- читать state ради трактовки порядка chain;
-- запускать subagent/runtime action;
-- выполнять mutation.
+Результат имеет два основных варианта:
 
-`.harness/docs/COMMAND_TRANSITIONS.md` содержит полную человекочитаемую матрицу. Отсутствующий edge означает `INVALID_CHAIN`; implicit transitions запрещены.
+- deterministic command → tool выполняется без LLM, execution закрывается и возвращается factual result;
+- semantic command → `status: SEMANTIC`, exact `skillPath` и command data; для STEP PLAN/IMPLEMENT/REVIEW дополнительно возвращается phase-specific `step-context`.
 
-Каноническая команда начинается с явного namespace:
+После semantic node factual result передаётся обратно:
 
-```text
-<DOMAIN> <ACTION> [TARGET] [: free-form input]
+```bash
+python3 .harness/tools/harness-dispatch.py complete \
+  --root '<root command>' \
+  --command '<current command>' \
+  --result <SUCCESS|PASS|FAIL|BLOCKED>
 ```
 
-Полная грамматика находится в `.harness/docs/COMMAND_SYNTAX.md`. Старые ненеймспейсные формы не считаются canonical aliases.
+Dispatcher сам применяет CTS `onPreviousResult`, runtime preconditions и при разрешённом continuation начинает следующий segment. Interrupted execution продолжается через:
 
-Оператор `>` разрешает последовательность только внутри одной области:
+```bash
+python3 .harness/tools/harness-dispatch.py resume [--root '<root command>']
+```
+
+`HARNESS RESUME` использует тот же механизм и не создаёт отдельную root execution.
+
+### 0.2. Низкоуровневые contracts
+
+Dispatcher не заменяет существующие engines; он композиционно вызывает их:
+
+1. `validate-command.py` / `command_transitions.py` — structural parsing/normalization;
+2. `execution_status.py` — restart-safe state, locks, completion и resolver;
+3. runtime preconditions — exact Git/STEP/update gates;
+4. deterministic handlers либо semantic skill/context handoff.
+
+Low-level CLI остаются полезны для диагностики и Harness development:
+
+```bash
+python3 .harness/tools/validate-command.py --json -- '<command>'
+python3 .harness/tools/execution-state.py status
+python3 .harness/tools/resolve-next-command.py --json
+python3 .harness/tools/harness-dispatch.py route --command '<canonical command>'
+```
+
+Execution Status хранится в `.harness/local/execution/execution-status.json`, сериализует concurrent read-modify-write transaction project-local advisory lock и не является canonical project evidence. Подробности — в `.harness/docs/EXECUTION_STATUS.md`.
+
+### 0.3. Цепочки
+
+Оператор `>` разрешён только внутри одной CTS domain. Вся цепочка валидируется до первого segment. Следующий segment запускается только если фактический result предыдущего входит в `onPreviousResult` edge и runtime preconditions доказаны.
+
+Примеры:
 
 ```text
 GIT CHECK > COMMIT > PUSH > PR
@@ -41,133 +72,15 @@ STEP PLAN STEP-024 > IMPLEMENT > REVIEW
 HARNESS UPDATE CHECK TO vX.X.X > APPLY
 ```
 
-Правила:
+Отсутствующий/reverse edge, смена domain/STEP target или `BLOCKED` останавливает execution; выполненные mutations автоматически не откатываются.
 
-1. до первого выполнения разобрать и валидировать всю цепочку;
-2. DOMAIN наследуется от первого сегмента; смена DOMAIN внутри цепочки запрещена;
-3. STEP target `STEP-NNN` или shorthand `NNN` сначала нормализуется в canonical `STEP-NNN`, затем наследуется и остаётся неизменным;
-4. HARNESS UPDATE target `TO <tag>` наследуется от CHECK к APPLY;
-5. допустимый порядок определяется только explicit edges из `.harness/command-transitions.json`;
-6. same-domain reverse/invalid order (например `GIT PR > COMMIT`) = `INVALID_CHAIN`; ни один сегмент не выполняется;
-7. после выполнения segment следующий запускается только если фактический result входит в `onPreviousResult` соответствующего edge и выполнены его runtime preconditions;
-8. `FAIL` может быть разрешающим result конкретного edge (например REVIEW → FIX); `BLOCKED` останавливает execution; остальные segments = `NOT_EXECUTED`;
-9. уже выполненные mutations не откатываются автоматически;
-10. cross-domain chain, например `STEP RUN STEP-024 > GIT COMMIT`, не выполняется.
+### 0.4. Deterministic dispatch
 
-Разрешённые chain surfaces: GIT; ручной STEP flow `PLAN/IMPLEMENT/REVIEW/FIX`; HARNESS UPDATE только `CHECK > APPLY`. PROJECT/SKILL/GITHUB/RELEASE и `STEP RUN`/ `STEP AUDIT` остаются самостоятельными командами.
+`HARNESS HELP`, `HARNESS STATUS`, `HARNESS RESUME`, `HARNESS DOCTOR`, `HARNESS CONFIG`, `HARNESS UPDATE CHECK/APPLY`, `PROJECT STATUS`, `STEP LIST`, `STEP SHOW STEP-NNN`, `STEP NEXT`, а также `GIT CHECK`, mechanical `GIT SYNC` и `GIT PR FINISH` зарегистрированы в CTS как `dispatch.kind=deterministic`. Dispatcher выполняет их без semantic handoff/model call.
 
-### 0.2. Execution Status — единый restart-safe слой
+Две узкие runtime-оптимизации не меняют semantic command surface: coding `STEP RUN` использует deterministic orchestration между semantic child-командами, а `GIT PUSH` после успешного `GIT COMMIT` в той же explicit chain выполняется mechanical fast-path. Standalone PUSH и type-specific RUN flows сохраняют semantic boundary.
 
-После structural PASS каждая canonical command регистрируется в одном local-only файле:
-
-```text
-.harness/local/execution/execution-status.json
-```
-
-Регистрация выполняется **до command-specific dispatch**:
-
-```bash
-python3 .harness/tools/execution-state.py start \
-  --command '<raw canonical command>'
-```
-
-Execution Status применяется ко всем namespaces и не привязан к STEP.
-
-Внутренний `mode` определяется автоматически из уже существующего пользовательского ввода:
-
-- одна command → `single`;
-- explicit chain → `chain`;
-- `STEP RUN STEP-NNN` → `orchestration`.
-
-Это metadata, а не новый command layer.
-
-CTS scope:
-
-> CTS проверяет transitions только внутри одной root execution. Отдельные пользовательские invocations являются независимыми executions и не требуют edge между собой.
-
-Поэтому:
-
-```text
-STEP PLAN STEP-001
-<complete>
-
-GIT COMMIT
-```
-
-валидно как две независимые executions.
-
-Один файл может содержать несколько records. Новая команда не затирает старую interrupted execution.
-
-Current command status:
-
-- `running` — completion не доказан; после interruption resume той же command;
-- `complete` — command завершена;
-- `blocked` — автоматически дальше не идти.
-
-Result: `SUCCESS | PASS | FAIL | BLOCKED`.
-
-Для root execution:
-
-```bash
-python3 .harness/tools/resolve-next-command.py --json \
-  --root '<root canonical command>'
-```
-
-Без `--root` resolver возвращает все unresolved executions.
-
-Поведение после `complete`:
-
-- `single` → остановиться; CTS ничего автоматически не продолжает;
-- `chain` → проверить следующий segment исходной sequence через CTS/result/runtime preconditions;
-- `STEP RUN` → продолжить orchestration через существующие child commands/CTS; если Type выполняется без отдельной child command, RUN остаётся current и после crash resume-ится сам.
-
-Для chain/orchestration переход к следующей child command отмечается:
-
-```bash
-python3 .harness/tools/execution-state.py begin \
-  --root '<root command>' \
-  --command '<next/current child command>'
-```
-
-Completion:
-
-```bash
-python3 .harness/tools/execution-state.py complete \
-  --root '<root command>' \
-  --command '<current command>' \
-  --result <SUCCESS|PASS|FAIL|BLOCKED>
-```
-
-Запись выполняется atomic replace: temporary file → flush/fsync → `os.replace`.
-
-Canonical artifacts имеют приоритет над local operational state. Для существующих команд разрешены узкие deterministic recovery proofs:
-
-- `plan.status=ready` с совпадающими `context_basis`, `content_hash` и matching immutable planning-review PASS может доказать завершённый `STEP PLAN`;
-- новый schema-valid immutable review report для той же exact `git_head + worktree_hash` revision может восстановить verdict `STEP REVIEW`;
-- изменение Git HEAD после `GIT COMMIT` может доказать, что commit уже создан.
-
-Эти проверки не создают profiles и не меняют command surface.
-
-Подробно: `.harness/docs/EXECUTION_STATUS.md`.
-
-### 0.3. `HARNESS HELP`
-
-`HARNESS HELP` — standalone read-only команда. После structural PASS она запускает только deterministic:
-
-```bash
-python3 .harness/tools/harness-help.py
-```
-
-Output строится из command metadata в `.harness/command-transitions.json`; command-specific project/Git state и LLM reasoning для справки не требуются.
-
-
-### 0.4. Operational UX commands
-
-`HARNESS STATUS`, `HARNESS DOCTOR`, `HARNESS CONFIG`, `STEP LIST` и `STEP SHOW STEP-NNN` выполняются deterministic через `.harness/tools/harness-ux.py` и не мутируют product/project artifacts.
-
-`HARNESS DOCTOR` разделяет required core dependencies и optional capabilities; отсутствие неактивного Claude/Codex runtime или GitHub CLI не является global blocker.
-
-`HARNESS RESUME` — управляющая команда без параметров. После CTS PASS она не регистрируется как новое корневое выполнение: если существует ровно одна безопасная точка продолжения, resolver возвращает соответствующую текущую или следующую команду. При нуле или нескольких возможных точках команда возвращает `BLOCKED`.
+Read-only и mutating handlers используют один invariant: tool возвращает factual `PASS|SUCCESS|BLOCKED`, а dispatcher сохраняет exact result в execution state и не переинтерпретирует его reasoning-ом.
 
 ## 1. Сущности
 
@@ -350,12 +263,12 @@ PROJECT QUICK FIX — исключение из STEP workflow для micro-chang
 Production code mutation запрещена.
 
 1. Legacy active schema = blocker; сначала `PROJECT RECONCILE`.
-2. Static gate восстанавливает STEP, type-specific completion proofs прямых dependencies, linked REQ/ADR, explicit `architecture_refs` и relevant canonical OQ.
+2. Static gate восстанавливает STEP, semantic contracts прямых dependencies, linked REQ/ADR, explicit `architecture_refs` и relevant canonical OQ. Completion dependency на стадии PLAN не требуется.
 3. Semantic gate проверяет внутреннюю непротиворечивость contract, feasibility Acceptance/Verification, prerequisites и ownership.
 4. Contract defect/missing decision/impossible acceptance → `BLOCKED`.
 5. После PASS запиши содержательный `Implementation plan` как draft.
 6. `planning-state.py plan-context STEP-NNN` возвращает два независимых fingerprints:
-   - `contextBasis` — contract + linked REQ/ADR + direct dependency completion proofs + referenced architecture sections + relevant OQ;
+   - `contextBasis` schema v4 — semantic STEP/dependency contracts + semantic linked REQ/ADR + referenced architecture sections + relevant OQ; priority/phase, reverse traceability и dependency completion state исключены;
    - `planContentHash` — нормализованный текст самого Implementation plan.
 7. **Каждый** PLAN обязан пройти independent semantic planning-review. Immutable schema-v1 report в configured `protocol.planningReviewDirectory` хранит verdict + оба fingerprints.
 8. Только matching PASS разрешает `execution-state.py stamp-plan STEP-NNN`. Stamp atomically пишет `plan.status=ready`, revision, context/content hashes, reviewed report и timestamp.
@@ -368,17 +281,17 @@ Single PLAN после SUCCESS останавливается; продолже�
 
 Execution tracking уже ведётся root execution wrapper.
 
-1. Требуется актуальный Implementation plan, если нет explicit user override.
-2. Проверить dependencies.
+1. До dispatch execution layer применяет deterministic `step-implement-ready`: требует актуальный Ready plan/matching review и completion proofs всех direct dependencies. Agent не повторяет эту проверку reasoning-ом.
+2. Explicit user override не обходит runtime prerequisite safety gate; изменение contract оформляется через PLAN/reconciliation.
 3. `status → in_progress` при первой фактической mutation.
 4. При `RESUME` сначала исследовать существующий diff/Evidence и продолжить недостающее, не переделывая готовую работу.
 5. Выполнить scope/mutation policy.
 6. Не реализовывать future/unrelated work.
 7. Добавить/обновить tests.
-8. Запустить реальные Verification commands.
-9. Обновить Evidence.
+8. При готовности реализации предложить command result `SUCCESS`; dispatcher сам запускает explicit `- command:` entries из `## Verification` без shell и обновляет generated Evidence.
+9. `VERIFICATION_FAIL` возвращает factual command result в тот же IMPLEMENT; `VERIFICATION_MANUAL_REQUIRED` требует только listed manual checks; `VERIFICATION_BLOCKED` не обходится reasoning-ом.
 10. Не ставить `Выполнено` до required review PASS.
-11. После полного scope + verification + Evidence command завершается `SUCCESS`.
+11. Command завершается только после PASS deterministic/manual Verification contract.
 
 Если execution-status показывает `running`, следующая session resume-ит тот же `STEP IMPLEMENT STEP-NNN`.
 
@@ -408,9 +321,9 @@ Single REVIEW после verdict останавливается. Внутри ch
 2. Исправлять только findings категорий `implementation`/`evidence` и необходимый supporting code в scope.
 3. Contract finding, изменение Acceptance/REQ/ADR/dependencies или missing prerequisite → `BLOCKED` + corrective STEP/RESEARCH/ADR; не превращать FIX в скрытый scope expansion.
 4. При `RESUME` сначала изучить существующий diff и продолжить незавершённые findings.
-5. Запустить relevant tests/verification.
-6. Обновить Evidence.
-7. После полного исправления command завершается `SUCCESS`.
+5. После исправлений предложить `SUCCESS`; dispatcher сам повторно запускает canonical Verification и generated Evidence writer.
+6. Factual FAIL остаётся в FIX; manual checks выполняются только при explicit `MANUAL_REQUIRED`.
+7. Command завершается только после PASS Verification; старый review не изменяется.
 8. Счёт `FIX → REVIEW` ведёт Execution Status, а не память агента.
 
 Single FIX после SUCCESS останавливается. Внутри chain/RUN CTS может продолжить к свежему REVIEW.
@@ -547,7 +460,7 @@ Read-only machine preflight:
 python3 .harness/tools/git-preflight.py check --json
 ```
 
-Tool разрешает configured `.harness/manifest.yaml → repository.gitPolicy`, показывает branch/protection/upstream, staged/unstaged/untracked и Harness validation result. Agent отдельно анализирует semantic grouping, suspicious/unrelated files и traceability. Ничего не stage/commit/push.
+Dispatcher напрямую запускает deterministic Git preflight: tool разрешает configured `.harness/manifest.yaml → repository.gitPolicy`, показывает branch/protection/upstream, staged/unstaged/untracked и Harness validation result. Model call отсутствует; semantic grouping/commit scope появляется только на `GIT COMMIT`. Ничего не stage/commit/push.
 
 ## 19. `GIT COMMIT` / `GIT COMMIT: <подсказка>`
 
@@ -583,19 +496,20 @@ Tool разрешает configured `.harness/manifest.yaml → repository.gitPol
 
 ## 21. `GIT PR`
 
-1. Выполнить:
+1. Semantic worker заполняет PR body по configured template/repository evidence в `.harness/local/git/pr-body.md`. При `title_from_commit=false` дополнительно создаёт одно-строчный `pr-title.txt`.
+2. Выполнить:
    ```bash
-   python3 .harness/tools/git-preflight.py pr --json
+   python3 .harness/tools/git-action.py pr --body-file .harness/local/git/pr-body.md --json
    ```
-2. PASS доказывает exact published HEAD, существующий configured base, доступный preferred tool и repository-contained body template.
-3. Head/base/provider/tool/draft брать из machine plan/policy, не подменять вручную.
-4. При `reuse_existing=true` не создавать duplicate.
-5. Title должен отражать actual change; body заполняется по configured template из STEP/REQ/ADR/evidence/review.
+   При policy `title_from_commit=false` добавить `--title-file .harness/local/git/pr-title.txt`.
+3. Executor повторяет canonical PR preflight, использует только configured provider/tool/head/base/draft, находит exact open PR либо создаёт один согласно `reuse_existing`.
+4. SUCCESS требует provider `headRefOid == published HEAD`; local `.harness/local/git/pr-state.json` executor создаёт/обновляет сам. Ручной `gh pr create/list/view` и ручная запись state запрещены.
+5. Provider/tool blocker не ослаблять ручной командой; semantic title/body не имеют права подменять base/head/provider policy.
 
 ## 22. `GIT PR FINISH`
 
 1. Команда standalone-only и применяется после merge PR.
-2. После успешного `GIT PR` сохранить local-only `.harness/local/git/pr-state.json` schema v1: PR number, headBranch, baseBranch, returnBranch и URL. `returnBranch` = корректная предыдущая local branch; если она недоступна/невалидна — PR base.
+2. Local PR state уже сохранён deterministic PR executor-ом; вручную его не редактировать.
 3. Перед mutation выполнить:
    ```bash
    python3 .harness/tools/git-preflight.py pr-finish --json

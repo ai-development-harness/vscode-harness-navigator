@@ -1,24 +1,16 @@
 <!-- PROJECT:START -->
-# AI Development Harness — новый проект
+# VSCode Harness Navigator
 
-Проект ещё не инициализирован.
+Локальное read-only расширение Visual Studio Code для навигации по STEP, REQ, ADR, OQ и справке по canonical-командам AI Development Harness 0.6.0+.
 
-1. Создай локальный brief:
+Ключевые документы:
 
-   ```bash
-   cp PROJECT_BRIEF.example.md PROJECT_BRIEF.local.md
-   ```
+- [Описание проекта](docs/PROJECT.md)
+- [Требования](docs/requirements/SPEC.md)
+- [Архитектура](docs/architecture.md)
+- [Roadmap](planning/PLAN.md)
 
-2. Опиши проект своими словами в `PROJECT_BRIEF.local.md`: цель, пользователей, сценарии, ограничения, предпочтительный стек, референсы и любые важные заметки.
-3. При необходимости скопируй `AGENTS.local.example.md` в `AGENTS.local.md` и добавь локальные команды/предпочтения.
-4. Открой репозиторий в Codex или Claude Code.
-5. Выполни:
-
-   ```text
-   PROJECT INIT
-   ```
-
-После успешной инициализации агент заменит **только этот блок** описанием конкретного проекта, ключевыми ссылками и текущей точкой входа в разработку.
+Текущая точка входа в разработку: `STEP PLAN STEP-001`.
 <!-- PROJECT:END -->
 
 ## Зависимости

@@ -44,36 +44,58 @@ TEST_SURFACE_RE = re.compile(
 # При clean tree использует последний commit только как diagnostic fallback и
 # помечает surfaceMode=clean-tree-fallback, потому что exact STEP diff потерян.
 # ---------------------------------------------------------------------------
+def _git_paths_z(root: Path, *args: str) -> list[str]:
+    """Прочитать Git path list без quoting/line splitting.
+
+    Git path может содержать Unicode, пробелы, tab и даже newline. Поэтому
+    line-oriented stdout (`splitlines()`/`strip()`) не является корректным
+    transport. Все callers обязаны запрашивать `-z`, а здесь stdout остаётся
+    bytes до NUL-splitting. `core.quotepath=false` — defense-in-depth для
+    читаемого/raw path output; `-z` остаётся основным framing contract.
+
+    Invalid UTF-8 path fail-closed через UnicodeDecodeError: Harness не должен
+    классифицировать и fingerprint-ить путь, который не может однозначно
+    представить в своём UTF-8 document/JSON contract.
+    """
+    proc = subprocess.run(
+        ["git", "-c", "core.quotepath=false", *args],
+        cwd=root,
+        text=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return []
+    return [
+        item.decode("utf-8")
+        for item in proc.stdout.split(b"\0")
+        if item
+    ]
+
+
 def _git_changed_paths(root: Path) -> tuple[list[str], str]:
     paths: set[str] = set()
     for args in (
-        ("diff", "--name-only", "HEAD"),
-        ("diff", "--cached", "--name-only"),
+        ("diff", "--name-only", "-z", "HEAD", "--"),
+        ("diff", "--cached", "--name-only", "-z", "--"),
     ):
         try:
-            proc = subprocess.run(
-                ["git", *args],
-                cwd=root,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
+            paths.update(_git_paths_z(root, *args))
         except OSError:
             continue
-        if proc.returncode == 0:
-            paths.update(line.strip() for line in proc.stdout.splitlines() if line.strip())
+
     try:
-        proc = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard"],
-            cwd=root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            check=False,
+        paths.update(
+            _git_paths_z(
+                root,
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "-z",
+                "--",
+            )
         )
-        if proc.returncode == 0:
-            paths.update(line.strip() for line in proc.stdout.splitlines() if line.strip())
     except OSError:
         pass
 
@@ -84,18 +106,18 @@ def _git_changed_paths(root: Path) -> tuple[list[str], str]:
     if not paths:
         surface_mode = "clean-tree-fallback"
         try:
-            proc = subprocess.run(
-                ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
-                cwd=root,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-            if proc.returncode == 0:
-                paths.update(
-                    line.strip() for line in proc.stdout.splitlines() if line.strip()
+            paths.update(
+                _git_paths_z(
+                    root,
+                    "diff-tree",
+                    "--no-commit-id",
+                    "--name-only",
+                    "-r",
+                    "-z",
+                    "HEAD",
+                    "--",
                 )
+            )
         except OSError:
             pass
 

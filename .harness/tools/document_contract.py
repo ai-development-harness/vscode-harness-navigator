@@ -12,6 +12,7 @@ FAIL в другом.
 - common schema/kind/required-section checks;
 - stable/content hashes;
 - canonical durable timestamp identity;
+- immutable report create через O_EXCL;
 - crash-safe atomic UTF-8 writes.
 
 Legacy document без frontmatter разрешён только caller-у, который явно передал
@@ -26,7 +27,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
-from typing import Any
+from typing import Any, Callable
 
 from harness_config import ConfigError, parse_yaml_subset
 
@@ -115,6 +116,48 @@ def durable_report_timestamp(
     created_at = instant.isoformat(timespec="seconds").replace("+00:00", "Z")
     return filename, created_at
 
+
+def create_durable_report(
+    prefix: str,
+    *,
+    directory: Path,
+    content_factory: Callable[[str], str],
+    now: datetime | None = None,
+) -> tuple[Path, str]:
+    """Атомарно создать immutable timestamped report без overwrite race.
+
+    Filename reservation и create — одна операция O_EXCL. Если другой writer
+    успел занять тот же UTC second между вычислением имени и записью, caller не
+    перезаписывает его report, а пробует следующий canonical second.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    instant = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(microsecond=0)
+
+    while True:
+        filename = prefix + instant.strftime("%Y%m%dT%H%M%SZ") + ".md"
+        path = directory / filename
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        try:
+            fd = os.open(path, flags, 0o666)
+        except FileExistsError:
+            instant += timedelta(seconds=1)
+            continue
+
+        created_at = instant.isoformat(timespec="seconds").replace("+00:00", "Z")
+        try:
+            content = content_factory(created_at)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(content)
+                fh.flush()
+                os.fsync(fh.fileno())
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            path.unlink(missing_ok=True)
+            raise
+        return path, created_at
 
 def parse_utc_timestamp(value: Any) -> datetime | None:
     """Разобрать timezone-aware ISO-8601 instant и нормализовать его в UTC."""
@@ -214,15 +257,72 @@ def split_frontmatter(text: str) -> tuple[dict[str, Any] | None, str]:
     return data, normalized[end + 5 :]
 
 
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+
+
+def markdown_headings(body: str) -> list[tuple[int, int, str]]:
+    """Вернуть ATX headings вне fenced code blocks.
+
+    Harness использует headings как machine-readable boundaries. Regex по
+    отдельным строкам недостаточен: ``##`` внутри fenced example не является
+    структурой документа и не должен менять section/hash semantics.
+
+    Поддерживаются backtick/tilde fences длиной >= 3: closing fence использует
+    тот же символ и не короче opening fence. Незакрытый fence fail-safe
+    трактует весь оставшийся текст как code content и не создаёт ложные
+    machine-readable headings.
+    """
+    headings: list[tuple[int, int, str]] = []
+    fence_char: str | None = None
+    fence_length = 0
+
+    for index, line in enumerate(body.replace("\r\n", "\n").split("\n")):
+        if fence_char is not None:
+            closing = re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_char)}{{{fence_length},}}[ \t]*",
+                line,
+            )
+            if closing:
+                fence_char = None
+                fence_length = 0
+            continue
+
+        fence = _FENCE_OPEN_RE.match(line)
+        if fence:
+            marker = fence.group(1)
+            suffix = fence.group(2)
+            # Backtick info string по CommonMark не может содержать backtick.
+            if marker[0] != "`" or "`" not in suffix:
+                fence_char = marker[0]
+                fence_length = len(marker)
+                continue
+
+        heading = _HEADING_RE.match(line)
+        if heading:
+            headings.append(
+                (index, len(heading.group(1)), heading.group(2).strip())
+            )
+
+    return headings
+
+
 def parse_sections(body: str) -> tuple[dict[str, str], list[str]]:
-    """Разобрать ## sections и отдельно вернуть duplicate names."""
+    """Разобрать реальные ``##`` sections и отдельно вернуть duplicate names."""
+    lines = body.replace("\r\n", "\n").split("\n")
+    section_headings = {
+        index: title
+        for index, level, title in markdown_headings(body)
+        if level == 2
+    }
     sections: dict[str, list[str]] = {}
     duplicates: list[str] = []
     current: str | None = None
-    for line in body.splitlines():
-        match = re.match(r"^##\s+(.+?)\s*$", line)
-        if match:
-            current = match.group(1).strip()
+
+    for index, line in enumerate(lines):
+        heading = section_headings.get(index)
+        if heading is not None:
+            current = heading
             if current in sections:
                 duplicates.append(current)
             else:
@@ -230,11 +330,11 @@ def parse_sections(body: str) -> tuple[dict[str, str], list[str]]:
             continue
         if current is not None:
             sections[current].append(line)
+
     return (
-        {name: normalize_text("\n".join(lines)) for name, lines in sections.items()},
+        {name: normalize_text("\n".join(value)) for name, value in sections.items()},
         duplicates,
     )
-
 
 def first_h1(body: str) -> str:
     return next((line.strip() for line in body.splitlines() if line.strip()), "")
@@ -297,6 +397,12 @@ def has_unresolved_placeholder(value: str) -> bool:
 
 
 def _yaml_scalar(value: Any) -> str:
+    """Сериализовать scalar так, чтобы restricted parser восстановил его тип.
+
+    Plain form разрешается только если тот же canonical parser читает значение
+    обратно как exact ``str``. Это защищает строки ``"1"``, ``"001"``,
+    ``"true"`` и ``"null"`` от тихого превращения в int/bool/None.
+    """
     if value is None:
         return "null"
     if value is True:
@@ -307,15 +413,18 @@ def _yaml_scalar(value: Any) -> str:
         return str(value)
     if not isinstance(value, str):
         raise DocumentError(f"unsupported frontmatter scalar type: {type(value).__name__}")
-    if value == "":
-        return '""'
-    if re.fullmatch(r"[A-Za-z0-9_./:@+\-]+", value) and value.lower() not in {
-        "null", "true", "false"
-    }:
-        return value
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
 
+    if re.fullmatch(r"[A-Za-z0-9_./:@+#\-]+", value):
+        try:
+            parsed = parse_yaml_subset(f"value: {value}\n").get("value")
+        except ConfigError:
+            parsed = None
+        if isinstance(parsed, str) and parsed == value:
+            return value
+
+    # JSON double-quoted string входит в поддерживаемый subset parser-а и
+    # корректно экранирует quote/backslash/control characters.
+    return json.dumps(value, ensure_ascii=False)
 
 def dump_yaml_subset(value: dict[str, Any], *, indent: int = 0) -> list[str]:
     lines: list[str] = []

@@ -13,7 +13,6 @@ Harness skills описывают **workflow**, а не конкретный tec
 - `run-step`
 - `audit-step`
 - `project-status`
-- `next-step`
 - `reconcile-project`
 - `architecture-change`
 - `requirements-review`

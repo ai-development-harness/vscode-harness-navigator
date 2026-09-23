@@ -18,7 +18,7 @@ from document_contract import (
     STEP_ID_RE,
     atomic_write_text,
     content_hash,
-    durable_report_timestamp,
+    create_durable_report,
     render_document,
     split_frontmatter,
 )
@@ -541,35 +541,37 @@ def migrate_project(root: Path) -> dict[str, Any]:
         }
 
     report_dir = audit_directory(root)
-    report_dir.mkdir(parents=True, exist_ok=True)
-    report_name, created_at = durable_report_timestamp(
+
+    def report_content(created_at: str) -> str:
+        body = "# Project Schema Migration\n\n## Changed artifacts\n\n"
+        body += "\n".join(f"- {item}" for item in unique_changed) if unique_changed else "- none"
+        body += (
+            "\n\n## Legacy immutable reviews\n\n"
+            + (
+                "\n".join(f"- pinned {rel}" for rel in sorted(pending_legacy_reviews))
+                if pending_legacy_reviews
+                else "- no new legacy review pins"
+            )
+        )
+        body += "\n\n## Notes\n\nHistorical immutable reports were not rewritten."
+        report_meta = {
+            "schema": 1,
+            "kind": "migration",
+            "created_at": created_at,
+            "result": "complete",
+            "changed_count": len(unique_changed),
+            "legacy_review_reports": [
+                f"{digest} {rel}"
+                for rel, digest in sorted(pending_legacy_reviews.items())
+            ],
+        }
+        return render_document(report_meta, body)
+
+    report, _created_at = create_durable_report(
         "MIGRATION-",
         directory=report_dir,
+        content_factory=report_content,
     )
-    report = report_dir / report_name
-    body = "# Project Schema Migration\n\n## Changed artifacts\n\n"
-    body += "\n".join(f"- {item}" for item in unique_changed) if unique_changed else "- none"
-    body += (
-        "\n\n## Legacy immutable reviews\n\n"
-        + (
-            "\n".join(f"- pinned {rel}" for rel in sorted(pending_legacy_reviews))
-            if pending_legacy_reviews
-            else "- no new legacy review pins"
-        )
-    )
-    body += "\n\n## Notes\n\nHistorical immutable reports were not rewritten."
-    report_meta = {
-        "schema": 1,
-        "kind": "migration",
-        "created_at": created_at,
-        "result": "complete",
-        "changed_count": len(unique_changed),
-        "legacy_review_reports": [
-            f"{digest} {rel}"
-            for rel, digest in sorted(pending_legacy_reviews.items())
-        ],
-    }
-    atomic_write_text(report, render_document(report_meta, body))
     return {
         "status": "MIGRATED",
         "changed": unique_changed,

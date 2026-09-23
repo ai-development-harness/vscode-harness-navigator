@@ -48,6 +48,12 @@ Tracked `.claude/settings.json` задаёт shared defaults:
 
 Для персонального override используй `.claude/settings.local.json`. Этот файл не должен попадать в Git.
 
+### Defense-in-depth для Git mutations
+
+Shared `.claude/settings.json` содержит `permissions.deny` для прямых `git commit/push/merge`, удаления branch refs и destructive `reset/clean` через Bash/PowerShell. Это заставляет Claude Code использовать canonical `git-action.py` для поддерживаемых mechanical mutations вместо обхода Harness policy.
+
+Deny rules — дополнительный runtime guard, а не security boundary вокруг Git executable: альтернативная форма invocation может не совпасть с command pattern. Canonical гарантия остаётся в `.harness/git-policy.toml`, `git-preflight.py`, `git-action.py` и CI. Поэтому validator требует минимальный набор restrictive rules, но не переносит Git policy в Claude-specific config.
+
 В интерактивной сессии модель и effort можно временно менять средствами Claude Code (`/model`, `/effort`, `--model`, `--effort`). Такой session override не меняет Harness protocol.
 
 ## Role profiles

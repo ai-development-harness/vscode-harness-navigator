@@ -54,12 +54,14 @@ Engine читает routing metadata из configured `source.update_manifest` н
 
 ## Release identity
 
-Новый deterministic lock pin-ит одновременно:
+Есть два разных состояния lock:
 
-- `source.ref = vX.Y.Z`;
-- `source.commit = <Git OID>`.
+1. **Release/template snapshot**: содержит `source.ref = vX.Y.Z`, но не содержит `source.commit`. Self-pin невозможен, потому что SHA release commit ещё не существует до создания самого commit/tag.
+2. **Project lock после update/adopt**: pin-ит одновременно `source.ref = vX.Y.Z` и `source.commit = <Git OID>`, потому что immutable tag уже существует и его OID можно доказать.
 
-Legacy lock без `source.commit` остаётся читаемым. После появления pin engine обязан проверить, что release tag всё ещё указывает на тот же commit. Несовпадение → `SOURCE_TAG_MOVED`.
+Lock без `source.commit` остаётся читаемым. После появления project pin engine обязан проверить, что release tag всё ещё указывает на тот же commit. Несовпадение → `SOURCE_TAG_MOVED`.
+
+Известное исключение для опубликованных `v0.6.0` и `v0.7.0`: их release snapshots ошибочно содержат stale pin `e366c487...` от `v0.5.3`. Не ослабляй `SOURCE_TAG_MOVED` глобально. Для этих двух exact пар используй документированный recovery из `.harness/docs/UPDATES.md`, который заменяет pin на реальный OID соответствующего опубликованного тега, затем обязательно запускает CHECK.
 
 ## Skill ownership
 

@@ -80,6 +80,7 @@ Validator проверяет protocol/repository invariants, но **не зам�
 - CTS graph и command surface;
 - deprecated command references;
 - runtime bindings Codex/Claude;
+- обязательный Claude project-level `permissions.deny` набор для прямых Git mutations в обход `git-action.py`;
 - `.gitignore` semantics через `git check-ignore`;
 - forbidden tracked paths/secrets/artifacts;
 - UTF-8, final newline, trailing whitespace, merge markers;
@@ -211,6 +212,56 @@ python3 .harness/tools/validate-command.py -- 'GIT PR > COMMIT'
 - parsing и normalization raw command text.
 
 Общий `validate.py` дополнительно проверяет cross-file contract поля `documentation`: формат `<path>#<anchor>`, repository-contained path, существование файла, уникальность ссылки и ровно один explicit `<a id="...">` в target Markdown.
+
+---
+
+# 2A. Stateful command dispatcher
+
+## Файлы
+
+- CLI: `.harness/tools/harness-dispatch.py`
+- engine: `.harness/tools/command_dispatch.py`
+- regression: `.harness/tools/command-dispatch-self-test.py`
+
+## Роль
+
+Canonical runtime boundary между raw Harness command и semantic моделью. Объединяет CTS structural gate, execution state, continuation и machine-readable dispatch metadata.
+
+## Когда использовать
+
+- для любого пользовательского canonical command в обычном runtime;
+- для resume interrupted execution;
+- при тестировании command→skill routing;
+- при разработке нового deterministic command handler.
+
+## CLI
+
+```bash
+python3 .harness/tools/harness-dispatch.py start --command '<raw command>'
+python3 .harness/tools/harness-dispatch.py complete --root '<root>' --command '<command>' --result PASS
+python3 .harness/tools/harness-dispatch.py resume [--root '<root>']
+python3 .harness/tools/harness-dispatch.py route --command '<canonical command>'
+```
+
+По умолчанию output compact JSON; `--pretty` предназначен для ручной диагностики.
+
+## Что доказывает/делает
+
+- invalid chain не создаёт execution;
+- command routing берётся только из CTS `dispatch` metadata;
+- deterministic handlers, включая mutating `GIT SYNC` / `GIT PR FINISH`, завершаются без LLM;
+- semantic node возвращает exact `skillPath`;
+- PLAN/IMPLEMENT/REVIEW получают exact phase context через `step_context.py`;
+- `complete` автоматически разрешает следующий chain segment;
+- `resume` не создаёт ложную root execution для `HARNESS RESUME`;
+- dispatch error fail-closed блокирует active execution.
+
+Dispatcher не интерпретирует product semantics и не выполняет semantic skill вместо модели.
+
+## Exit codes
+
+- `0` — deterministic DONE/PASS/SUCCESS, semantic handoff или другой неблокирующий result;
+- `1` — BLOCKED.
 
 ---
 
@@ -498,6 +549,8 @@ Mutation mode имеет rollback: если postcondition после запис�
 
 `.harness/tools/review_gates.py`
 
+Regression suite: `.harness/tools/review-gates-self-test.py`.
+
 ## Роль
 
 Read-only preselector: определяет, нужны ли для STEP REVIEW специализированные `security` и/или `tests` reviewers.
@@ -526,12 +579,14 @@ python3 .harness/tools/review_gates.py STEP-NNN [--json]
 - `review.security` и `review.tests` policy;
 - STEP type;
 - `risk_flags`;
-- changed Git paths;
+- changed Git paths, полученные NUL-delimited (`-z`) без Git path quoting/line splitting; Unicode, пробелы, tab/newline и trailing whitespace сохраняются как часть exact path;
 - security-sensitive path patterns;
 - test/code surface patterns;
 - clean-tree fallback.
 
 Clean-tree fallback fail-closed требует security + tests, потому что один последний commit не доказывает полный implementation surface STEP.
+
+Path transport является отдельным safety invariant: collector читает `git diff`, `git diff --cached`, `git ls-files` и `git diff-tree` через NUL framing. Invalid UTF-8 path не подменяется escaped/замещённой строкой и считается caller-level blocker.
 
 ## Exit code
 
@@ -627,6 +682,38 @@ Engine проверяет:
 
 ---
 
+## Deterministic Git mutation executor
+
+Файлы:
+
+- `.harness/tools/git_action.py` — engine;
+- `.harness/tools/git-action.py` — CLI wrapper.
+
+Preflight отвечает на вопрос «разрешена ли mutation», executor — «как выполнить уже одобренную mechanical mutation и доказать postcondition».
+
+```bash
+python3 .harness/tools/git-action.py commit --json \
+  --commit-type feat \
+  --slug user-search \
+  --message-file .harness/local/git/commit-message.txt
+python3 .harness/tools/git-action.py push --json
+python3 .harness/tools/git-action.py pr --body-file .harness/local/git/pr-body.md --json
+python3 .harness/tools/git-action.py sync --json
+python3 .harness/tools/git-action.py pr-finish --json
+```
+
+Executor повторяет canonical preflight непосредственно перед mutation.
+
+- COMMIT создаёт только exact `requiredBranch`, если protected-branch preflight потребовал его; message file разрешён только под `.harness/local/git/`; postcondition — новый HEAD.
+- PUSH исполняет только returned non-force argv; postcondition — configured remote branch совпадает с local HEAD.
+- PR принимает semantic body/title только из `.harness/local/git/**`, сам ищет/reuse/create provider PR, сверяет exact head OID и сохраняет local PR state.
+- SYNC разрешает только report/noop или exact `git merge --ff-only`; postcondition — local HEAD совпадает с configured remote.
+- PR FINISH исполняет ordered exact steps, проверяет return branch и удаление verified local PR branch; local PR state удаляется только после полного успеха.
+
+Exit codes: `0` — SUCCESS; `2` — BLOCKED/preflight/mutation/postcondition failure.
+
+---
+
 # 9. Internal project integrity aggregator
 
 ## Файл
@@ -662,6 +749,41 @@ Engine проверяет:
 
 ---
 
+# 9A. Deterministic STEP NEXT resolver
+
+## Файлы
+
+- engine: `.harness/tools/step_next.py`
+- CLI: `.harness/tools/step-next.py`
+- regression: `.harness/tools/step-next-self-test.py`
+
+## Роль
+
+Возвращает один explainable next-step recommendation без LLM ranking.
+
+Стабильный порядок:
+
+1. resumable STEP execution;
+2. in-progress перед planned;
+3. `critical > high > medium > low`;
+4. больший transitive downstream impact;
+5. больше explicit non-`none` risk flags — только visibility tie-breaker, не severity score;
+6. canonical roadmap order.
+
+Для STEP без Ready plan dependency completion не блокирует `STEP PLAN`. Для Ready plan `STEP IMPLEMENT` допускается только при PASS `implementation_prerequisite_failures`. Current exact FAIL review маршрутизируется в `STEP FIX`.
+
+## CLI
+
+```bash
+python3 .harness/tools/step-next.py
+python3 .harness/tools/step-next.py --pretty
+```
+
+PASS возвращает exact `command`, selected candidate, compact alternatives и ranking breakdown. При отсутствии executable STEP возвращается `BLOCKED/NO_EXECUTABLE_STEP` с ограниченным списком blockers.
+
+
+---
+
 # 10. Planning contract validator
 
 ## Файл
@@ -686,7 +808,7 @@ Static validator и fingerprint engine для REQ/ADR/OQ/STEP planning model.
 - mutation policy structure;
 - unresolved placeholders;
 - dependency cycles;
-- completion proofs;
+- type-specific completion proofs: каждый STEP со `status=completed` обязан иметь durable proof; тот же proof используется lifecycle/projections и `STEP IMPLEMENT` runtime gate; completion state не входит в schema-v4 planning basis;
 - relevant OQ blockers;
 - `plan.context_basis`;
 - `plan.content_hash`;
@@ -694,6 +816,104 @@ Static validator и fingerprint engine для REQ/ADR/OQ/STEP planning model.
 - INIT review basis.
 
 Semantic качество плана static validator не оценивает — его подтверждает independent planning-review.
+
+### Phase-specific STEP context manifest
+
+Файлы:
+
+- `.harness/tools/step_context.py` — engine;
+- `.harness/tools/step-context.py` — CLI wrapper.
+
+Tool не суммаризирует документы. Он детерминированно разрешает exact canonical paths и phase-specific facts:
+
+```bash
+python3 .harness/tools/step-context.py STEP-NNN --phase plan --json
+python3 .harness/tools/step-context.py STEP-NNN --phase implement --json
+python3 .harness/tools/step-context.py STEP-NNN --phase review --json
+```
+
+Общий result содержит `step`, `semanticInputs` и уникальный `readPaths`. Модель читает только эти canonical artifacts плюс действительно relevant code/tests/config.
+
+- `plan` возвращает current schema-v4 `contextBasis`, `planContentHash` и явно сообщает, что dependency completion на этой фазе не требуется;
+- `implement` возвращает deterministic `implementPrerequisites PASS|BLOCKED` с точными failures;
+- `review` возвращает specialized-review gate и exact repository revision.
+
+`--root <path>` предназначен для tests/tooling; обычный runtime использует repository root, содержащий tool. `--json` выдаёт компактный machine-readable JSON без pretty-print overhead.
+
+
+---
+
+# 10A. Deterministic STEP Verification runner
+
+## Файлы
+
+- engine: `.harness/tools/verification.py`
+- CLI: `.harness/tools/verify-step.py`
+- regression: `.harness/tools/verification-self-test.py`
+
+## Роль
+
+Исполняет machine-executable `## Verification` без LLM и формирует factual generated Evidence.
+
+## Contract
+
+- `- command: \`...\`` — argv-команда, запускаемая напрямую без shell;
+- `- manual: ...` — действительно неавтоматизируемая semantic/visual проверка;
+- shell control operators не разрешены; сложную проверку нужно вынести в repository script;
+- timeout берётся из `execution.verificationCommandTimeoutSeconds`;
+- repository revision до/после каждой command обязана совпасть;
+- PASS Evidence хранит exit code, duration, stdout/stderr SHA-256 и byte counts; raw successful output не загружается в model context;
+- FAIL может вернуть короткий diagnostic tail;
+- manual checks не считаются PASS без exact supplied observation.
+
+## CLI
+
+```bash
+python3 .harness/tools/verify-step.py STEP-NNN
+python3 .harness/tools/verify-step.py STEP-NNN --manual-json '[{"check":"...","status":"PASS","observed":"..."}]'
+```
+
+По умолчанию CLI обновляет только generated `VERIFICATION-EVIDENCE` block в STEP Evidence. `--no-write-evidence` оставляет artifact неизменным.
+
+## Exit codes
+
+- `0` — PASS;
+- `1` — FAIL или MANUAL_REQUIRED;
+- `2` — BLOCKED.
+
+---
+
+# 10B. Structured semantic artifact writers
+
+## Файлы
+
+- engine: `.harness/tools/semantic_artifacts.py`
+- CLI: `.harness/tools/semantic-writer.py`
+- regression: `.harness/tools/semantic-artifacts-self-test.py`
+
+## Роль
+
+Модель принимает semantic решения, но не форматирует canonical STEP/report artifacts вручную.
+
+Поддерживаются:
+
+- `plan-draft` — structured Implementation plan + Verification → mutation только соответствующих STEP sections и `plan.status=draft`;
+- `planning-review` — verdict/findings/rationale → immutable planning-review с exact fingerprints; PASS atomically handoff-ится в canonical Ready stamp;
+- `step-review` — structured findings/verdict/specialized results → immutable STEP review с exact repository revision и deterministic gate metadata.
+
+## Payload boundary
+
+`implementationPlan` — массив structured steps: `title`, `actions[]`, optional `files[]/tests[]/risks[]`. Markdown headings/lists рендерит Python.
+
+Writer принимает payload через stdin (`--payload-file -`) либо regular JSON file только под `.harness/local/**`. Неожиданные keys, multiline structural fields и inconsistent verdict/findings блокируются fail-closed.
+
+## Trust chain
+
+- timestamp/name резервируются через `O_CREAT|O_EXCL`;
+- model не задаёт `context_basis`, `plan_content_hash`, repository revision или specialized gate basis;
+- generated report до возврата результата проходит canonical validator;
+- writer возвращает exact `completionResult`, который execution layer использует без повторного reasoning.
+
 
 ---
 
@@ -711,8 +931,9 @@ Semantic качество плана static validator не оценивает �
 
 ## Основные функции
 
-- ограниченный YAML frontmatter parsing;
-- `##` section parsing;
+- ограниченный YAML frontmatter parsing/serialization с round-trip type safety;
+- fenced-aware ATX heading scanner;
+- `##` section parsing без ложных boundaries внутри fenced code;
 - duplicate section detection;
 - H1 extraction;
 - schema/kind checks;
@@ -720,9 +941,14 @@ Semantic качество плана static validator не оценивает �
 - unresolved placeholder detection;
 - stable/content hashes;
 - durable report timestamp identity;
+- immutable durable report create через `O_CREAT|O_EXCL` без overwrite race;
 - atomic UTF-8 writes.
 
 Все более высокоуровневые validators должны использовать этот module вместо собственных несовместимых Markdown/YAML parsers.
+
+`validate.py` для skill/Claude-agent frontmatter также вызывает canonical `split_frontmatter()` из `document_contract.py`; отдельного упрощённого YAML parser в агрегаторе больше нет.
+
+`markdown_headings()` является общей structural primitive для machine-readable Markdown. Architecture refs используют тот же scanner, поэтому fenced examples не могут тихо обрезать planning fingerprint.
 
 ---
 
@@ -743,7 +969,7 @@ Semantic качество плана static validator не оценивает �
 - migration reports;
 - legacy review hash pins;
 - implementation review schema;
-- reviewed repository revision;
+- reviewed repository revision: dirty fingerprint включает Git path/status, index mode+object id, worktree mode/content/symlink и submodule HEAD;
 - reviewer role/verdict/findings;
 - specialized security/tests evidence;
 - planning/init review references;
@@ -880,6 +1106,8 @@ Project templates принадлежат проекту после INIT, поэ�
 
 `load_status()` и `save_status()` всегда вызывают schema validation, поэтому повреждённый local state не трактуется как пустой.
 
+Public execution-state mutations держат advisory lock на всю transaction `load → mutate → save`. Self-test запускает параллельные процессы и проверяет отсутствие lost update/duplicate running record.
+
 ---
 
 # 16. Config parser as validation boundary
@@ -908,28 +1136,164 @@ Validator-ы должны использовать этот layer, а не по�
 
 ---
 
-# 17. Self-tests валидаторов
+# 17. Always-on context budget
 
-Self-tests проверяют implementation самих gates на synthetic repositories/fixtures:
+## Файлы
+
+- `.harness/tools/context_budget.py` — implementation;
+- `.harness/tools/context-budget.py` — CLI wrapper;
+- `.harness/tools/context-budget-self-test.py` — synthetic regression suite.
+
+## Роль
+
+Dependency-free gate фиксирует верхнюю границу Harness-controlled текста, который runtime получает до выбора command-specific skill. Он не оценивает semantic качество инструкций и не использует tokenizer конкретной модели.
+
+## Когда использовать
+
+- после изменения `AGENTS.md` или `CLAUDE.md`;
+- при рефакторинге bootstrap/routing instructions;
+- в Harness Integrity CI;
+- при анализе token economy перед release.
+
+## Что проверяет
+
+- Codex controlled budget: `AGENTS.md` без generated `PROJECT-CONTEXT`/`SKILL-ROUTING`;
+- Claude controlled budget: тот же controlled `AGENTS.md` + `CLAUDE.md`;
+- корректность marker boundaries: malformed/duplicate START/END дают FAIL;
+- наличие и UTF-8 читаемость always-on files;
+- отсутствие роста controlled context выше текущего post-refactor ceiling: 7 224 chars для Codex и 8 029 chars для Claude.
+
+`projectChars` и `observedChars` возвращаются для диагностики, но project-owned generated blocks не расходуют core Harness budget.
+
+## CLI
 
 ```bash
-python3 .harness/tools/command-references-self-test.py
-python3 .harness/tools/execution-self-test.py
-python3 .harness/tools/planning-contract-self-test.py
-python3 .harness/tools/report-contract-self-test.py
-python3 .harness/tools/repository-hardening-self-test.py
-python3 .harness/tools/git-policy-self-test.py
-python3 .harness/tools/git-preflight-self-test.py
-python3 .harness/tools/harness-config-self-test.py
-python3 .harness/tools/harness-update-self-test.py
-python3 .harness/tools/update-migration-self-test.py
+python3 .harness/tools/context-budget.py [--json] [--root <path>]
 ```
 
-Self-test PASS означает, что validator/gate выдержал известные positive/negative regressions. Он **не заменяет** запуск валидатора на текущем repository state.
+### Аргументы
+
+- `--json` — machine-readable результат;
+- `--root <path>` — явно задать repository root; по умолчанию используется repository, содержащий tool.
+
+## Exit codes
+
+- `0` — PASS;
+- `1` — budget/missing-file/marker contract FAIL;
+- `2` — ошибка CLI arguments (`argparse`).
+
+## Примеры
+
+```bash
+python3 .harness/tools/context-budget.py
+python3 .harness/tools/context-budget.py --json
+```
+
+## Внутренние зависимости / Граница ответственности
+
+Tool использует только Python stdlib и считает Unicode characters, а не model-specific tokens. Он измеряет bootstrap overhead Harness, но не запрещает project-owned context. `validate.py` вызывает тот же `evaluate_context_budget()` как часть baseline integrity gate.
+
+Подробные правила token economy описаны в [`TOKEN_ECONOMY.md`](TOKEN_ECONOMY.md).
 
 ---
 
-# 18. Рекомендуемые последовательности
+# 17A. Карта границ вычислений модели
+
+## Файлы
+
+- `.harness/tools/reasoning_boundaries.py` — движок;
+- `.harness/tools/reasoning-boundaries.py` — командная обёртка;
+- `.harness/tools/reasoning-boundaries-self-test.py` — регрессионная проверка;
+- `.harness/reasoning-boundaries.json` — машиночитаемая проекция;
+- `.harness/docs/REASONING_BOUNDARIES.md` — человекочитаемая таблица и диаграммы.
+
+## Роль
+
+Проверяет и публикует границу между смысловой работой модели и детерминированными скриптами для каждой канонической команды.
+
+Источник истины — `.harness/command-transitions.json → reasoning`. Проекции не являются самостоятельным состоянием и вручную не редактируются.
+
+## Когда использовать
+
+- после изменения `dispatch` любой команды;
+- после добавления или удаления быстрого пути;
+- после переноса работы из модели в скрипт или обратно;
+- перед выпуском новой версии Harness;
+- при подготовке внешней документации на основе машиночитаемой проекции.
+
+## Что проверяет
+
+- у каждой команды есть режим `none | required | conditional`;
+- детерминированная команда имеет только `mode=none`;
+- команда с обязательной моделью перечисляет её смысловую работу;
+- у условной команды есть хотя бы один быстрый путь;
+- каждый быстрый путь ссылается на существующую функцию в `.harness/tools/*.py`;
+- `.harness/reasoning-boundaries.json` точно соответствует таблице команд;
+- generated-блок `REASONING_BOUNDARIES.md` точно соответствует таблице команд.
+
+## CLI
+
+```bash
+python3 .harness/tools/reasoning-boundaries.py
+python3 .harness/tools/reasoning-boundaries.py --json
+python3 .harness/tools/reasoning-boundaries.py --check
+python3 .harness/tools/reasoning-boundaries.py --write
+```
+
+### Аргументы
+
+- `--json` — вывести текущую машиночитаемую проекцию;
+- `--check` — проверить проекции и ссылки на быстрые пути без изменений;
+- `--write` — пересобрать Markdown и JSON из таблицы команд.
+
+`--check` и `--write` взаимоисключающие.
+
+## Exit codes
+
+- `0` — схема, быстрые пути и проекции согласованы;
+- `1` — обнаружена ошибка схемы, отсутствующий быстрый путь или устаревшая проекция;
+- `2` — ошибка аргументов командной строки.
+
+## Примеры
+
+После переноса части команды из модели в скрипт:
+
+```bash
+python3 .harness/tools/reasoning-boundaries.py --write
+python3 .harness/tools/validate.py --mode manual
+```
+
+Проверка без изменений:
+
+```bash
+python3 .harness/tools/reasoning-boundaries.py --check
+```
+
+## Внутренние зависимости / Граница ответственности
+
+Инструмент не решает, нужна ли модели смысловая работа. Это архитектурное решение фиксируется в CTS. Инструмент только проверяет структуру, существование заявленных функций и точность проекций.
+
+Общий `validate.py` вызывает ту же проверку, поэтому рассинхронизация блокирует Harness Integrity.
+
+---
+
+# 18. Self-tests валидаторов
+
+Self-tests проверяют implementation самих gates на synthetic repositories/fixtures. Канонический entry point:
+
+```bash
+python3 .harness/tools/run-self-tests.py
+python3 .harness/tools/run-self-tests.py --list
+python3 .harness/tools/run-self-tests.py --json
+```
+
+`run-self-tests.py` автоматически обнаруживает все `.harness/tools/*-self-test.py` и запускает их в стабильном порядке. Новый regression-файл не требует отдельной регистрации в CI; сам runner остаётся required Harness artifact.
+
+Runner продолжает suite после отдельного failure и в конце возвращает non-zero, если упал хотя бы один test. PASS self-test означает, что gate выдержал известные positive/negative regressions; он **не заменяет** запуск baseline validator на текущем repository state.
+
+---
+
+# 19. Рекомендуемые последовательности
 
 ## Перед commit
 

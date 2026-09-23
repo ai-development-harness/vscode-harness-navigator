@@ -2,7 +2,7 @@
 
 Команды — стабильный человеко-машинный интерфейс. Каноническая форма начинается с явного namespace: `<DOMAIN> <ACTION> ...`. Подробный синтаксис и chain operator `>` описаны в [`COMMAND_SYNTAX.md`](COMMAND_SYNTAX.md).
 
-Допустимость переходов между командами определяется **только** machine-readable graph `.harness/command-transitions.json`. Полная человекочитаемая матрица — [`COMMAND_TRANSITIONS.md`](COMMAND_TRANSITIONS.md). До skill routing canonical command проходит deterministic `.harness/tools/validate-command.py`.
+Допустимость переходов и routing команд определяется **только** machine-readable graph `.harness/command-transitions.json`. Обычный runtime передаёт raw command в `.harness/tools/harness-dispatch.py`: dispatcher выполняет structural gate/execution/continuation и возвращает deterministic result либо exact semantic skill handoff. `validate-command.py` остаётся read-only диагностическим structural gate.
 
 State transitions выполнения описаны в `.harness/docs/EXECUTION_PROTOCOL.md`.
 
@@ -146,22 +146,22 @@ python3 .harness/tools/harness-ux.py step-show --step STEP-024 --json
 <a id="command-step-plan"></a>
 ## `STEP PLAN STEP-NNN`
 
-Сначала валидирует task contract, type-specific dependency proofs, linked REQ/ADR, explicit `architecture_refs` и relevant OQ. После draft Implementation plan обязательный independent planning-review сохраняет exact `context_basis` и отдельный `plan_content_hash`. Только matching PASS позволяет `stamp-plan` выставить `plan.status=ready`. Изменение plan body или relevant upstream input делает plan stale без повторного reasoning.
+Сначала валидирует semantic task/dependency contracts, linked REQ/ADR, explicit `architecture_refs` и relevant OQ. Завершение dependencies для PLAN не требуется. Planner возвращает structured Implementation plan/Verification payload, а `semantic-writer.py` сам рендерит STEP draft. Independent reviewer также возвращает только structured verdict/findings/rationale; writer вычисляет exact schema-v4 `context_basis`/`plan_content_hash`, создаёт immutable planning-review и при PASS выполняет Ready stamp. Reverse traceability/priority/phase/completion state dependency не stale-ят plan; изменение semantic input — stale-ит.
 
 <a id="command-step-implement"></a>
 ## `STEP IMPLEMENT STEP-NNN`
 
-Реализует только current Ready plan в пределах task contract. При первой product mutation ставит canonical `status: in_progress`, добавляет/обновляет tests и запускает verification. `status: completed` недопустим до schema-valid independent review PASS и type-specific completion proof.
+Реализует только current Ready plan в пределах task contract. До dispatch execution layer детерминированно применяет `step-implement-ready`: проверяет freshness plan/review и type-specific completion proofs direct dependencies. При первой product mutation ставит canonical `status: in_progress` и добавляет/обновляет tests. При попытке завершить IMPLEMENT как `SUCCESS` dispatcher сам запускает machine-executable `## Verification` через `verification.py`, пишет generated Evidence и разрешает completion только после PASS; manual checks остаются явной semantic boundary. `status: completed` недопустим до schema-valid independent review PASS и type-specific completion proof.
 
 <a id="command-step-review"></a>
 ## `STEP REVIEW STEP-NNN`
 
-Независимая проверка exact repository revision. Перед reasoning deterministic preselector вычисляет обязательные security/test reviewers по `review.security/tests`, risk flags, STEP type и factual changed surface. Immutable schema-v1 report содержит `git_head` и при dirty tree `worktree_hash`, structured findings и specialized review metadata. `FAIL` разрешён только для implementation/evidence defects; contract defect → `BLOCKED`. Crash recovery доверяет только schema-valid report для той же revision.
+Независимая проверка exact repository revision. Перед reasoning deterministic preselector вычисляет обязательные security/test reviewers. Reviewer возвращает structured verdict/findings/observations; `semantic-writer.py` сам фиксирует exact revision/gate basis и создаёт immutable report. При PASS writer дополнительно переводит STEP в `completed` только если type-specific completion proof полностью доказан, затем синхронизирует projections; иначе report остаётся PASS, но execution получает BLOCKED и STEP не закрывается. Crash recovery принимает либо exact current-revision report, либо строгий post-review proof `new PASS report + completed STEP + completion proof`.
 
 <a id="command-step-fix"></a>
 ## `STEP FIX STEP-NNN`
 
-Исправляет подтверждённые findings последнего применимого FAIL review. Не расширяет scope. После FIX следующая команда — `STEP REVIEW STEP-NNN`.
+Исправляет подтверждённые findings последнего применимого FAIL review. Не расширяет scope. `SUCCESS` проходит тот же deterministic Verification gate, что и IMPLEMENT; factual FAIL остаётся внутри FIX, `MANUAL_REQUIRED` требует только перечисленных manual checks. После PASS Verification следующая команда — `STEP REVIEW STEP-NNN`.
 
 <a id="command-step-run"></a>
 ## `STEP RUN STEP-NNN`
@@ -178,7 +178,9 @@ PLAN (если актуального плана нет)
  → CLOSE
 ```
 
-При blocker или исчерпании циклов останавливается и не маскирует failure. Лимит `execution.maxFixReviewCycles` enforce-ится Execution Resolver детерминированно и сохраняется между sessions.
+Для обычных coding STEP (`implementation | bugfix | refactor | hardening`) сам root-orchestration выполняет dispatcher без отдельного model turn: deterministic resolver выбирает `PLAN/IMPLEMENT/REVIEW/FIX`, а reasoning вызывается только внутри соответствующих semantic child-команд. Для type-specific flows (`research | adr | audit | review | documentation | release`) сохраняется semantic `run-step` fallback.
+
+При blocker или исчерпании циклов orchestration останавливается и не маскирует failure. Лимит `execution.maxFixReviewCycles` enforce-ится Execution Resolver детерминированно и сохраняется между sessions.
 
 <a id="command-step-audit"></a>
 ## `STEP AUDIT STEP-NNN`
@@ -188,12 +190,12 @@ PLAN (если актуального плана нет)
 <a id="command-project-status"></a>
 ## `PROJECT STATUS`
 
-Проверяет и при необходимости регенерирует projection статусов, показывает blockers, unblocked work и drift indicators. Не пишет product code.
+Deterministic команда без model call. Пересобирает tracked projections из canonical state, запускает manual Harness integrity и возвращает structured snapshot: summary по lifecycle, in-progress, blocked, completed и deterministic `STEP NEXT`. Не пишет product code и не интерпретирует project intent.
 
 <a id="command-step-next"></a>
 ## `STEP NEXT`
 
-Read-only рекомендация следующего **unblocked** шага на основании dependencies, priority, risk и roadmap. Не выбирает просто минимальный номер.
+Read-only deterministic рекомендация. Сначала продолжает resumable STEP execution, иначе выбирает executable STEP по прозрачному ranking: in-progress перед planned → priority → transitive downstream impact → число explicit risk flags как tie-breaker видимости → canonical roadmap order. Dependency completion не требуется для PLAN, но обязателен для IMPLEMENT. Result содержит exact canonical command и ranking breakdown. Это рекомендация, а не sprint planning.
 
 <a id="command-project-reconcile"></a>
 ## `PROJECT RECONCILE`
@@ -216,14 +218,14 @@ Read-only проверка маршрута Harness update. Manifest задаё�
 
 Без `TO` конечный target берётся из configured `source.update_manifest.latest`. С `TO <tag>` пользователь задаёт конкретный конечный target. В обоих случаях updater обязан построить допустимую цепочку release hops; существующий immutable tag без route не считается допустимым target.
 
-Команда моделирует весь route hop-by-hop, показывает bridge/reload boundaries, safe changes/conflicts и не меняет working tree, Git refs, lock, STEP, commit, push или PR.
+Dispatcher вызывает deterministic update engine напрямую, без model call. Команда моделирует весь route hop-by-hop, возвращает bridge/reload boundaries, safe changes/conflicts и не меняет working tree, Git refs, lock, STEP, commit, push или PR.
 
 Команда разрешена как до, так и после `PROJECT INIT`: `project.initialized: false` не является blocker для проверки Harness update.
 
 <a id="command-harness-update-apply"></a>
 ## `HARNESS UPDATE APPLY [TO <tag>]`
 
-Maintenance mutation protocol layer без STEP. Standalone APPLY сам выполняет fresh deterministic validation/preflight; в chain `CHECK > APPLY` переход разрешён только после PASS CHECK для того же target/route.
+Maintenance mutation protocol layer без STEP и без model call. Dispatcher напрямую вызывает deterministic updater. Standalone APPLY сам выполняет fresh deterministic validation/preflight; в chain `CHECK > APPLY` переход разрешён только после PASS CHECK для того же target/route.
 
 Команда применяет заранее проверенную цепочку строго hop-by-hop. Каждый hop использует immutable release tags и обычные ownership/3-way rules. Lock обновляется только после postcondition соответствующего hop. Если edge помечен `reloadRequired`, текущий запуск останавливается на достигнутом bridge с `UPDATER_RELOAD_REQUIRED`; после reload повторяется та же команда до исходного конечного target.
 
@@ -235,12 +237,12 @@ Maintenance mutation protocol layer без STEP. Standalone APPLY сам вып�
 HARNESS UPDATE APPLY TO vX.X.X
 ```
 
-Updater не выполняет executable migration/install/bootstrap actions из configured update graph или target release, не делает commit/push/PR. Project-owned schema migration после protocol update выполняет `PROJECT RECONCILE`. После неё: inspect diff → `GIT CHECK > COMMIT` либо те же команды отдельно.
+Updater не выполняет executable migration/install/bootstrap actions из configured update graph или target release, не делает commit/push/PR. Deterministic result содержит `nextAction`: `UPDATED → GIT CHECK`, `UPDATER_RELOAD_REQUIRED → reload-and-repeat exact APPLY`, `NO_UPDATE → null`. Если GIT gate показывает pending project schema migration, её выполняет `PROJECT RECONCILE` до commit.
 
 <a id="command-git-check"></a>
 ## `GIT CHECK`
 
-Read-only Git preflight: проверяет branch/upstream/ahead-behind, staged/unstaged/untracked, Harness integrity, policy и подозрительные файлы. Ничего не stage/commit/push.
+Read-only deterministic Git preflight без model call: dispatcher возвращает branch/upstream, staged/unstaged/untracked, Harness integrity и effective policy facts. Ничего не stage/commit/push; semantic logical-change анализ нужен только при последующем `GIT COMMIT`.
 
 <a id="command-git-commit"></a>
 ## `GIT COMMIT` / `GIT COMMIT: <подсказка>`
@@ -250,23 +252,23 @@ Read-only Git preflight: проверяет branch/upstream/ahead-behind, staged
 <a id="command-git-push"></a>
 ## `GIT PUSH`
 
-Проверяет Harness, fetch/divergence и protected-branch policy, затем без force отправляет текущую ветку в configured remote. После успешного push применяет PR-policy: ничего, предложить PR или создать PR при отсутствии.
+Проверяет Harness, fetch/divergence и protected-branch policy, затем без force отправляет текущую ветку в configured remote. Standalone `GIT PUSH` сохраняет semantic scope check. В explicit chain, где PUSH непосредственно следует за успешно завершённым canonical `GIT COMMIT`, повторный model turn не нужен: dispatcher сначала доказывает продвижение HEAD относительно durable `gitHeadBefore`, затем вызывает deterministic `git-action.py push` напрямую. Одного заявленного `SUCCESS` для fast-path недостаточно.
 
 <a id="command-git-pr"></a>
 ## `GIT PR`
 
-Создаёт Pull Request для опубликованной ветки либо возвращает существующий PR согласно policy. Использует `.github/pull_request_template.md`, repository evidence и verification; дубликаты не создаёт.
+Semantic worker готовит только PR prose. `git-action.py pr` детерминированно повторяет preflight, ищет/переиспользует либо создаёт GitHub PR, сверяет exact provider head OID и сам сохраняет local PR lifecycle state. Base/head/provider/draft policy модель не выбирает.
 
 <a id="command-git-pr-finish"></a>
 ## `GIT PR FINISH`
 
-Standalone post-merge cleanup. Команда проверяет через deterministic `git-preflight.py pr-finish`, что текущий PR действительно имеет состояние MERGED, working tree чистый, return branch можно безопасно fast-forward-нуть и локальная PR-ветка удалима обычным `git branch -d`.
+Standalone post-merge cleanup без model call. Dispatcher напрямую вызывает deterministic executor, который через `git-preflight.py pr-finish` доказывает MERGED state, clean worktree, безопасную return branch и exact удаляемую PR-ветку.
 
 После PASS выполняется exact ordered mutation plan: переключение на сохранённую return branch (при отсутствии local state — на PR base), разрешённый `--ff-only` sync и удаление старой локальной PR-ветки. Force-delete (`-D`), remote branch deletion, reset/rebase запрещены.
 
-После успешного `GIT PR` git-workflow сохраняет local-only `.harness/local/git/pr-state.json` с PR number/head/base/return branch; файл удаляется только после полностью успешного FINISH.
+После успешного `GIT PR` deterministic executor уже сохраняет local-only `.harness/local/git/pr-state.json`; файл удаляется только после полностью успешного FINISH.
 
 <a id="command-git-sync"></a>
 ## `GIT SYNC`
 
-Fetch + ahead/behind/divergence. По умолчанию read-only report; при `sync.mode="ff-only"` допускает только безопасный fast-forward чистой рабочей копии. Merge/rebase автоматически не выполняются.
+Dispatcher выполняет команду без model call: fetch + ahead/behind/divergence через deterministic executor. По умолчанию read-only report; при `sync.mode="ff-only"` допускается только безопасный fast-forward чистой рабочей копии. Merge/rebase автоматически не выполняются.

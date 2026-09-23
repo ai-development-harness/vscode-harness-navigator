@@ -3,17 +3,22 @@
 name: Harness Integrity
 
 # GitHub Actions events, на которых выполняется baseline Harness validation.
-# Пример: push + pull_request + ручной workflow_dispatch.
+# Пример: pull_request в main и push в main после merge.
 on:
-  # Проверять каждый push любой ветки.
-  # Пример: commit в feature/* сразу получает Harness integrity result.
-  push:
-  # Проверять Pull Request до merge.
-  # Пример: удаление обязательного protocol-файла блокируется ещё в PR.
+  # Проверять Pull Request, направленный в main.
+  # Пример: feature/token-budget → main запускает Harness Integrity.
   pull_request:
-  # Разрешить ручной запуск workflow из GitHub UI/API.
-  # Пример: повторная проверка после внешней настройки repository.
-  workflow_dispatch:
+    # Ограничить base branch основной веткой проекта.
+    # Пример: main.
+    branches:
+      - main
+  # После merge PR GitHub создаёт push в main — это отдельная финальная проверка.
+  # Пример: squash merge PR → push нового commit в main → Harness Integrity.
+  push:
+    # Не запускать CI для обычных push в feature/release-ветки.
+    # Пример: только main.
+    branches:
+      - main
 
 # Минимальные GitHub token permissions всего workflow.
 # Пример: только `contents: read`, потому что workflow ничего не публикует.
@@ -21,6 +26,16 @@ permissions:
   # Только чтение repository contents; validator ничего не коммитит и не пушит.
   # Пример: `read` достаточно для checkout и локальной проверки.
   contents: read
+
+# Не выполнять одновременно устаревшие проверки одного PR или устаревшие push-проверки main.
+# Пример: второй commit в PR отменяет только предыдущую проверку того же PR.
+concurrency:
+  # PR группируются по номеру, push после merge — по ref основной ветки.
+  # Пример: Harness Integrity-pull_request-74 и Harness Integrity-push-refs/heads/main.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  # Новый запуск заменяет только устаревший запуск из той же concurrency-группы.
+  # Пример: true сохраняет только актуальную проверку одного PR.
+  cancel-in-progress: true
 
 # Набор jobs workflow.
 # Пример: один `validate-harness` job для baseline template.
@@ -46,7 +61,7 @@ jobs:
       - name: Checkout repository
         # Официальный action для получения contents текущего commit/PR.
         # Пример: actions/checkout@v7; обновляй major осознанно, не автоматически в рамках product STEP.
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         # Параметры checkout action.
         # Пример: отключить сохранение credentials, так как workflow только читает repository.
         with:
@@ -63,7 +78,7 @@ jobs:
       - name: Setup Python
         # Официальный action фиксирует major runtime вместо зависимости от случайного PATH runner image.
         # Пример: actions/setup-python@v7.
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         # Параметры Python runtime.
         # Пример: validator поддерживает Python 3.11+, CI использует стабильную ветку 3.13.
         with:
@@ -85,12 +100,6 @@ jobs:
         # Пример: JSON output не нужен в CI log при успешном smoke-test.
         run: python3 .harness/tools/check-command-references.py --json >/dev/null
 
-      # Synthetic regression configurable command-reference topology.
-      # Пример: custom ADR directory остаётся historical-only, custom OQ/REQ/tasks сканируются.
-      - name: Validate command reference paths
-        # Synthetic regression manifest-driven scan topology.
-        # Пример: custom ADR history исключается, а custom OQ/REQ/tasks остаются live scan surface.
-        run: python3 .harness/tools/command-references-self-test.py
       # Отображаемое имя smoke-test публичного command structural gate.
       # Пример: подтверждает, что CLI принимает edge из graph и отвергает отсутствующий edge.
       - name: Validate command transition gate
@@ -132,67 +141,10 @@ jobs:
           python3 .harness/tools/harness-ux.py config --json | grep -q '"status": "PASS"'
           python3 .harness/tools/harness-ux.py doctor --json | grep -q '"status": "PASS"'
           python3 .harness/tools/harness-ux.py step-list --json | grep -q '"status": "PASS"'
-          python3 .harness/tools/harness-ux-self-test.py
 
-      # Проверить единый local execution state на полном наборе canonical commands.
-      # Пример: single/chain/STEP RUN, interruption, независимые команды и conditional transitions.
-      - name: Validate execution status
-        # Запуск dependency-free self-test на временном synthetic repository.
-        # Пример: проверяет один execution-status.json и отсутствие per-STEP state files.
-        run: python3 .harness/tools/execution-self-test.py
-
-      # Проверить manifest-driven planning paths, transitive Plan basis и static blockers.
-      # Пример: изменение linked REQ после PLAN обязано сделать Ready plan stale без LLM.
-      - name: Validate planning contracts
-        # Dependency-free synthetic regression suite для planning_contract.py.
-        # Пример: проверяет dependency cycles, OPEN questions и custom taskDirectory.
-        run: python3 .harness/tools/planning-contract-self-test.py
-
-      # Проверить manifest/config boundary: language fallback/tags и manifest-driven Git policy.
-      # Пример: произвольная строка вместо BCP 47 tag должна дать deterministic FAIL.
-      - name: Validate Harness config contracts
-        # Synthetic config regression не зависит от project stack.
-        # Пример: custom repository.gitPolicy path реально загружается config layer.
-        run: python3 .harness/tools/harness-config-self-test.py
-
-      # Проверить schema contracts durable audit/release/skill-search reports.
-      # Пример: candidate_count должен точно соответствовать shortlist #1..#N.
-      - name: Validate durable report contracts
-        # Synthetic reports не требуют внешней сети или product runtime.
-        # Пример: malformed release verdict и incomplete skill shortlist дают FAIL.
-        run: python3 .harness/tools/report-contract-self-test.py
-
-      # Проверить repository-level fail-closed boundaries validator.
-      # Пример: Git ignore semantics, ignored TOML и Codex config containment.
-      - name: Validate repository hardening regressions
-        # Synthetic checkout создаётся локально из tracked files текущего commit.
-        # Пример: закомментированный AGENTS.local.md pattern обязан дать FAIL.
-        run: python3 .harness/tools/repository-hardening-self-test.py
-
-      # Проверить fail-closed schema/unknown-key behavior Git policy через публичный validator.
-      # Пример: опечатка require_clean_worktre не должна молча игнорироваться.
-      - name: Validate Git policy regression
-        # Запустить fail-closed synthetic policy regression.
-        # Пример: неизвестный safety key обязан дать non-zero validation.
-        run: python3 .harness/tools/git-policy-self-test.py
-
-      # Прогнать deterministic Git preflight на synthetic repository + bare remote.
-      # Пример: protected branch, remote-ahead, publish/PR и ff-only sync проверяются без LLM.
-      - name: Validate deterministic Git preflight
-        # Запустить synthetic repository + bare remote lifecycle.
-        # Пример: remote-ahead PUSH блокируется, clean behind-only SYNC получает ff-only plan.
-        run: python3 .harness/tools/git-preflight-self-test.py
-
-      # Прогнать настоящий deterministic updater на synthetic Git source/project.
-      # Пример: 3-way merge, marker preservation, tag pinning и project-skill ownership.
-      - name: Validate deterministic Harness update engine
-        # Self-test не использует network: source releases создаются во временном локальном Git repository.
-        # Пример: существующий project skill не может быть захвачен новым core skill молча.
-        run: python3 .harness/tools/harness-update-self-test.py
-
-      # Проверить исторически критичные update/migration invariants на synthetic legacy state.
-      # Пример: routing/reload, relocation layout, project templates, ignored artifacts и deferred REQ migration.
-      - name: Validate update migration regression
-        # Dependency-free smoke test не запускает agent, а проверяет deterministic contract updater-а.
-        # Пример: legacy v0.4.0 route обязан безопасно достигать текущего latest через v0.4.2 bridge.
-        run: python3 .harness/tools/update-migration-self-test.py
+      # Запустить все synthetic regression tools, обнаруженные по *-self-test.py.
+      # Пример: новый review-gates-self-test.py автоматически входит в CI без правки workflow.
+      - name: Validate Harness synthetic self-tests
+        # Runner продолжает suite после отдельного failure и печатает PASS/FAIL каждого файла.
+        # Пример: итоговый HARNESS SELF-TESTS: PASS (14).
+        run: python3 .harness/tools/run-self-tests.py

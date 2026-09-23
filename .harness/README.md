@@ -10,13 +10,15 @@ Namespace/control plane AI Development Harness. Здесь собраны core d
 
 `.harness/manifest.yaml → execution.maxFixReviewCycles` задаёт максимальное число циклов `FIX → REVIEW` внутри одного `STEP RUN STEP`. Допустимый диапазон — от 1 до 5 включительно; template default — 3.
 
+`execution.verificationCommandTimeoutSeconds` ограничивает одну deterministic STEP Verification command; допустимо 1..3600 секунд, template default — 300. Verification запускается argv-напрямую без shell.
+
 `review.security` и `review.tests` управляют дополнительными specialized reviewers: `auto` запускает reviewer по фактическим рискам/diff/test surface, `always` — при каждом review-проходе. Режима `never` намеренно нет: настройка может усилить review, но не отключить safety gate.
 
 `skills.search.maxResults` задаёт максимальный размер shortlist команды `SKILL FIND`; допустимо от 1 до 10, template default — 5.
 
 Все эти значения проверяются `.harness/tools/validate.py`, поэтому отсутствующая или недопустимая настройка блокирует Harness validation до запуска orchestration.
 
-Локальные/секретные overrides при необходимости складываются в `.harness/local/`; каталог игнорируется Git. Legacy `.project/local/` также остаётся игнорируемым transitional path, чтобы operational state старых checkout не мог случайно попасть в commit.
+Локальные/секретные overrides при необходимости складываются в `.harness/local/`; каталог игнорируется Git.
 
 ## Ownership внутри namespace
 

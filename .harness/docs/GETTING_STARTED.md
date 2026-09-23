@@ -41,6 +41,7 @@ cp PROJECT_BRIEF.example.md PROJECT_BRIEF.local.md
 - `sources.*`;
 - `protocol.*`;
 - `execution.maxFixReviewCycles`;
+- `execution.verificationCommandTimeoutSeconds`;
 - `review.security/tests`;
 - `skills.search.maxResults`.
 
@@ -173,6 +174,8 @@ STEP PLAN STEP-001
 ```text
 STEP IMPLEMENT STEP-001
 ```
+
+Перед completion Harness сам запускает machine-executable `## Verification`: автоматические `command` checks выполняются без LLM/shell, а `manual` остаются только для действительно неавтоматизируемых проверок. Generated Evidence содержит factual exit codes/hashes.
 
 Review:
 

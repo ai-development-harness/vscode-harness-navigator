@@ -94,7 +94,7 @@ plan:
 
 ## Verification
 
-- Реальные команды/проверки; не выдумывать отсутствующие scripts.
+- command: `python3 .harness/tools/validate.py --mode manual`
 
 ## Deliverables
 
@@ -106,7 +106,7 @@ plan:
 
 ## Evidence
 
-Заполняется по факту реализации и verification. Для каждой значимой проверки указывай Command, Exit code и Observed.
+Generated verification block записывает deterministic runner. Дополнительные semantic observations можно хранить вне generated markers.
 
 ## Blocker / Failure reason
 
@@ -289,7 +289,7 @@ created_at: YYYY-MM-DDTHH:MM:SSZ
 ## Scope checked
 
 - STEP contract
-- Dependencies/completion proofs
+- Semantic dependency contracts (completion proof проверяется перед IMPLEMENT)
 - Linked REQ/Accepted ADR/Open Questions
 - Architecture refs
 - Proposed Implementation plan

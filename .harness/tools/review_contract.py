@@ -320,6 +320,59 @@ def _is_step_review_report_rel(root: Path, rel: str) -> bool:
     return suffix is not None and re.fullmatch(r"STEP-\d{3,}/REVIEW-.+\.md", suffix) is not None
 
 
+def _index_entry_identity(root: Path, rel: str) -> tuple[str, str] | None:
+    """Вернуть stage-0 Git index mode + object id для exact path."""
+    code, raw = _git(root, "ls-files", "--stage", "-z", "--", rel)
+    if code != 0:
+        return None
+    for entry in (item for item in raw.split(b"\0") if item):
+        meta, sep, path_raw = entry.partition(b"\t")
+        if not sep:
+            continue
+        parts = meta.split()
+        if len(parts) != 3 or parts[2] != b"0":
+            continue
+        path_value = path_raw.decode("utf-8", errors="surrogateescape")
+        if path_value != rel:
+            continue
+        return (
+            parts[0].decode("ascii", errors="strict"),
+            parts[1].decode("ascii", errors="strict"),
+        )
+    return None
+
+
+def _worktree_git_mode(path: Path, *, index_mode: str | None) -> str | None:
+    """Нормализовать filesystem object в mode, значимый для Git identity."""
+    if path.is_symlink():
+        return "120000"
+    if index_mode == "160000":
+        return "160000" if path.exists() else None
+    if path.is_file():
+        return "100755" if path.stat().st_mode & 0o111 else "100644"
+    if path.exists():
+        return "OTHER"
+    return None
+
+
+def _submodule_head(path: Path) -> str | None:
+    """Вернуть current commit initialized submodule без network operations."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "HEAD"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    value = proc.stdout.strip()
+    return value or None
+
 def repository_revision(root: Path) -> dict[str, str | None]:
     """Fingerprint exact review target, excluding report/state written by review itself.
 
@@ -402,19 +455,37 @@ def repository_revision(root: Path) -> dict[str, str | None]:
             digest.update(b"\0")
         path = root / rel
 
-        # XY содержит отдельные index/worktree состояния. Хеш только working-tree
-        # bytes позволял двум разным staged revisions иметь одинаковый proof.
-        index_state = xy[:1]
-        if index_state not in {b" ", b"?"}:
-            index_code, index_blob = _git(root, "show", f":{rel}")
-            if index_code == 0:
-                digest.update(b"INDEX\0")
-                digest.update(index_blob)
-            else:
-                digest.update(b"INDEX_ABSENT\0")
+        # Exact index identity — mode + object id. Blob bytes одни и те же при
+        # 100644/100755, поэтому content-only fingerprint не различает chmod.
+        index_identity = _index_entry_identity(root, rel)
+        index_mode: str | None = None
+        if index_identity is None:
+            digest.update(b"INDEX_ABSENT\0")
+        else:
+            index_mode, index_oid = index_identity
+            digest.update(b"INDEX_MODE\0")
+            digest.update(index_mode.encode("ascii"))
+            digest.update(b"\0INDEX_OBJECT\0")
+            digest.update(index_oid.encode("ascii"))
             digest.update(b"\0")
 
-        if path.is_symlink():
+        worktree_mode = _worktree_git_mode(path, index_mode=index_mode)
+        if worktree_mode is None:
+            digest.update(b"WORKTREE_ABSENT\0")
+        else:
+            digest.update(b"WORKTREE_MODE\0")
+            digest.update(worktree_mode.encode("ascii"))
+            digest.update(b"\0")
+
+        if worktree_mode == "160000":
+            # Для gitlink directory bytes не существуют как обычный file.
+            # Current nested HEAD является фактической worktree identity.
+            submodule_head = _submodule_head(path)
+            digest.update(b"SUBMODULE_HEAD\0")
+            digest.update(
+                (submodule_head or "UNAVAILABLE").encode("ascii", errors="strict")
+            )
+        elif path.is_symlink():
             digest.update(b"SYMLINK\0")
             digest.update(str(path.readlink()).encode("utf-8", errors="surrogateescape"))
         elif path.is_file():

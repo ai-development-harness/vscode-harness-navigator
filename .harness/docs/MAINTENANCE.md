@@ -52,9 +52,7 @@ HARNESS UPDATE APPLY
 
 Known BASE проекта фиксируется в `.harness/harness.lock.json`. Moving `main` не используется как update baseline.
 
-`v0.4.2` — одноразовая compatibility boundary для переноса control plane из `.project/**` в `.harness/**`. Relocation выполняет updater старого layout до reload; после перехода `.harness/**` является единственным bootstrap namespace, а legacy `.project/local/**` сохраняется только как ignored transitional state.
-
-Новые updater’ы читают moving `source.default_branch` только через canonical `.harness/harness-update-graph.json`. Для updater’ов `v0.4.0`/`v0.4.1` сохраняется отдельный замороженный `.project/harness-update-graph.json` как compatibility discovery endpoint до corrective landing release `v0.5.1`; unsafe legacy landing `v0.5.0` обходится. Endpoint не является active control plane и после перехода не используется. Файлы protocol layer для каждого hop по-прежнему читаются только из immutable tags.
+Current updater читает moving `source.default_branch` только через canonical `.harness/harness-update-graph.json`. Файлы protocol layer для каждого hop по-прежнему читаются только из immutable tags.
 
 ## Ownership
 
@@ -68,13 +66,13 @@ Runtime tuning относится к `shared`: пользователь може
 
 Всё неизвестное считается project-owned и updater не меняет. Например project-specific `.claude/skills/**` не становится Harness-owned только потому, что находится внутри `.claude/`.
 
-То же относится к локальным ignored artifacts внутри managed directory: `__pycache__/`, bytecode и другие ignored cache/build files не входят в ownership scope только из-за совпадения с glob. Updater классифицирует OURS через Git tracked state; untracked ignored paths пропускаются, untracked non-ignored collisions блокируют update.
+То же относится к локальным игнорируемым артефактам внутри управляемого каталога: `__pycache__/`, bytecode и другие cache/build-файлы не входят в область владения только из-за совпадения с glob. Новый управляемый путь блокируется, если до обновления на его месте уже существует неотслеживаемый пользовательский файл. Путь, который уже принадлежит текущему неизменяемому BASE, после промежуточного перехода может оставаться неотслеживаемым до финального коммита и не считается новым конфликтом; для `harness_owned` его содержимое при этом обязано точно совпадать с BASE.
 
 ## Legacy projects
 
 Если проект создан до появления lock, безопасный BASE неизвестен. Updater не должен угадывать его по похожести файлов.
 
-Legacy adoption разрешён только для явно известного release через `update-harness`: укажи конкретный immutable tag `vX.Y.Z`. При неизвестном baseline нужен ручной reconciliation.
+Legacy adoption разрешён только для явно известного release через `update-harness`: укажи конкретный immutable tag `vX.Y.Z`. Current updater принимает baseline только начиная с `v0.6.0`; более старый release возвращает `UNSUPPORTED_HARNESS_RELEASE`. При неизвестном или более старом baseline нужен ручной reconciliation.
 
 ## Project-specific skills
 
@@ -88,6 +86,21 @@ Legacy adoption разрешён только для явно известног
 
 Не смешивай upstream skill upgrades с обычным Harness update. У каждого внешнего skill должен быть `UPSTREAM.md` и запись в `docs/skills/REGISTRY.md`. Обновление upstream требует повторного inspection; не делай silent auto-update.
 
+## Экономия вычислений модели
+
+Core Harness следует правилу: **модель получает решения и результаты, а не внутреннее устройство реализации и конфигурации**. Если проверку, вычисление или безопасную механическую операцию можно выполнить скриптом, обычный протокол не должен заставлять модель сначала читать реализацию или конфигурацию и воспроизводить ту же логику.
+
+При изменении маршрутизации команды, способа вызова модели или быстрого пути одновременно обновляй `.harness/command-transitions.json → reasoning` и запускай `python3 .harness/tools/reasoning-boundaries.py --write`. Сгенерированные блоки `REASONING_BOUNDARIES.md` и `.harness/reasoning-boundaries.json` вручную не редактируй.
+
+Подробные комментарии в `.harness/tools/*.py` сохраняются: при обычной эксплуатации Python source исполняется, а не загружается в model context. Чтение source оправдано при разработке/аудите Harness, диагностике tool failure или явном запросе пользователя.
+
+Always-on bootstrap ограничен deterministic budget gate; детали и справка должны оставаться pull-based в skills/docs. Правила и baseline описаны в [`TOKEN_ECONOMY.md`](TOKEN_ECONOMY.md).
+
+## Regression discovery
+
+Новые synthetic regressions оформляй как `.harness/tools/<name>-self-test.py`. Harness Integrity не перечисляет их вручную: `run-self-tests.py` обнаруживает файлы по suffix и автоматически включает их в suite. Это уменьшает риск добавить validator без CI coverage.
+
+Skill/agent Markdown frontmatter разбирается тем же restricted YAML contract из `document_contract.py`, что и остальные machine-readable Markdown artifacts. Не добавляй локальные YAML-парсеры в `validate.py`.
 ## Поддержка Python validators и validation gates
 
 Python validators являются частью executable protocol contract, поэтому code comments и human-readable reference обновляются **одновременно** с behavior.

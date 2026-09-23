@@ -47,7 +47,7 @@ python3 .harness/tools/harness-update.py apply [--to vX.Y.Z] --json
 python3 .harness/tools/harness-update.py adopt --from vX.Y.Z --json
 ```
 
-Agent/skill остаётся orchestration/UI layer: запускает tool, объясняет route/conflict и показывает diff. Он не должен вручную воспроизводить ownership calculation, 3-way merge, marker preservation, filesystem writes или lock advancement.
+Обычные `HARNESS UPDATE CHECK/APPLY` dispatcher выполняет как deterministic handlers без model call. Engine result является factual и не переинтерпретируется reasoning-ом. `update-harness` skill остаётся reference/fallback для explicit legacy adoption, ручной recovery и объяснения сложного blocker пользователю; он не должен вручную воспроизводить ownership calculation, 3-way merge, marker preservation, filesystem writes или lock advancement.
 
 Pre-INIT update:
 
@@ -106,7 +106,7 @@ Engine перед первой записью сам повторно прове
 3. current updater прекращает route с `UPDATER_RELOAD_REQUIRED`;
 4. после reload повторяется та же APPLY-команда к исходному final target.
 
-APPLY не запускает target scripts/install/bootstrap actions и не делает commit/push/PR.
+APPLY не запускает target scripts/install/bootstrap actions и не делает commit/push/PR. Dispatcher добавляет к factual engine result deterministic `nextAction`: после `UPDATED` — `GIT CHECK`; при `UPDATER_RELOAD_REQUIRED` — reload и повтор exact APPLY; при `NO_UPDATE` — `null`. Если последующий Git gate обнаруживает project schema migration pending, до commit выполняется `PROJECT RECONCILE`.
 
 После update:
 
@@ -174,12 +174,14 @@ OURS scope строится из:
 - immutable BASE/THEIRS trees;
 - tracked Git paths.
 
-Untracked target collision:
+Конфликт с неотслеживаемым файлом:
 
-- ignored по `git check-ignore` → local runtime artifact, не managed и не blocker;
-- non-ignored → blocker.
+- если путь отсутствует в текущем неизменяемом BASE, но новый выпуск впервые пытается им управлять, существующий неотслеживаемый файл блокирует обновление;
+- если путь уже входит в текущий BASE, он не считается новым конфликтом только из-за отсутствия в индексе Git. Это необходимо после обязательной перезагрузки между переходами: файл мог быть создан предыдущим переходом, а коммит выполняется только после завершения всего маршрута;
+- для `harness_owned` такой файл всё равно обязан точно совпадать с текущим BASE, иначе проверка текущего выпуска блокирует продолжение;
+- неизвестные ignored-файлы, которые не входят в конкретный набор управляемых путей BASE/THEIRS, не затрагиваются.
 
-Binary/non-UTF-8 merge blocker применяется только к реально managed Git path.
+Проверка binary/non-UTF-8 применяется только к реально управляемому Git-пути.
 
 ## Project document schema migration
 
@@ -251,13 +253,7 @@ python3 .harness/tools/harness-update.py adopt --from vX.Y.Z --json
 
 Baseline должен совпадать с current manifest release. Новый lock pin-ит не только tag ref, но и exact commit OID.
 
-## Historical v0.4.x bridge
-
-Для старого namespace `.project/**` использовался обязательный bridge v0.4.2 с `reloadRequired=true`.
-
-Legacy updater relocation переносил control plane в `.harness/**`; после успешного relocation dual-layout не восстанавливается.
-
-Compatibility endpoint `.project/harness-update-graph.json` существует только для discovery старых updater-ов и является исторической bootstrap границей. Current updater после relocation использует configured current policy/update manifest.
+Текущий deterministic updater поддерживает baseline **не старее `v0.6.0`**. Для current lock, target или adoption baseline ниже этого floor операция завершается с `UNSUPPORTED_HARNESS_RELEASE`. Historical transitions до `v0.6.0` остаются в update graph как immutable release history и regression boundary для старых bridge, но больше не являются поддерживаемой точкой входа runtime.
 
 ## First deterministic-updater bridge after v0.5.3
 
@@ -279,10 +275,55 @@ Target tag не добавляется в graph заранее: release metadata
 - `manifest.harness.release`;
 - configured lock `release`;
 - lock `source.ref = v<release>`;
-- optional legacy-compatible `source.commit`, если он уже записан;
+- **без** `lock.source.commit` внутри release snapshot;
 - graph `latest`
 
-должны быть согласованы для опубликованного release. Deterministic updater при каждой операции разрешает release именно через `refs/tags/<tag>`; если lock уже содержит `source.commit`, изменение tag target даёт `SOURCE_TAG_MOVED`.
+должны быть согласованы для опубликованного release.
+
+Release snapshot не может корректно pin-ить собственный commit OID: SHA самого release commit появляется только после создания commit/merge/tag. Поэтому `source.commit` в template/release lock отсутствует. После установки или обновления конкретного проекта deterministic updater/adoption разрешает реально существующий immutable tag и записывает его точный OID уже в **project lock**. С этого момента изменение tag target даёт `SOURCE_TAG_MOVED`.
+
+### Recovery для ошибочных v0.6.0 / v0.7.0 snapshots
+
+Опубликованные `v0.6.0` и `v0.7.0` содержат ошибочный stale pin:
+
+```text
+e366c48777150a9e9d2f6d670d8976b8a8df2d5c
+```
+
+Он относится к подготовке `v0.5.3`, а не к этим тегам. Это затрагивает проекты, созданные непосредственно из release snapshot, а не проекты, которые дошли до версии через updater (updater записывает корректный OID).
+
+Для точечного восстановления **только** известных ошибочных пар замени stale pin на опубликованный tag OID:
+
+```bash
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+path = Path(".harness/harness.lock.json")
+lock = json.loads(path.read_text(encoding="utf-8"))
+
+known = {
+    ("v0.6.0", "e366c48777150a9e9d2f6d670d8976b8a8df2d5c"):
+        "b9a6bf80ae766236475c57a54f725c570e119ab7",
+    ("v0.7.0", "e366c48777150a9e9d2f6d670d8976b8a8df2d5c"):
+        "fe1df7eafe0c482f609d56b31ea9fe2c1c019670",
+}
+
+source = lock.get("source", {})
+pair = (source.get("ref"), source.get("commit"))
+target = known.get(pair)
+if target is None:
+    raise SystemExit(f"lock does not match a known recoverable release pin: {pair!r}")
+
+source["commit"] = target
+path.write_text(json.dumps(lock, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(f"repaired {pair[0]} lock pin -> {target}")
+PY
+```
+
+После этого обязательно выполни `HARNESS UPDATE CHECK`. Engine заново разрешит tag и проверит exact current-release state; если локальный Harness расходится с immutable release, update останется заблокированным.
+
+Нельзя применять этот recovery к любому произвольному `SOURCE_TAG_MOVED`: вне двух известных пар mismatch остаётся security blocker.
 
 `harness.version` — поколение protocol/schema family, а не номер каждой поставки.
 

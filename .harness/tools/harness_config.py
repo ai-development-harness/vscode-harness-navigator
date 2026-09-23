@@ -37,7 +37,12 @@ class ConfigError(ValueError):
 # работал сразу после checkout.
 # ---------------------------------------------------------------------------
 def _strip_comment(raw: str) -> str:
-    """Удалить YAML comment вне одинарных/двойных кавычек."""
+    """Удалить YAML comment вне кавычек только после separation whitespace.
+
+    В plain scalar символ ``#`` является частью значения, если перед ним нет
+    whitespace. Поэтому ``C#`` и ``docs/architecture.md#auth`` должны
+    сохраняться, а ``value # comment`` — обрезаться до ``value``.
+    """
     quote: str | None = None
     escaped = False
     for index, char in enumerate(raw):
@@ -53,7 +58,11 @@ def _strip_comment(raw: str) -> str:
             elif quote == char:
                 quote = None
             continue
-        if char == "#" and quote is None:
+        if (
+            char == "#"
+            and quote is None
+            and (index == 0 or raw[index - 1].isspace())
+        ):
             return raw[:index].rstrip()
     return raw.rstrip()
 
@@ -339,6 +348,22 @@ def max_fix_review_cycles(root: Path) -> int:
     value = require(manifest, "execution.maxFixReviewCycles")
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 5:
         raise ConfigError("manifest execution.maxFixReviewCycles must be an integer from 1 to 5")
+    return value
+
+
+def verification_command_timeout_seconds(root: Path) -> int:
+    """Timeout одной executable Verification command."""
+    manifest = load_manifest(root)
+    value = require(manifest, "execution.verificationCommandTimeoutSeconds")
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 1 <= value <= 3600
+    ):
+        raise ConfigError(
+            "manifest execution.verificationCommandTimeoutSeconds "
+            "must be an integer from 1 to 3600"
+        )
     return value
 
 

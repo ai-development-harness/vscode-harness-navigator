@@ -31,13 +31,13 @@ python3 .harness/tools/git-preflight.py pr --json
 python3 .harness/tools/git-preflight.py sync --json
 ```
 
-Tool не создаёт commit, не выполняет push, не открывает PR и не делает fast-forward. Он возвращает `PASS/BLOCKED` и exact mutation plan. Исключение — configured `git fetch`: fetch разрешён как operational refresh remote refs и не меняет working tree.
+`git-preflight.py` не создаёт mutation и возвращает `PASS/BLOCKED` + exact plan. Mechanical mutations исполняет `.harness/tools/git-action.py`. `GIT SYNC` и `GIT PR FINISH` dispatcher вызывает напрямую без LLM. `GIT COMMIT` и `GIT PR` сохраняют semantic message/prose boundary. Standalone `GIT PUSH` сохраняет semantic logical-scope check, но PUSH непосредственно после успешного canonical COMMIT в той же explicit chain выполняется deterministic fast-path без второго model turn. Configured `git fetch` разрешён как operational refresh remote refs.
 
 LLM/agent по-прежнему отвечает за semantic decisions — например, является ли diff одним logical change и какой commit type соответствует фактическому изменению. Но protected branch, remote divergence, publish state, force prohibition, clean-worktree requirement, PR base/tool и ff-only safety больше не интерпретируются вручную.
 
 ### `GIT CHECK`
 
-Read-only preflight через `git-preflight.py check`: branch/protection/upstream, staged/unstaged/untracked, configured remotes/base и Harness integrity. Semantic оценку подозрительных/unrelated файлов и предполагаемого commit type/scope делает agent по фактическому diff.
+Read-only deterministic preflight без model call: dispatcher напрямую запускает `git-preflight.py check` и возвращает branch/protection/upstream, staged/unstaged/untracked, configured remotes/base и Harness integrity. Semantic grouping/logical scope не нужен для CHECK; он выполняется позже только если пользователь действительно переходит к `GIT COMMIT`.
 
 ### `GIT COMMIT`
 
@@ -46,10 +46,10 @@ Read-only preflight через `git-preflight.py check`: branch/protection/upstr
 - проверяет Harness и staged/worktree;
 - не включает секреты, local brief, build/cache мусор;
 - выявляет unrelated changes;
-- после staging запускает deterministic `commit` preflight;
-- при protected `auto-create` использует exact `details.requiredBranch`, затем повторяет gate;
-- формирует подробный Conventional Commit message;
-- только после `PASS` создаёт **локальный commit**.
+- после semantic staging формирует подробный Conventional Commit message в `.harness/local/git/commit-message.txt`;
+- вызывает `git-action.py commit --commit-type ... --slug ... --message-file ...`;
+- executor повторяет preflight, при protected `auto-create` создаёт только exact required branch;
+- только после PASS создаёт **локальный commit** и проверяет новый HEAD.
 
 Message строится по `.gitmessage`:
 
@@ -97,14 +97,14 @@ when_on_protected = "auto-create" # auto-create | stay | block
 
 ### `GIT PUSH`
 
-`GIT PUSH` сначала запускает `git-preflight.py push`. Tool использует только configured `push.remote`, при необходимости делает fetch, повторно запускает Harness validator, считает exact ahead/behind и формирует non-force `mutationPlan.argv`. Только `PASS` разрешает публикацию. По умолчанию:
+`GIT PUSH` выполняется через `git-action.py push`. Executor запускает `push` preflight, использует только configured `push.remote`, при необходимости делает fetch, повторно запускает Harness validator, исполняет только exact non-force `mutationPlan.argv` и проверяет published HEAD. По умолчанию:
 
 ```toml
 [pull_request]
 after_push = "create-if-missing"
 ```
 
-Поэтому после push агент проверяет наличие PR и создаёт его при отсутствии. Чтобы только отправлять ветку:
+Standalone `GIT PUSH` остаётся semantic boundary для проверки logical scope и follow-up: `git-action.py push` возвращает factual `afterPush = never|ask|create-if-missing`, и модель использует именно это поле вместо повторного чтения Git policy. Если PUSH является следующим segment после успешного `GIT COMMIT` в той же chain, logical scope уже проверен COMMIT: перед fast-path dispatcher дополнительно доказывает, что repository HEAD действительно изменился относительно `gitHeadBefore`, и только затем вызывает `git-action.py push` без второго model turn. Одного semantic `SUCCESS` недостаточно. Сама push mutation в обоих случаях полностью deterministic. Чтобы только отправлять ветку:
 
 ```toml
 [pull_request]
@@ -115,11 +115,11 @@ after_push = "never"
 
 ### `GIT PR`
 
-`GIT PR` можно вызвать отдельно. Перед provider action обязательный `git-preflight.py pr` доказывает, что exact local HEAD опубликован, configured base существует, preferred tool доступен и body template остаётся внутри repository. После `PASS` агент не создаёт duplicate PR при `reuse_existing=true` и заполняет traceability/verification из repository evidence. Default template — `.github/pull_request_template.md`.
+`GIT PR` можно вызвать отдельно. Модель формирует только semantic body (и title, если `title_from_commit=false`) в `.harness/local/git/**`, затем вызывает `git-action.py pr`. Executor повторяет preflight, ищет exact open head/base PR через configured provider, переиспользует его по policy либо создаёт новый, проверяет provider `headRefOid` против exact published HEAD и сам сохраняет `.harness/local/git/pr-state.json`. Default body template — `.github/pull_request_template.md`.
 
 ### `GIT PR FINISH`
 
-После merge Pull Request команда завершает локальный lifecycle feature branch.
+После merge Pull Request команда детерминированно, без semantic skill/model call, завершает локальный lifecycle feature branch.
 
 ```bash
 python3 .harness/tools/git-preflight.py pr-finish --json
@@ -127,11 +127,13 @@ python3 .harness/tools/git-preflight.py pr-finish --json
 
 PASS требует чистое рабочее дерево, состояние provider `MERGED`, совпадение текущего локального HEAD с GitHub `headRefOid`, согласованный local PR state и существующую return branch без local-ahead/divergence. Это позволяет безопасно завершать как обычный merge, так и squash/rebase merge.
 
-После PASS выполняй exact ordered `mutationPlan.steps`: switch → optional ff-only sync → удаление локальной PR-ветки. При сохранённом Git ancestry используется `git branch -d`; после squash/rebase merge — `git update-ref -d <ref> <verified-head-oid>`, где old OID обязан совпадать с подтверждённым GitHub `headRefOid`. `git branch -D`, удаление удалённой ветки, reset/rebase запрещены. Local-only `.harness/local/git/pr-state.json` удаляется только после полностью успешного FINISH.
+После PASS exact ordered plan исполняет `git-action.py pr-finish`: switch → optional ff-only sync → удаление локальной PR-ветки → postconditions → удаление local PR state. При обычном merge используется `git branch -d`, после squash/rebase — compare-and-swap `git update-ref -d <ref> <verified-head-oid>`. `git branch -D`, удаление remote branch, reset/rebase запрещены.
+
+`GIT PR FINISH` crash-resumable: если session/process оборвался после переключения на `returnBranch`, повторный запуск принимает только recorded `headBranch|returnBranch`, заново сверяет provider `MERGED`, exact `headRefOid` и return-branch relation, после чего выполняет только оставшиеся sync/delete steps. Если feature ref уже удалён, но local PR state остался, повторный запуск завершает только state cleanup.
 
 ### `GIT SYNC`
 
-Default `GIT SYNC` через `git-preflight.py sync` делает fetch + ahead/behind report. Для автоматического безопасного fast-forward:
+`GIT SYNC` dispatcher выполняет детерминированно, без semantic skill/model call. Default `GIT SYNC` через `git-action.py sync` повторяет preflight и делает fetch + ahead/behind report; при `ff-only` executor сам выполняет разрешённый fast-forward и проверяет HEAD. Для автоматического безопасного fast-forward:
 
 ```toml
 [sync]

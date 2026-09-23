@@ -14,7 +14,7 @@ Execution Status ведёт global wrapper. Active legacy schema после Harn
    ```bash
    python3 .harness/tools/validate.py --mode manual
    ```
-2. Восстанови STEP → type-specific dependency completion proofs → canonical REQ → Accepted ADR → explicit `architecture_refs` → relevant canonical OQ → code/tests/config.
+2. Используй только `context`, уже возвращённый canonical dispatcher handoff: `readPaths` + deterministic planning facts. Повторно `step-context.py` не вызывай. Затем исследуй только действительно relevant code/tests/config. Completion dependency для PLAN не вычисляй.
 3. Проверь semantic consistency:
    - Goal/Scope/Out of scope/Mutation policy согласованы;
    - Acceptance следует из REQ/ADR и не требует forbidden mutation;
@@ -24,38 +24,39 @@ Execution Status ведёт global wrapper. Active legacy schema после Harn
    - ownership не конфликтует с соседними STEP;
    - architecture prerequisite имеет explicit ref;
    - OPEN OQ/TBD не блокирует решение.
-4. Contract conflict, missing prerequisite/decision или impossible acceptance => `BLOCKED`. Не расширяй contract догадкой.
+4. Verification contract оформляй machine-executable: `- command: \`...\`` для автоматизируемой проверки; `- manual: ...` только для действительно semantic/visual проверки. Shell operators/pipes не используй — сложную проверку вынеси в repository script.
+5. Contract conflict, missing prerequisite/decision или impossible acceptance => `BLOCKED`. Не расширяй contract догадкой.
 
-## Phase B — draft implementation plan
+## Phase B — semantic plan payload
 
-1. Запиши содержательный `## Implementation plan`.
-2. Пока semantic planning-review не завершён, выставь `plan.status: draft`; не записывай Ready hashes вручную.
-3. Получи deterministic fingerprints:
-   ```bash
-   python3 .harness/tools/planning-state.py plan-context STEP-NNN
-   ```
-   `contextBasis` включает STEP contract, linked REQ/ADR, explicit architecture refs, relevant OQ и type-specific completion proof прямых dependencies. `planContentHash` отдельно fingerprint-ит сам Implementation plan.
+Не редактируй STEP/frontmatter вручную. Сформируй только semantic JSON:
 
-## Phase C — обязательный independent planning-review
+- `implementationPlan` — непустой массив шагов;
+- каждый шаг: `title`, непустой `actions[]`, optional `files[]`, `tests[]`, `risks[]`;
+- `verification` — массив `{"kind":"command|manual","value":"..."}`.
 
-Для **каждого** STEP PLAN передай готовый draft отдельному `reviewer` agent/session, отличному от planner, который составлял план. Создай immutable schema-v1 report `PLAN-REVIEW-<UTC timestamp>.md` в configured `protocol.planningReviewDirectory/STEP-NNN/` по template:
-
-- `kind: planning_review`;
-- `step_id`;
-- `verdict: pass|blocked`;
-- точные `context_basis` и `plan_content_hash`;
-- `reviewer_role: reviewer` и timestamp.
-
-После любых правок plan/contract fingerprints пересчитай и старый report не переиспользуй.
-
-## Phase D — Ready stamp
-
-Только для matching PASS выполни:
+Сохрани payload только под `.harness/local/**` либо передай через stdin и вызови:
 
 ```bash
-python3 .harness/tools/execution-state.py stamp-plan STEP-NNN
+python3 .harness/tools/semantic-writer.py plan-draft STEP-NNN --payload-file '<local-json-or->'
 ```
 
-`stamp-plan` сам откажет без matching PASS report и atomically запишет `plan.status=ready`, revision, context basis, content hash, reviewed report и timestamp.
+Writer сам заменяет только `## Implementation plan` / `## Verification`, переводит plan в `draft`, валидирует Verification и возвращает exact context/content fingerprints.
 
-После изменения текста Implementation plan Ready автоматически становится stale по content hash. Изменение relevant upstream context делает stale context basis. Не ставь STEP `in_progress` и не меняй production code.
+## Phase C — independent planning-review payload
+
+Передай persisted draft отдельному `reviewer` agent/session, отличному от planner. Reviewer возвращает только:
+
+```json
+{"verdict":"pass|blocked","findings":[],"rationale":"..."}
+```
+
+Не создавай planning-review Markdown/frontmatter вручную. Передай payload в:
+
+```bash
+python3 .harness/tools/semantic-writer.py planning-review STEP-NNN --payload-file '<local-json-or->'
+```
+
+Writer сам вычисляет current `context_basis` / `plan_content_hash`, резервирует immutable `PLAN-REVIEW-<timestamp>.md`, валидирует report и при PASS вызывает canonical Ready stamp. BLOCKED report остаётся durable evidence, plan не становится Ready.
+
+После writer завершай execution только значением `completionResult` из его JSON; для PASS planning review это `SUCCESS`, для blocker — `BLOCKED`. Не переинтерпретируй verdict. Изменение Implementation plan/upstream semantic input позже по-прежнему stale-ит Ready fingerprints. Production code не меняй.

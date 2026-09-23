@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import multiprocessing
 from pathlib import Path
 import re
 import shutil
@@ -29,6 +30,7 @@ from review_contract import (
     validate_review_immutability,
 )
 from review_gates import required_reviewers
+from step_context import build_step_context
 
 
 def write(path: Path, content: str) -> None:
@@ -95,9 +97,21 @@ Self-test.
 """
 
 
-def task(plan_status: str = "draft", basis: str | None = None, phash: str | None = None, report: str | None = None) -> str:
+def task(
+    plan_status: str = "draft",
+    basis: str | None = None,
+    phash: str | None = None,
+    report: str | None = None,
+    depends: list[str] | None = None,
+) -> str:
     def val(value: str | None) -> str:
         return "null" if value is None else value
+    depends = depends or []
+    depends_block = (
+        "depends_on: []\n"
+        if not depends
+        else "depends_on:\n" + "".join(f"  - {item}\n" for item in depends)
+    )
     return f"""---
 schema: 1
 id: STEP-001
@@ -105,8 +119,7 @@ status: planned
 type: implementation
 priority: medium
 phase: test
-depends_on: []
-requirements:
+{depends_block}requirements:
   - REQ-001
 adrs: []
 architecture_refs: []
@@ -285,6 +298,10 @@ Self-test verification.
     return rel
 
 
+def concurrent_start_worker(root_value: str, command: str) -> None:
+    """Отдельный process для regression lost-update execution state."""
+    start_execution(Path(root_value), command)
+
 def assert_resolved(value: dict, status: str, command: str | None, reason: str) -> None:
     assert value["status"] == status, value
     assert value.get("command") == command, value
@@ -307,7 +324,15 @@ def main() -> int:
         shutil.copy2(source / ".harness/command-transitions.json", root / ".harness/command-transitions.json")
         write(root / "docs/requirements/REQ-001-execution.md", requirement())
         write(root / "docs/architecture.md", "# Architecture\n")
-        write(root / "planning/tasks/STEP-001.md", task())
+        dependency = task().replace("id: STEP-001", "id: STEP-002").replace(
+            "# STEP-001 — Execution state test",
+            "# STEP-002 — Execution dependency test",
+        ).replace("type: implementation", "type: research").replace(
+            "requirements:\n  - REQ-001",
+            "requirements: []",
+        )
+        write(root / "planning/tasks/STEP-002.md", dependency)
+        write(root / "planning/tasks/STEP-001.md", task(depends=["STEP-002"]))
 
         run(root, "git", "init", "-q")
         run(root, "git", "config", "user.email", "harness-test@example.invalid")
@@ -364,6 +389,9 @@ def main() -> int:
         # product path только потому, что он находится под docs/.
         write(root / "docs/security-model.md", "# Security model\n\nChanged.\n")
         broad_gate = required_reviewers(root, "STEP-001")
+        review_context = build_step_context(root, "STEP-001", "review")
+        assert review_context["deterministic"]["specializedReviewGate"]["basis"] == broad_gate["basis"]
+        assert review_context["deterministic"]["repositoryRevision"]["worktree_hash"] is not None
         assert "security" in broad_gate["required"], broad_gate
         (root / "docs/security-model.md").unlink()
 
@@ -392,6 +420,74 @@ def main() -> int:
         write(root / plan_report, planning_review(basis, phash))
         stamped = stamp_plan(root, "STEP-001")
         assert stamped["planStatus"] == "ready", stamped
+        ready_basis = planning_context_basis(root, "STEP-001")
+
+        # Phase-specific context manifest resolve-ит canonical inputs без обхода
+        # manifest/docs reasoning-моделью. PLAN не требует completion dependency.
+        plan_context = build_step_context(root, "STEP-001", "plan")
+        assert plan_context["status"] == "PASS", plan_context
+        assert plan_context["deterministic"]["dependencyCompletionRequired"] is False
+        assert "planning/tasks/STEP-002.md" in plan_context["readPaths"], plan_context
+        assert "docs/requirements/REQ-001-execution.md" in plan_context["readPaths"], plan_context
+        assert plan_context["semanticInputs"]["dependencies"][0]["status"] == "planned"
+
+        implement_context_blocked = build_step_context(root, "STEP-001", "implement")
+        assert (
+            implement_context_blocked["deterministic"]["implementPrerequisites"]["status"]
+            == "BLOCKED"
+        ), implement_context_blocked
+        assert any(
+            "dependency-incomplete:STEP-002" in item
+            for item in implement_context_blocked["deterministic"]["implementPrerequisites"]["failures"]
+        ), implement_context_blocked
+
+        # PLAN Ready не требует завершённой dependency, но direct IMPLEMENT
+        # обязан fail-closed до появления type-specific completion proof.
+        try:
+            start_execution(root, "STEP IMPLEMENT STEP-001")
+        except ValueError as exc:
+            assert "dependency-incomplete:STEP-002" in str(exc), exc
+        else:
+            raise AssertionError("direct IMPLEMENT accepted incomplete dependency")
+        assert planning_context_basis(root, "STEP-001") == ready_basis
+
+        # PLAN -> IMPLEMENT edge несёт тот же deterministic runtime precondition.
+        dependency_chain = "STEP PLAN STEP-001 > IMPLEMENT"
+        chain_execution = start_execution(root, dependency_chain)
+        complete_command(root, dependency_chain, "STEP PLAN STEP-001", "SUCCESS")
+        chain_next = resolve_root(root, dependency_chain)
+        assert chain_next.get("runtimePreconditions") == ["step-implement-ready"], chain_next
+        try:
+            begin_command(root, dependency_chain, "STEP IMPLEMENT STEP-001")
+        except ValueError as exc:
+            assert "dependency-incomplete:STEP-002" in str(exc), exc
+        else:
+            raise AssertionError("PLAN -> IMPLEMENT bypassed dependency completion")
+
+        # Completion proof появляется без изменения semantic dependency contract:
+        # существующий Ready basis остаётся свежим и IMPLEMENT сразу разрешается.
+        dependency_path = root / "planning/tasks/STEP-002.md"
+        dependency_text = dependency_path.read_text(encoding="utf-8")
+        write(
+            dependency_path,
+            dependency_text.replace("status: planned", "status: completed").replace(
+                "## Evidence\n\n—",
+                "## Evidence\n\nResearch dependency complete.",
+            ),
+        )
+        assert planning_context_basis(root, "STEP-001") == ready_basis
+        implement_context_pass = build_step_context(root, "STEP-001", "implement")
+        assert (
+            implement_context_pass["deterministic"]["implementPrerequisites"]["status"]
+            == "PASS"
+        ), implement_context_pass
+        direct_implement = start_execution(root, "STEP IMPLEMENT STEP-001")
+        complete_command(
+            root,
+            direct_implement["rootCommand"],
+            "STEP IMPLEMENT STEP-001",
+            "SUCCESS",
+        )
 
         # Independent commands coexist and invalid reverse chains never create state.
         first = start_execution(root, "PROJECT STATUS")
@@ -805,11 +901,82 @@ def main() -> int:
             index_revision_a,
             index_revision_b,
         )
-
-        # На clean tree specialized preselector не теряет уже committed
-        # implementation surface.
         run(root, "git", "add", "src/index-proof.txt")
         run(root, "git", "commit", "-qm", "finish index proof fixture")
+
+        # Same staged/worktree bytes + same XY должны различаться только Git
+        # mode. Старый content-only hash давал collision между 100644 и 100755.
+        mode_path = root / "src/mode-proof.sh"
+        write(mode_path, "#!/bin/sh\necho base\n")
+        mode_path.chmod(0o644)
+        run(root, "git", "add", "src/mode-proof.sh")
+        run(root, "git", "commit", "-qm", "add mode proof fixture")
+        write(mode_path, "#!/bin/sh\necho changed\n")
+        mode_path.chmod(0o644)
+        run(root, "git", "add", "src/mode-proof.sh")
+        mode_revision_644 = repository_revision(root)
+        run(root, "git", "update-index", "--chmod=+x", "src/mode-proof.sh")
+        mode_path.chmod(0o755)
+        mode_revision_755 = repository_revision(root)
+        assert mode_revision_644["worktree_hash"] != mode_revision_755["worktree_hash"], (
+            mode_revision_644,
+            mode_revision_755,
+        )
+        run(root, "git", "reset", "--hard", "HEAD")
+
+        # Gitlink path обязан включать current nested HEAD. Два разных submodule
+        # commits при одинаковом parent XY/paths не могут иметь один proof.
+        submodule_source = Path(tempfile.mkdtemp(prefix="harness-submodule-source-"))
+        try:
+            run(submodule_source, "git", "init", "-q")
+            run(submodule_source, "git", "config", "user.email", "harness-test@example.invalid")
+            run(submodule_source, "git", "config", "user.name", "Harness Test")
+            write(submodule_source / "value.txt", "a\n")
+            run(submodule_source, "git", "add", ".")
+            run(submodule_source, "git", "commit", "-qm", "a")
+            sha_a = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=submodule_source, text=True
+            ).strip()
+            write(submodule_source / "value.txt", "b\n")
+            run(submodule_source, "git", "add", ".")
+            run(submodule_source, "git", "commit", "-qm", "b")
+            sha_b = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=submodule_source, text=True
+            ).strip()
+            write(submodule_source / "value.txt", "c\n")
+            run(submodule_source, "git", "add", ".")
+            run(submodule_source, "git", "commit", "-qm", "c")
+            sha_c = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=submodule_source, text=True
+            ).strip()
+
+            run(
+                root,
+                "git",
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                str(submodule_source),
+                "vendor/demo",
+            )
+            run(root / "vendor/demo", "git", "checkout", "-q", sha_a)
+            run(root, "git", "add", ".gitmodules", "vendor/demo")
+            run(root, "git", "commit", "-qm", "add submodule proof fixture")
+
+            run(root / "vendor/demo", "git", "checkout", "-q", sha_b)
+            submodule_revision_b = repository_revision(root)
+            run(root / "vendor/demo", "git", "checkout", "-q", sha_c)
+            submodule_revision_c = repository_revision(root)
+            assert submodule_revision_b["worktree_hash"] != submodule_revision_c["worktree_hash"], (
+                submodule_revision_b,
+                submodule_revision_c,
+            )
+            run(root / "vendor/demo", "git", "checkout", "-q", sha_a)
+        finally:
+            shutil.rmtree(submodule_source, ignore_errors=True)
+        # На clean tree specialized preselector не теряет уже committed implementation surface.
 
         # Rename/copy source path входит в exact revision identity. Иначе два
         # staged rename из разных одинаковых source files в один destination
@@ -848,6 +1015,38 @@ def main() -> int:
         assert "src/auth/session.py" not in multi_commit_gate["changedPaths"], multi_commit_gate
         assert "clean tree has no exact implementation baseline" in multi_commit_gate["reasons"]["security"]
 
+        # Параллельные sessions не должны потерять attempt update или создать
+        # несколько running records одной root command. Восемь процессов
+        # одновременно проходят один load -> mutate -> save transaction.
+        concurrent_command = "HARNESS CONFIG"
+        workers = [
+            multiprocessing.Process(
+                target=concurrent_start_worker,
+                args=(str(root), concurrent_command),
+            )
+            for _ in range(8)
+        ]
+        for worker_process in workers:
+            worker_process.start()
+        for worker_process in workers:
+            worker_process.join(20)
+            assert worker_process.exitcode == 0, worker_process.exitcode
+
+        concurrent_status = load_status(root)
+        concurrent_records = [
+            item
+            for item in concurrent_status["executions"]
+            if item.get("rootCommand") == concurrent_command
+            and item.get("status") == "running"
+        ]
+        assert len(concurrent_records) == 1, concurrent_records
+        assert concurrent_records[0]["current"]["attempt"] == 8, concurrent_records[0]
+        complete_command(
+            root,
+            concurrent_command,
+            concurrent_command,
+            "SUCCESS",
+        )
     print("EXECUTION STATUS SELF-TEST: PASS")
     return 0
 

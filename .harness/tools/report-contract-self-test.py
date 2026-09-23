@@ -2,11 +2,12 @@
 """Regression self-test durable operational report contracts."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 
-from document_contract import durable_report_timestamp
+from document_contract import create_durable_report, durable_report_timestamp
 from report_contract import (
     validate_all_operational_reports,
     validate_audit_report,
@@ -223,6 +224,27 @@ report_directory = "work/harness-updates"
         assert second_name == "UPDATE-20260921T080001Z.md", second_name
         assert second_created == "2026-09-21T08:00:01Z", second_created
 
+        # Проверка actual create race: каждый concurrent writer резервирует
+        # canonical filename через O_EXCL и не может перезаписать соседа.
+        concurrent_dir = root / "work/concurrent-reports"
+        def create_one(index: int) -> str:
+            path, created_at = create_durable_report(
+                "UPDATE-",
+                directory=concurrent_dir,
+                now=fixed,
+                content_factory=lambda stamp: f"writer={index}; created_at={stamp}\n",
+            )
+            assert created_at in path.read_text(encoding="utf-8")
+            return path.name
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            names = list(pool.map(create_one, range(8)))
+        assert len(set(names)) == 8, names
+        assert set(names) == {
+            f"UPDATE-20260921T0800{second:02d}Z.md"
+            for second in range(8)
+        }, names
+        assert len(list(concurrent_dir.glob("UPDATE-*.md"))) == 8
         write(
             update,
             valid_update().replace(

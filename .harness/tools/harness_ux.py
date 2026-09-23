@@ -24,7 +24,9 @@ from harness_config import (
     task_directory,
 )
 from planning_contract import read_task
+from projection_contract import write_projections
 from review_contract import latest_review
+from step_next import resolve_step_next
 
 
 def _run(root: Path, *args: str, timeout: int = 15) -> dict[str, Any]:
@@ -297,6 +299,71 @@ def harness_doctor(root: Path) -> dict[str, Any]:
     }
 
 
+
+def project_status(root: Path) -> dict[str, Any]:
+    """Regenerate deterministic projections and return factual project status."""
+
+    try:
+        changed = write_projections(root)
+    except Exception as exc:
+        return {
+            "status": "BLOCKED",
+            "reasonCode": "PROJECT_STATUS_PROJECTION_FAILED",
+            "message": str(exc),
+        }
+
+    validator = root / ".harness/tools/validate.py"
+    validation = _run(
+        root,
+        sys.executable,
+        str(validator),
+        "--mode",
+        "manual",
+        timeout=60,
+    )
+    if not validation["ok"]:
+        return {
+            "status": "BLOCKED",
+            "reasonCode": "PROJECT_STATUS_INTEGRITY_FAILED",
+            "changedProjections": changed,
+            "validation": validation["stdout"] or validation["stderr"],
+        }
+
+    listed = step_list(root)
+    if listed.get("status") != "PASS":
+        return {
+            "status": "BLOCKED",
+            "reasonCode": "PROJECT_STATUS_STEP_LIST_FAILED",
+            "changedProjections": changed,
+            "errors": listed.get("errors", []),
+        }
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in listed["steps"]:
+        groups.setdefault(str(item.get("status")), []).append(item)
+
+    next_work = resolve_step_next(root)
+    return {
+        "status": "PASS",
+        "changedProjections": changed,
+        "summary": {
+            "total": len(listed["steps"]),
+            "byStatus": {
+                name: len(items)
+                for name, items in sorted(groups.items())
+            },
+        },
+        "inProgress": groups.get("in_progress", []),
+        "blocked": groups.get("blocked", []),
+        "completed": [
+            str(item["id"])
+            for item in groups.get("completed", [])
+        ],
+        "nextWork": next_work,
+        "validation": "PASS",
+    }
+
+
 def _step_title(document: dict[str, Any], step_id: str) -> str:
     prefix = f"# {step_id} — "
     h1 = document.get("h1", "")
@@ -387,6 +454,7 @@ __all__ = [
     "harness_resume",
     "harness_config",
     "harness_doctor",
+    "project_status",
     "step_list",
     "step_show",
     "render_text",
