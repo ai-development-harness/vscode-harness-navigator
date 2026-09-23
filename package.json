@@ -23,6 +23,27 @@
     "onStartupFinished"
   ],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "harnessNavigator",
+          "title": "%viewsContainer.harnessNavigator.title%",
+          "icon": "$(list-tree)"
+        }
+      ]
+    },
+    "views": {
+      "harnessNavigator": [
+        {
+          "id": "harnessNavigator.artifacts",
+          "name": "%view.artifacts.name%"
+        },
+        {
+          "id": "harnessNavigator.focus",
+          "name": "%view.focus.name%"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "harnessNavigator.showDiagnostics",
@@ -31,8 +52,172 @@
       {
         "command": "harnessNavigator.refresh",
         "title": "%command.refresh.title%"
+      },
+      {
+        "command": "harnessNavigator.goToArtifact",
+        "title": "%command.goToArtifact.title%"
+      },
+      {
+        "command": "harnessNavigator.setSortOrder",
+        "title": "%command.setSortOrder.title%",
+        "icon": "$(sort-precedence)"
+      },
+      {
+        "command": "harnessNavigator.setFilter",
+        "title": "%command.setFilter.title%",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "harnessNavigator.clearFilters",
+        "title": "%command.clearFilters.title%",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "harnessNavigator.copyArtifactId",
+        "title": "%command.copyArtifactId.title%"
+      },
+      {
+        "command": "harnessNavigator.copyArtifactPath",
+        "title": "%command.copyArtifactPath.title%"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "harnessNavigator.setSortOrder",
+          "when": "view == harnessNavigator.artifacts",
+          "group": "navigation@1"
+        },
+        {
+          "command": "harnessNavigator.setFilter",
+          "when": "view == harnessNavigator.artifacts",
+          "group": "navigation@2"
+        },
+        {
+          "command": "harnessNavigator.clearFilters",
+          "when": "view == harnessNavigator.artifacts",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "harnessNavigator.copyArtifactId",
+          "when": "view == harnessNavigator.artifacts && viewItem == harnessArtifactItem || view == harnessNavigator.focus && viewItem == harnessArtifactItem"
+        },
+        {
+          "command": "harnessNavigator.copyArtifactPath",
+          "when": "view == harnessNavigator.artifacts && viewItem == harnessArtifactItem || view == harnessNavigator.focus && viewItem == harnessArtifactItem"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "harnessNavigator.goToArtifact",
+          "when": "true"
+        },
+        {
+          "command": "harnessNavigator.setSortOrder",
+          "when": "true"
+        },
+        {
+          "command": "harnessNavigator.setFilter",
+          "when": "true"
+        },
+        {
+          "command": "harnessNavigator.clearFilters",
+          "when": "true"
+        },
+        {
+          "command": "harnessNavigator.copyArtifactId",
+          "when": "false"
+        },
+        {
+          "command": "harnessNavigator.copyArtifactPath",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "%configuration.title%",
+      "properties": {
+        "harnessNavigator.artifacts.sortOrder": {
+          "type": "string",
+          "enum": [
+            "id",
+            "title",
+            "status",
+            "priority"
+          ],
+          "default": "id",
+          "scope": "window",
+          "description": "%configuration.sortOrder.description%"
+        },
+        "harnessNavigator.artifacts.filter.status": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "planned",
+            "in_progress",
+            "blocked",
+            "completed",
+            "deferred",
+            "cancelled",
+            null
+          ],
+          "default": null,
+          "scope": "window",
+          "description": "%configuration.filterStatus.description%"
+        },
+        "harnessNavigator.artifacts.filter.type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "implementation",
+            "bugfix",
+            "refactor",
+            "research",
+            "adr",
+            "audit",
+            "review",
+            "hardening",
+            "documentation",
+            "release",
+            null
+          ],
+          "default": null,
+          "scope": "window",
+          "description": "%configuration.filterType.description%"
+        },
+        "harnessNavigator.artifacts.filter.priority": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            null
+          ],
+          "default": null,
+          "scope": "window",
+          "description": "%configuration.filterPriority.description%"
+        },
+        "harnessNavigator.artifacts.filter.phase": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "scope": "window",
+          "description": "%configuration.filterPhase.description%"
+        }
+      }
+    }
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.unit.json && tsc --noEmit -p tsconfig.test.json",

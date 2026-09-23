@@ -2,5 +2,20 @@
   "extension.displayName": "Harness Navigator",
   "extension.description": "Read-only navigation and reference for AI Development Harness projects in VS Code.",
   "command.showDiagnostics.title": "Harness: Show Diagnostics",
-  "command.refresh.title": "Harness: Refresh"
+  "command.refresh.title": "Harness: Refresh",
+  "command.goToArtifact.title": "Harness: Go to Artifact",
+  "command.setSortOrder.title": "Harness: Set Sort Order",
+  "command.setFilter.title": "Harness: Set Filter",
+  "command.clearFilters.title": "Harness: Clear Filters",
+  "command.copyArtifactId.title": "Harness: Copy Artifact ID",
+  "command.copyArtifactPath.title": "Harness: Copy Artifact Path",
+  "viewsContainer.harnessNavigator.title": "Harness Navigator",
+  "view.artifacts.name": "Harness Artifacts",
+  "view.focus.name": "Harness Focus",
+  "configuration.title": "Harness Navigator",
+  "configuration.sortOrder.description": "Sort order applied to the Harness Artifacts view.",
+  "configuration.filterStatus.description": "Show only STEP artifacts with this status in the Harness Artifacts view.",
+  "configuration.filterType.description": "Show only STEP artifacts with this type in the Harness Artifacts view.",
+  "configuration.filterPriority.description": "Show only STEP artifacts with this priority in the Harness Artifacts view.",
+  "configuration.filterPhase.description": "Show only STEP artifacts with this phase in the Harness Artifacts view."
 }

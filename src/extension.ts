@@ -2,7 +2,16 @@ import * as vscode from 'vscode';
 import { createLifecycleRegistry, LifecycleRegistry } from './lifecycle/disposableRegistry';
 import { ProjectStateService } from './projectModel/projectStateService';
 import type { ProjectState } from './projectModel/projectState';
-import type { ArtifactSnapshot } from './projectModel/artifactIndex';
+import type { Artifact, ArtifactSnapshot } from './projectModel/artifactIndex';
+import {
+  ArtifactsTreeDataProvider,
+  runClearFilters,
+  runSetFilter,
+  runSetSortOrder,
+} from './views/artifactsView';
+import { FocusTreeDataProvider } from './views/focusView';
+import { registerGoToArtifactCommand } from './commands/goToArtifact';
+import { registerCopyArtifactCommands } from './commands/copyArtifact';
 
 /**
  * Минимальный, test-observable результат активации. Намеренно ограничен
@@ -21,6 +30,11 @@ export interface ActivationResult {
 
 let activeRegistry: LifecycleRegistry | undefined;
 let activeProjectStates: ProjectStateService | undefined;
+let activeArtifactsTreeView: vscode.TreeView<unknown> | undefined;
+let activeFocusTreeView: vscode.TreeView<unknown> | undefined;
+let activeArtifactsProvider: ArtifactsTreeDataProvider | undefined;
+let activeFocusProvider: FocusTreeDataProvider | undefined;
+let artifactsTreeDataChangeCount = 0;
 
 /**
  * Точка входа расширения. Намеренно не читает workspace, не запускает
@@ -54,8 +68,57 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
     }),
   );
 
+  const artifactsProvider = registry.register(new ArtifactsTreeDataProvider(projectStates));
+  const artifactsTreeView = registry.register(
+    vscode.window.createTreeView('harnessNavigator.artifacts', {
+      treeDataProvider: artifactsProvider,
+    }),
+  );
+  const focusProvider = registry.register(new FocusTreeDataProvider(projectStates));
+  const focusTreeView = registry.register(
+    vscode.window.createTreeView('harnessNavigator.focus', {
+      treeDataProvider: focusProvider,
+    }),
+  );
+  const refreshTreeMessages = () => {
+    artifactsTreeView.message = artifactsProvider.computeMessage();
+    focusTreeView.message = focusProvider.computeMessage();
+  };
+  refreshTreeMessages();
+  registry.register(artifactsProvider.onDidChangeTreeData(refreshTreeMessages));
+  registry.register(focusProvider.onDidChangeTreeData(refreshTreeMessages));
+  // Узкий read-only counter (не внутреннее состояние provider-а), чтобы
+  // Extension Host тест мог доказать, что `workspace.onDidChangeConfiguration`
+  // действительно доходит до `onDidChangeTreeData` (а не только что
+  // `provider.getChildren()` возвращает новые данные при прямом вызове).
+  registry.register(
+    artifactsProvider.onDidChangeTreeData(() => {
+      artifactsTreeDataChangeCount += 1;
+    }),
+  );
+
+  registry.register(registerGoToArtifactCommand(projectStates));
+  registry.register(
+    vscode.commands.registerCommand('harnessNavigator.setSortOrder', () => runSetSortOrder()),
+  );
+  registry.register(
+    vscode.commands.registerCommand('harnessNavigator.setFilter', () =>
+      runSetFilter(projectStates),
+    ),
+  );
+  registry.register(
+    vscode.commands.registerCommand('harnessNavigator.clearFilters', () =>
+      runClearFilters(projectStates),
+    ),
+  );
+  for (const disposable of registerCopyArtifactCommands()) registry.register(disposable);
+
   activeRegistry = registry;
   activeProjectStates = projectStates;
+  activeArtifactsTreeView = artifactsTreeView;
+  activeFocusTreeView = focusTreeView;
+  activeArtifactsProvider = artifactsProvider;
+  activeFocusProvider = focusProvider;
 
   const activatedLogMessage = vscode.l10n.t('Harness Navigator extension activated.');
   const fallbackLogMessage = vscode.l10n.t('Harness Navigator localization fallback is active.');
@@ -86,6 +149,118 @@ export function getActiveArtifactSnapshot(
 }
 
 /**
+ * Узкий read-only test seam для Artifacts View/Focus View (в духе
+ * `getActiveArtifactSnapshot`): раскрывает только уже публичный,
+ * read-only `TreeView.message` — не внутреннее состояние provider-ов.
+ */
+export function getActiveTreeViewMessages(): {
+  readonly artifacts: string | undefined;
+  readonly focus: string | undefined;
+} {
+  return {
+    artifacts: activeArtifactsTreeView?.message,
+    focus: activeFocusTreeView?.message,
+  };
+}
+
+/** Сериализуемый, read-only снимок одного узла Artifacts/Focus View для тестов. */
+export interface TreeNodeSnapshot {
+  readonly label: string;
+  readonly description: string | undefined;
+  readonly contextValue: string | undefined;
+  /** `fsPath` файла, который открывает `vscode.open` команда узла (только у leaf artifact items). */
+  readonly resourceFsPath: string | undefined;
+  readonly children: readonly TreeNodeSnapshot[];
+}
+
+interface MinimalTreeProvider<T> {
+  getTreeItem(node: T): vscode.TreeItem;
+  getChildren(node?: T): T[];
+}
+
+function snapshotNode<T>(provider: MinimalTreeProvider<T>, node: T): TreeNodeSnapshot {
+  const item = provider.getTreeItem(node);
+  return {
+    label: treeItemLabel(item),
+    description: typeof item.description === 'string' ? item.description : undefined,
+    contextValue: item.contextValue,
+    resourceFsPath: treeItemResourceFsPath(item),
+    children: provider.getChildren(node).map((child) => snapshotNode(provider, child)),
+  };
+}
+
+function treeItemLabel(item: vscode.TreeItem): string {
+  if (typeof item.label === 'string') return item.label;
+  if (item.label !== undefined && typeof item.label === 'object') return item.label.label;
+  return '';
+}
+
+function treeItemResourceFsPath(item: vscode.TreeItem): string | undefined {
+  const args = item.command?.arguments;
+  const first = Array.isArray(args) ? (args as unknown[])[0] : undefined;
+  return first instanceof vscode.Uri ? first.fsPath : undefined;
+}
+
+/**
+ * Узкий read-only test seam: полный snapshot текущего дерева Artifacts View
+ * (не raw provider) для Extension Host сценариев STEP-004 — группировка,
+ * порядок, sort/filter и empty state наблюдаемы без обращения к приватному
+ * состоянию provider-а.
+ */
+export function getArtifactsViewSnapshot(): readonly TreeNodeSnapshot[] {
+  const provider = activeArtifactsProvider;
+  if (provider === undefined) return [];
+  return provider.getChildren().map((node) => snapshotNode(provider, node));
+}
+
+/** Тот же test seam для Focus View. */
+export function getFocusViewSnapshot(): readonly TreeNodeSnapshot[] {
+  const provider = activeFocusProvider;
+  if (provider === undefined) return [];
+  return provider.getChildren().map((node) => snapshotNode(provider, node));
+}
+
+/**
+ * Сколько раз `ArtifactsTreeDataProvider.onDidChangeTreeData` реально
+ * сработало с начала активации. Узкий read-only test seam: доказывает, что
+ * `workspace.onDidChangeConfiguration` подписка провайдера действительно
+ * триггерит refresh event (а не только что снимок дерева меняется при
+ * прямом вызове `getChildren()` в обход событийного пути, от которого
+ * зависит реальный `TreeView` в VS Code).
+ */
+export function getArtifactsViewChangeEventCount(): number {
+  return artifactsTreeDataChangeCount;
+}
+
+interface RawArtifactNode {
+  readonly folder: vscode.WorkspaceFolder;
+  readonly artifact: Artifact;
+}
+
+/**
+ * Плоский список leaf-узлов Artifacts View в том же представлении
+ * `{ type: 'artifact', folder, artifact }`, которое `getTreeItem` передаёт
+ * `TreeItem.command`/`contextValue`-действиям — то есть то же самое, что
+ * `harnessNavigator.copyArtifactId`/`copyArtifactPath` получают как `node`
+ * аргумент в реальном UI. Узкий read-only test seam: без него Extension
+ * Host тест мог проверить только регистрацию copy-команд, не их фактическое
+ * поведение с реальным tree node.
+ */
+export function getArtifactsViewArtifactNodes(): readonly RawArtifactNode[] {
+  const provider = activeArtifactsProvider;
+  if (provider === undefined) return [];
+  const nodes: RawArtifactNode[] = [];
+  const walk = (node?: Parameters<ArtifactsTreeDataProvider['getChildren']>[0]): void => {
+    for (const child of provider.getChildren(node)) {
+      if (child.type === 'artifact') nodes.push({ folder: child.folder, artifact: child.artifact });
+      else walk(child);
+    }
+  };
+  walk(undefined);
+  return nodes;
+}
+
+/**
  * Точка деактивации. Идемпотентна и никогда не бросает исключения:
  * освобождает lifecycle-реестр, созданный в `activate`, и безопасна для
  * вызова даже если `activate` ни разу не запускался или уже отработал
@@ -97,6 +272,11 @@ export function deactivate(): void {
   } finally {
     activeRegistry = undefined;
     activeProjectStates = undefined;
+    activeArtifactsTreeView = undefined;
+    activeFocusTreeView = undefined;
+    activeArtifactsProvider = undefined;
+    activeFocusProvider = undefined;
+    artifactsTreeDataChangeCount = 0;
   }
 }
 

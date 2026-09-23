@@ -2,5 +2,20 @@
   "extension.displayName": "Harness Navigator",
   "extension.description": "Read-only навигация и справка по проектам AI Development Harness в VS Code.",
   "command.showDiagnostics.title": "Harness: Показать диагностику",
-  "command.refresh.title": "Harness: Обновить"
+  "command.refresh.title": "Harness: Обновить",
+  "command.goToArtifact.title": "Harness: Перейти к артефакту",
+  "command.setSortOrder.title": "Harness: Задать порядок сортировки",
+  "command.setFilter.title": "Harness: Задать фильтр",
+  "command.clearFilters.title": "Harness: Очистить фильтры",
+  "command.copyArtifactId.title": "Harness: Скопировать ID артефакта",
+  "command.copyArtifactPath.title": "Harness: Скопировать путь артефакта",
+  "viewsContainer.harnessNavigator.title": "Harness Navigator",
+  "view.artifacts.name": "Артефакты Harness",
+  "view.focus.name": "Фокус Harness",
+  "configuration.title": "Harness Navigator",
+  "configuration.sortOrder.description": "Порядок сортировки, применяемый в представлении Harness Artifacts.",
+  "configuration.filterStatus.description": "Показывать только STEP артефакты с этим статусом в представлении Harness Artifacts.",
+  "configuration.filterType.description": "Показывать только STEP артефакты с этим типом в представлении Harness Artifacts.",
+  "configuration.filterPriority.description": "Показывать только STEP артефакты с этим приоритетом в представлении Harness Artifacts.",
+  "configuration.filterPhase.description": "Показывать только STEP артефакты с этой фазой в представлении Harness Artifacts."
 }
