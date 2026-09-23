@@ -1,0 +1,14 @@
+harness:
+  version: '1'
+  release: '0.5.0'
+protocol:
+  taskDirectory: planning/tasks
+sources:
+  projectOverview: docs/PROJECT.md
+  requirements: docs/requirements
+  adrDirectory: docs/adr
+  architecture: docs/architecture.md
+  openQuestions: docs/open-questions
+  openQuestionsIndex: docs/OPEN_QUESTIONS.md
+  roadmap: planning/PLAN.md
+  status: planning/STATUS.md

@@ -108,5 +108,15 @@
   "Push the current branch": "Отправить текущую ветку",
   "Prepare a pull request": "Подготовить pull request",
   "Finish a merged pull request locally": "Завершить слитый pull request локально",
-  "Synchronize the local branch with the remote": "Синхронизировать локальную ветку с удалённой"
+  "Synchronize the local branch with the remote": "Синхронизировать локальную ветку с удалённой",
+  "Harness · {0} active · {1} blocked · {2} OQ": "Harness · активных: {0} · заблокированных: {1} · OQ: {2}",
+  "Harness · {0}": "Harness · {0}",
+  "{0}: {1}": "{0}: {1}",
+  "Harness Navigator summary": "Сводка Harness Navigator",
+  "{0}: release {1}, {2} STEP, {3} REQ, {4} ADR, {5} open OQ, {6} diagnostics": "{0}: релиз {1}, STEP: {2}, REQ: {3}, ADR: {4}, открытых OQ: {5}, диагностик: {6}",
+  "Click to open the Harness Navigator view.": "Нажмите, чтобы открыть представление Harness Navigator.",
+  "Harness release": "Релиз Harness",
+  "In progress": "В работе",
+  "Blocked": "Заблокировано",
+  "Diagnostics": "Диагностика"
 }

@@ -1,5 +1,6 @@
 import * as assert from 'node:assert/strict';
 import * as vscode from 'vscode';
+import { assertIsolatedWorkspace } from './support/workspaceGuard';
 
 const encoder = new TextEncoder();
 const EXTENSION_ID = 'ai-development-harness.vscode-harness-navigator';
@@ -28,6 +29,8 @@ function locationKey(location: { uri: vscode.Uri; range: vscode.Range }): string
 }
 
 suite('navigation, references и relations (Extension Host)', () => {
+  suiteSetup(() => assertIsolatedWorkspace());
+
   test('providers, references, relations, diagnostics и semantic tokens в Harness-aware области', async () => {
     const extension = vscode.extensions.getExtension(EXTENSION_ID);
     assert.ok(extension);

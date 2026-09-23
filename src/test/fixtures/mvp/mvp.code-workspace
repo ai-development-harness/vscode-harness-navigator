@@ -1,0 +1,15 @@
+{
+  "folders": [
+    { "path": "mvp-valid" },
+    { "path": "mvp-degraded" },
+    { "path": "mvp-ordinary" },
+    { "path": "mvp-invalid-manifest" },
+    { "path": "mvp-old-release" },
+    { "path": "mvp-unsupported-schema" },
+    { "path": "mvp-traversal" },
+    { "path": "mvp-absolute" },
+    { "path": "mvp-symlink" },
+    { "path": "mvp-manifest-symlink" },
+    { "path": "mvp-unreadable" },
+  ],
+}

@@ -1,0 +1,14 @@
+harness:
+  version: '1'
+  release: '0.6.0'
+protocol:
+  taskDirectory: ../mvp-external/planning/tasks
+sources:
+  projectOverview: ../mvp-external/docs/PROJECT.md
+  requirements: ../mvp-external/docs/requirements
+  adrDirectory: ../mvp-external/docs/adr
+  architecture: ../mvp-external/docs/architecture.md
+  openQuestions: ../mvp-external/docs/open-questions
+  openQuestionsIndex: ../mvp-external/docs/OPEN_QUESTIONS.md
+  roadmap: planning/PLAN.md
+  status: planning/STATUS.md

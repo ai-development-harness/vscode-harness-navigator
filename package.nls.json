@@ -23,5 +23,6 @@
   "semanticToken.harnessArtifactId.description": "Harness artifact identifier",
   "view.commands.name": "Harness Commands",
   "command.findCommand.title": "Harness: Find Command",
-  "command.copyCommand.title": "Harness: Copy Command"
+  "command.copyCommand.title": "Harness: Copy Command",
+  "view.summary.name": "Harness Summary"
 }

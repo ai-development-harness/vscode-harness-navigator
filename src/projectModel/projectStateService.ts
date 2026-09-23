@@ -19,7 +19,7 @@ export type DiagnosticSource = (folder: vscode.WorkspaceFolder) => readonly Proj
 export class ProjectStateService implements vscode.Disposable {
   private readonly states = new Map<string, ProjectState>();
   private readonly indexes = new Map<string, ArtifactIndex>();
-  private readonly manifestWatchers: vscode.FileSystemWatcher[] = [];
+  private readonly manifestWatchers = new Map<string, vscode.FileSystemWatcher>();
   private readonly artifactWatchers = new Map<string, vscode.FileSystemWatcher[]>();
   private readonly diagnosticSources = new Set<DiagnosticSource>();
   private readonly projectModelChangeEmitter = new vscode.EventEmitter<void>();
@@ -38,18 +38,48 @@ export class ProjectStateService implements vscode.Disposable {
     workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined,
     private readonly output: vscode.OutputChannel,
   ) {
-    for (const folder of workspaceFolders ?? []) {
-      this.refreshRoot(folder);
-      // Manifest наблюдается для каждого root, включая invalid/non-Harness.
-      // Это позволяет перейти к valid state без перезапуска Extension Host.
-      const watcher = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(folder, '.harness/manifest.yaml'),
-      );
-      watcher.onDidCreate(() => this.refreshRoot(folder));
-      watcher.onDidChange(() => this.refreshRoot(folder));
-      watcher.onDidDelete(() => this.refreshRoot(folder));
-      this.manifestWatchers.push(watcher);
-    }
+    for (const folder of workspaceFolders ?? []) this.addRoot(folder);
+  }
+
+  /**
+   * Подключает workspace root во время работы (без restart): detect,
+   * index и manifest watcher проходят тот же путь, что и при activation.
+   */
+  addRoot(folder: vscode.WorkspaceFolder): void {
+    const key = folder.uri.toString();
+    if (this.manifestWatchers.has(key)) return;
+    this.refreshRoot(folder);
+    // Manifest наблюдается для каждого root, включая invalid/non-Harness.
+    // Это позволяет перейти к valid state без перезапуска Extension Host.
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(folder, '.harness/manifest.yaml'),
+    );
+    // Запоздавшее событие уже удалённого root не должно воскресить его state.
+    const onManifestEvent = () => {
+      if (this.manifestWatchers.has(key)) this.refreshRoot(folder);
+    };
+    watcher.onDidCreate(onManifestEvent);
+    watcher.onDidChange(onManifestEvent);
+    watcher.onDidDelete(onManifestEvent);
+    this.manifestWatchers.set(key, watcher);
+  }
+
+  /** Read-only: число живых watchers root (manifest + artifact) для test seam. */
+  getWatcherCount(folder: vscode.WorkspaceFolder): number {
+    const key = folder.uri.toString();
+    return (this.manifestWatchers.has(key) ? 1 : 0) + (this.artifactWatchers.get(key)?.length ?? 0);
+  }
+
+  /** Освобождает state, index и все watchers удалённого workspace root. */
+  removeRoot(folder: vscode.WorkspaceFolder): void {
+    const key = folder.uri.toString();
+    this.manifestWatchers.get(key)?.dispose();
+    this.manifestWatchers.delete(key);
+    for (const watcher of this.artifactWatchers.get(key) ?? []) watcher.dispose();
+    this.artifactWatchers.delete(key);
+    this.states.delete(key);
+    this.indexes.delete(key);
+    this.projectModelChangeEmitter.fire();
   }
 
   get all(): readonly ProjectState[] {
@@ -156,7 +186,8 @@ export class ProjectStateService implements vscode.Disposable {
 
   dispose(): void {
     this.disposeArtifactWatchers();
-    for (const watcher of this.manifestWatchers.splice(0)) watcher.dispose();
+    for (const watcher of this.manifestWatchers.values()) watcher.dispose();
+    this.manifestWatchers.clear();
     this.states.clear();
     this.indexes.clear();
     this.diagnosticSources.clear();

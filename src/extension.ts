@@ -10,6 +10,8 @@ import {
   runSetSortOrder,
 } from './views/artifactsView';
 import { FocusTreeDataProvider } from './views/focusView';
+import { SummaryTreeDataProvider } from './views/summaryView';
+import { HarnessStatusBar, type StatusBarSnapshot } from './views/statusBar';
 import { registerGoToArtifactCommand } from './commands/goToArtifact';
 import { registerCopyArtifactCommands } from './commands/copyArtifact';
 import { registerFindAllReferencesCommand } from './commands/findAllReferences';
@@ -52,6 +54,8 @@ let activeArtifactsTreeView: vscode.TreeView<unknown> | undefined;
 let activeFocusTreeView: vscode.TreeView<unknown> | undefined;
 let activeArtifactsProvider: ArtifactsTreeDataProvider | undefined;
 let activeFocusProvider: FocusTreeDataProvider | undefined;
+let activeSummaryProvider: SummaryTreeDataProvider | undefined;
+let activeStatusBar: HarnessStatusBar | undefined;
 let activeCatalogs: CommandCatalogService | undefined;
 let activeCommandsProvider: CommandsTreeDataProvider | undefined;
 let activeCommandsTreeView: vscode.TreeView<unknown> | undefined;
@@ -75,6 +79,13 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
   const output = registry.register(vscode.window.createOutputChannel('Harness Navigator'));
   const projectStates = registry.register(
     new ProjectStateService(vscode.workspace.workspaceFolders, output),
+  );
+  // STEP-007: root добавляется/удаляется без restart Extension Host.
+  registry.register(
+    vscode.workspace.onDidChangeWorkspaceFolders((event) => {
+      for (const folder of event.removed) projectStates.removeRoot(folder);
+      for (const folder of event.added) projectStates.addRoot(folder);
+    }),
   );
   registry.register(
     vscode.commands.registerCommand('harnessNavigator.showDiagnostics', () =>
@@ -134,6 +145,19 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
   };
   refreshCommandsMessage();
   registry.register(commandsProvider.onDidChangeTreeData(refreshCommandsMessage));
+  // STEP-007: Project Summary (нативный Tree View) и Status Bar из общих derived indexes.
+  const summaryProvider = registry.register(new SummaryTreeDataProvider(projectStates));
+  const summaryTreeView = registry.register(
+    vscode.window.createTreeView('harnessNavigator.summary', {
+      treeDataProvider: summaryProvider,
+    }),
+  );
+  const refreshSummaryMessage = () => {
+    summaryTreeView.message = summaryProvider.computeMessage();
+  };
+  refreshSummaryMessage();
+  registry.register(summaryProvider.onDidChangeTreeData(refreshSummaryMessage));
+  const statusBar = registry.register(new HarnessStatusBar(projectStates));
   registry.register(registerFindCommand(catalogs));
   registry.register(registerCopyCommand(catalogs));
 
@@ -210,6 +234,8 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
   activeFocusTreeView = focusTreeView;
   activeArtifactsProvider = artifactsProvider;
   activeFocusProvider = focusProvider;
+  activeSummaryProvider = summaryProvider;
+  activeStatusBar = statusBar;
   activeCatalogs = catalogs;
   activeCommandsProvider = commandsProvider;
   activeCommandsTreeView = commandsTreeView;
@@ -259,6 +285,7 @@ export function getActiveTreeViewMessages(): {
 
 /** Сериализуемый, read-only снимок одного узла Artifacts/Focus View для тестов. */
 export interface TreeNodeSnapshot {
+  readonly id: string | undefined;
   readonly label: string;
   readonly description: string | undefined;
   readonly contextValue: string | undefined;
@@ -275,6 +302,7 @@ interface MinimalTreeProvider<T> {
 function snapshotNode<T>(provider: MinimalTreeProvider<T>, node: T): TreeNodeSnapshot {
   const item = provider.getTreeItem(node);
   return {
+    id: item.id,
     label: treeItemLabel(item),
     description: typeof item.description === 'string' ? item.description : undefined,
     contextValue: item.contextValue,
@@ -354,6 +382,23 @@ export function getArtifactsViewArtifactNodes(): readonly RawArtifactNode[] {
   return nodes;
 }
 
+/** Test seam: число живых watchers root (manifest + artifact); 0 после removeRoot. */
+export function getWatcherCount(folder: vscode.WorkspaceFolder): number {
+  return activeProjectStates?.getWatcherCount(folder) ?? 0;
+}
+
+/** Test seam: read-only snapshot Status Bar item (text/tooltip/command/visible + counts). */
+export function getStatusBarSnapshot(): StatusBarSnapshot | undefined {
+  return activeStatusBar?.snapshot();
+}
+
+/** Test seam: полный snapshot Project Summary view. */
+export function getSummaryViewSnapshot(): readonly TreeNodeSnapshot[] {
+  const provider = activeSummaryProvider;
+  if (provider === undefined) return [];
+  return provider.getChildren().map((node) => snapshotNode(provider, node));
+}
+
 /** Read-only снимок состояния каталога root для Extension Host tests. */
 export function getCommandCatalogState(folder: vscode.WorkspaceFolder): CatalogState | undefined {
   return activeCatalogs?.getCatalog(folder);
@@ -428,6 +473,8 @@ export function deactivate(): void {
     activeFocusTreeView = undefined;
     activeArtifactsProvider = undefined;
     activeFocusProvider = undefined;
+    activeSummaryProvider = undefined;
+    activeStatusBar = undefined;
     activeCatalogs = undefined;
     activeCommandsProvider = undefined;
     activeCommandsTreeView = undefined;

@@ -106,3 +106,16 @@ test('значения bundle не содержат canonical Harness ID, enum-�
     }
   }
 });
+
+test('view Project Summary объявлен в package.json и имеет ключи package.nls в обоих языках', () => {
+  const manifest = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) as {
+    contributes: { views: Record<string, { id: string; name: string }[]> };
+  };
+  const summary = manifest.contributes.views['harnessNavigator']?.find(
+    (view) => view.id === 'harnessNavigator.summary',
+  );
+  assert.ok(summary, 'harnessNavigator.summary view is not contributed');
+  const key = summary.name.replace(/^%|%$/gu, '');
+  assert.ok(packageNlsEn[key] !== undefined, `English package.nls key: ${key}`);
+  assert.ok(packageNlsRu[key] !== undefined, `Russian package.nls key: ${key}`);
+});
