@@ -41,6 +41,10 @@
         {
           "id": "harnessNavigator.focus",
           "name": "%view.focus.name%"
+        },
+        {
+          "id": "harnessNavigator.commands",
+          "name": "%view.commands.name%"
         }
       ]
     },
@@ -87,6 +91,14 @@
       {
         "command": "harnessNavigator.showRelations",
         "title": "%command.showRelations.title%"
+      },
+      {
+        "command": "harnessNavigator.findCommand",
+        "title": "%command.findCommand.title%"
+      },
+      {
+        "command": "harnessNavigator.copyCommand",
+        "title": "%command.copyCommand.title%"
       }
     ],
     "menus": {
@@ -125,6 +137,16 @@
           "command": "harnessNavigator.showRelations",
           "when": "view == harnessNavigator.artifacts && viewItem == harnessArtifactItem || view == harnessNavigator.focus && viewItem == harnessArtifactItem",
           "group": "navigation@2"
+        },
+        {
+          "command": "harnessNavigator.copyCommand",
+          "when": "view == harnessNavigator.commands && viewItem == harnessCommandItem",
+          "group": "navigation@1"
+        },
+        {
+          "command": "harnessNavigator.copyCommand",
+          "when": "view == harnessNavigator.artifacts && viewItem == harnessArtifactItem || view == harnessNavigator.focus && viewItem == harnessArtifactItem",
+          "group": "navigation@3"
         }
       ],
       "commandPalette": [
@@ -150,6 +172,14 @@
         },
         {
           "command": "harnessNavigator.copyArtifactPath",
+          "when": "false"
+        },
+        {
+          "command": "harnessNavigator.findCommand",
+          "when": "true"
+        },
+        {
+          "command": "harnessNavigator.copyCommand",
           "when": "false"
         },
         {

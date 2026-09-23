@@ -25,6 +25,11 @@ import {
   HarnessSemanticTokensProvider,
 } from './navigation/semanticTokensProvider';
 import { UnknownIdDiagnostics } from './navigation/unknownIdDiagnostics';
+import { CommandCatalogService } from './commandCatalog/commandCatalogService';
+import { CommandsTreeDataProvider, type CommandsTreeNode } from './commandCatalog/commandsView';
+import { registerCopyCommand } from './commandCatalog/copyCommand';
+import { registerFindCommand } from './commandCatalog/findCommand';
+import type { CatalogState } from './commandCatalog/commandGraph';
 
 /**
  * Минимальный, test-observable результат активации. Намеренно ограничен
@@ -47,6 +52,9 @@ let activeArtifactsTreeView: vscode.TreeView<unknown> | undefined;
 let activeFocusTreeView: vscode.TreeView<unknown> | undefined;
 let activeArtifactsProvider: ArtifactsTreeDataProvider | undefined;
 let activeFocusProvider: FocusTreeDataProvider | undefined;
+let activeCatalogs: CommandCatalogService | undefined;
+let activeCommandsProvider: CommandsTreeDataProvider | undefined;
+let activeCommandsTreeView: vscode.TreeView<unknown> | undefined;
 let artifactsTreeDataChangeCount = 0;
 
 /**
@@ -109,6 +117,25 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
       artifactsTreeDataChangeCount += 1;
     }),
   );
+
+  // STEP-006: read-only Command Catalog; сервис создаётся до view.
+  const catalogs = registry.register(new CommandCatalogService(projectStates, output));
+  registry.register(
+    projectStates.registerDiagnosticSource((folder) => catalogs.diagnosticsFor(folder)),
+  );
+  const commandsProvider = registry.register(new CommandsTreeDataProvider(catalogs));
+  const commandsTreeView = registry.register(
+    vscode.window.createTreeView('harnessNavigator.commands', {
+      treeDataProvider: commandsProvider,
+    }),
+  );
+  const refreshCommandsMessage = () => {
+    commandsTreeView.message = commandsProvider.computeMessage();
+  };
+  refreshCommandsMessage();
+  registry.register(commandsProvider.onDidChangeTreeData(refreshCommandsMessage));
+  registry.register(registerFindCommand(catalogs));
+  registry.register(registerCopyCommand(catalogs));
 
   registry.register(registerGoToArtifactCommand(projectStates));
   registry.register(
@@ -183,6 +210,9 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
   activeFocusTreeView = focusTreeView;
   activeArtifactsProvider = artifactsProvider;
   activeFocusProvider = focusProvider;
+  activeCatalogs = catalogs;
+  activeCommandsProvider = commandsProvider;
+  activeCommandsTreeView = commandsTreeView;
 
   const activatedLogMessage = vscode.l10n.t('Harness Navigator extension activated.');
   const fallbackLogMessage = vscode.l10n.t('Harness Navigator localization fallback is active.');
@@ -324,6 +354,64 @@ export function getArtifactsViewArtifactNodes(): readonly RawArtifactNode[] {
   return nodes;
 }
 
+/** Read-only снимок состояния каталога root для Extension Host tests. */
+export function getCommandCatalogState(folder: vscode.WorkspaceFolder): CatalogState | undefined {
+  return activeCatalogs?.getCatalog(folder);
+}
+
+/** Сериализуемый read-only снимок узла Commands View. */
+export interface CommandNodeSnapshot {
+  readonly label: string;
+  readonly description: string | undefined;
+  readonly tooltip: string | undefined;
+  readonly contextValue: string | undefined;
+  /** `true`, если у узла есть `TreeItem.command` (должно быть всегда `false`). */
+  readonly hasCommand: boolean;
+  readonly children: readonly CommandNodeSnapshot[];
+}
+
+function snapshotCommandNode(
+  provider: CommandsTreeDataProvider,
+  node: CommandsTreeNode,
+): CommandNodeSnapshot {
+  const item = provider.getTreeItem(node);
+  return {
+    label: treeItemLabel(item),
+    description: typeof item.description === 'string' ? item.description : undefined,
+    tooltip: typeof item.tooltip === 'string' ? item.tooltip : undefined,
+    contextValue: item.contextValue,
+    hasCommand: item.command !== undefined,
+    children: provider.getChildren(node).map((child) => snapshotCommandNode(provider, child)),
+  };
+}
+
+/** Test seam: полный snapshot Commands View. */
+export function getCommandsViewSnapshot(): readonly CommandNodeSnapshot[] {
+  const provider = activeCommandsProvider;
+  if (provider === undefined) return [];
+  return provider.getChildren().map((node) => snapshotCommandNode(provider, node));
+}
+
+/** Test seam: `TreeView.message` Commands View. */
+export function getCommandsViewMessage(): string | undefined {
+  return activeCommandsTreeView?.message;
+}
+
+/** Test seam: raw leaf-узлы Commands View в форме, которую получает `copyCommand`. */
+export function getCommandsViewCommandNodes(): readonly CommandsTreeNode[] {
+  const provider = activeCommandsProvider;
+  if (provider === undefined) return [];
+  const nodes: CommandsTreeNode[] = [];
+  const walk = (node?: CommandsTreeNode): void => {
+    for (const child of provider.getChildren(node)) {
+      if (child.type === 'command') nodes.push(child);
+      else walk(child);
+    }
+  };
+  walk(undefined);
+  return nodes;
+}
+
 /**
  * Точка деактивации. Идемпотентна и никогда не бросает исключения:
  * освобождает lifecycle-реестр, созданный в `activate`, и безопасна для
@@ -340,6 +428,9 @@ export function deactivate(): void {
     activeFocusTreeView = undefined;
     activeArtifactsProvider = undefined;
     activeFocusProvider = undefined;
+    activeCatalogs = undefined;
+    activeCommandsProvider = undefined;
+    activeCommandsTreeView = undefined;
     artifactsTreeDataChangeCount = 0;
   }
 }

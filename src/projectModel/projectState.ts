@@ -15,6 +15,8 @@ export type ProjectDiagnosticCategory =
   | 'DuplicateArtifactId'
   | 'InvalidArtifactReference'
   | 'ProjectionReadError'
+  | 'CommandGraphReadError'
+  | 'CommandGraphUnsupportedSchema'
   | 'UnexpectedInternalError';
 
 export interface ProjectDiagnostic {

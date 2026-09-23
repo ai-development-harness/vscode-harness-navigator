@@ -20,5 +20,8 @@
   "configuration.filterPhase.description": "Показывать только STEP артефакты с этой фазой в представлении Harness Artifacts.",
   "command.findAllReferences.title": "Harness: Найти все ссылки",
   "command.showRelations.title": "Harness: Показать связи",
-  "semanticToken.harnessArtifactId.description": "Идентификатор артефакта Harness"
+  "semanticToken.harnessArtifactId.description": "Идентификатор артефакта Harness",
+  "view.commands.name": "Команды Harness",
+  "command.findCommand.title": "Harness: Найти команду",
+  "command.copyCommand.title": "Harness: Скопировать команду"
 }

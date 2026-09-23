@@ -6,6 +6,10 @@ import path from 'node:path';
 import { ARTIFACT_DIAGNOSTIC_MESSAGES } from '../../src/projectModel/artifactIndex';
 import { VIEW_MESSAGE_VALUES } from '../../src/views/viewMessages';
 import { NAVIGATION_MESSAGE_VALUES } from '../../src/navigation/navigationMessages';
+import {
+  COMMAND_CATALOG_MESSAGE_VALUES,
+  COMMAND_DESCRIPTION_VALUES,
+} from '../../src/commandCatalog/commandCatalogMessages';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../..');
@@ -57,6 +61,13 @@ test('ключи Artifacts/Focus View и Go to Artifact присутствуют
 
 test('ключи navigation/relations присутствуют в обоих runtime bundle', () => {
   for (const key of NAVIGATION_MESSAGE_VALUES) {
+    assert.ok(bundleL10nEn[key] !== undefined, `English key: ${key}`);
+    assert.ok(bundleL10nRu[key] !== undefined, `Russian key: ${key}`);
+  }
+});
+
+test('ключи Command Catalog (сообщения и описания команд) присутствуют в обоих runtime bundle', () => {
+  for (const key of [...COMMAND_CATALOG_MESSAGE_VALUES, ...COMMAND_DESCRIPTION_VALUES]) {
     assert.ok(bundleL10nEn[key] !== undefined, `English key: ${key}`);
     assert.ok(bundleL10nRu[key] !== undefined, `Russian key: ${key}`);
   }
