@@ -1,17 +1,34 @@
 <!-- PROJECT:START -->
-# VSCode Harness Navigator
+# AI Development Harness — новый проект
 
-Локальное read-only расширение Visual Studio Code для навигации по STEP, REQ, ADR, OQ и справке по canonical-командам AI Development Harness 0.6.0+.
+Проект ещё не инициализирован.
 
-Ключевые документы:
+1. Создай локальный brief:
 
-- [Описание проекта](docs/PROJECT.md)
-- [Требования](docs/requirements/SPEC.md)
-- [Архитектура](docs/architecture.md)
-- [Roadmap](planning/PLAN.md)
+   ```bash
+   cp PROJECT_BRIEF.example.md PROJECT_BRIEF.local.md
+   ```
 
-Текущая точка входа в разработку: `STEP PLAN STEP-001`.
+2. Опиши проект своими словами в `PROJECT_BRIEF.local.md`: цель, пользователей, сценарии, ограничения, предпочтительный стек, референсы и любые важные заметки.
+3. При необходимости скопируй `AGENTS.local.example.md` в `AGENTS.local.md` и добавь локальные команды/предпочтения.
+4. Открой репозиторий в Codex или Claude Code.
+5. Выполни:
+
+   ```text
+   PROJECT INIT
+   ```
+
+После успешной инициализации агент заменит **только этот блок** описанием конкретного проекта, ключевыми ссылками и текущей точкой входа в разработку.
 <!-- PROJECT:END -->
+
+## Зависимости
+
+- Python 3.11+ — обязателен для deterministic tools/validators.
+- Git — обязателен для repository workflow.
+- Codex **или** Claude Code — runtime выбирается пользователем; оба одновременно не требуются.
+- GitHub CLI `gh` — optional capability dependency: нужен только для `GIT PR` / `GIT PR FINISH` при текущей GitHub PR integration.
+
+Подробно: [`.harness/docs/DEPENDENCIES.md`](.harness/docs/DEPENDENCIES.md).
 
 ## Runtime adapters
 

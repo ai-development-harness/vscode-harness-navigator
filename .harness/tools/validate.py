@@ -545,6 +545,62 @@ def main() -> int:
         errors.extend(validate_transition_table(transition_table))
         table_commands = set(canonical_commands(transition_table))
 
+        # Command documentation reference — часть machine-readable contract.
+        # Каждая команда обязана ссылаться на уникальный local Markdown anchor,
+        # который реально существует ровно один раз. Так HARNESS HELP и внешние
+        # клиенты не публикуют общую/битую ссылку после rename или docs drift.
+        seen_documentation_refs: set[str] = set()
+        for domain_name, domain in transition_table.get("domains", {}).items():
+            for operation, spec in domain.get("commands", {}).items():
+                documentation = spec.get("documentation")
+                command_name = spec.get("canonical", f"{domain_name} {operation}")
+                if not isinstance(documentation, str) or "#" not in documentation:
+                    errors.append(
+                        f"command documentation for '{command_name}' must be '<path>#<anchor>'"
+                    )
+                    continue
+
+                path_text, fragment = documentation.split("#", 1)
+                if not path_text or not fragment:
+                    errors.append(
+                        f"command documentation for '{command_name}' must include path and anchor"
+                    )
+                    continue
+                if documentation in seen_documentation_refs:
+                    errors.append(
+                        f"duplicate command documentation reference: {documentation}"
+                    )
+                seen_documentation_refs.add(documentation)
+
+                relative_path = Path(path_text)
+                if relative_path.is_absolute() or ".." in relative_path.parts:
+                    errors.append(
+                        f"command documentation for '{command_name}' escapes repository: {documentation}"
+                    )
+                    continue
+
+                doc_path = (root / relative_path).resolve()
+                try:
+                    doc_path.relative_to(root.resolve())
+                except ValueError:
+                    errors.append(
+                        f"command documentation for '{command_name}' escapes repository: {documentation}"
+                    )
+                    continue
+                if not doc_path.is_file():
+                    errors.append(
+                        f"command documentation file for '{command_name}' does not exist: {path_text}"
+                    )
+                    continue
+
+                anchor_marker = f'<a id="{fragment}"></a>'
+                anchor_count = doc_path.read_text(encoding="utf-8").count(anchor_marker)
+                if anchor_count != 1:
+                    errors.append(
+                        f"command documentation anchor for '{command_name}' must exist exactly once: "
+                        f"{documentation} (found {anchor_count})"
+                    )
+
         for command in policy.get("required_commands", []):
             if command not in table_commands:
                 errors.append(

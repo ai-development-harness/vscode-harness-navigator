@@ -98,10 +98,41 @@ jobs:
         # Пример: publication chain проходит, обратный GIT PR → GIT COMMIT обязан вернуть non-zero.
         run: |
           python3 .harness/tools/validate-command.py --json -- 'GIT CHECK > COMMIT > PUSH > PR' >/dev/null
+          python3 .harness/tools/validate-command.py --json -- 'STEP RUN 024' | grep -q 'STEP RUN STEP-024'
+          python3 .harness/tools/validate-command.py --json -- 'HARNESS HELP' >/dev/null
+          python3 .harness/tools/validate-command.py --json -- 'HARNESS STATUS' >/dev/null
+          python3 .harness/tools/validate-command.py --json -- 'HARNESS RESUME' >/dev/null
+          if python3 .harness/tools/validate-command.py --json -- 'HARNESS RESUME: exec-001' >/dev/null 2>&1; then
+            echo "Expected HARNESS RESUME with arguments to be rejected"
+            exit 1
+          fi
+          python3 .harness/tools/validate-command.py --json -- 'HARNESS DOCTOR' >/dev/null
+          python3 .harness/tools/validate-command.py --json -- 'HARNESS CONFIG' >/dev/null
+          python3 .harness/tools/validate-command.py --json -- 'STEP LIST' >/dev/null
+          python3 .harness/tools/validate-command.py --json -- 'STEP SHOW 024' | grep -q 'STEP SHOW STEP-024'
+          python3 .harness/tools/validate-command.py --json -- 'GIT PR FINISH' >/dev/null
+          if python3 .harness/tools/validate-command.py --json -- 'STEP RUN 24' >/dev/null 2>&1; then
+            echo "Expected invalid short STEP target for STEP RUN 24"
+            exit 1
+          fi
           if python3 .harness/tools/validate-command.py --json -- 'GIT PR > COMMIT' >/dev/null 2>&1; then
             echo "Expected INVALID_CHAIN for GIT PR > COMMIT"
             exit 1
           fi
+          python3 .harness/tools/harness-help.py --json | grep -q '"canonical": "HARNESS HELP"'
+
+
+      # Проверить deterministic operational UX поверх реального template checkout.
+      # Пример: STATUS/CONFIG/DOCTOR/LIST должны вернуть PASS, synthetic test покрывает SHOW/RESUME.
+      - name: Validate Harness UX commands
+        # Запустить read-only UX smoke checks и отдельный synthetic regression.
+        # Пример: optional gh/Claude/Codex не должны делать общий HARNESS DOCTOR failed.
+        run: |
+          python3 .harness/tools/harness-ux.py status --json | grep -q '"status": "PASS"'
+          python3 .harness/tools/harness-ux.py config --json | grep -q '"status": "PASS"'
+          python3 .harness/tools/harness-ux.py doctor --json | grep -q '"status": "PASS"'
+          python3 .harness/tools/harness-ux.py step-list --json | grep -q '"status": "PASS"'
+          python3 .harness/tools/harness-ux-self-test.py
 
       # Проверить единый local execution state на полном наборе canonical commands.
       # Пример: single/chain/STEP RUN, interruption, независимые команды и conditional transitions.

@@ -5,6 +5,7 @@
 ## С чего начать
 
 - [`GETTING_STARTED.md`](GETTING_STARTED.md) — создание проекта из template и `PROJECT INIT`.
+- [`DEPENDENCIES.md`](DEPENDENCIES.md) — обязательные core dependencies, runtime adapters и optional GitHub PR capability.
 - [`DOCUMENT_MODEL.md`](DOCUMENT_MODEL.md) — какие артефакты существуют, что является источником истины и как связаны REQ / ADR / STEP / PLAN / STATUS / Evidence / Review.
 - [`GLOSSARY.md`](GLOSSARY.md) — полный словарь терминов и сокращений Harness.
 - [`REPOSITORY_LAYOUT.md`](REPOSITORY_LAYOUT.md) — файловая архитектура и разделение protocol / knowledge / implementation.

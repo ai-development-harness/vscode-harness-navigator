@@ -130,6 +130,11 @@ python3 .harness/tools/validate.py --mode ci
 
 Validator агрегирует `project_integrity.py`, `planning_contract.py`, `review_contract.py`, `report_contract.py`, `projection_contract.py`, `template_contract.py`, CTS и config layer.
 
+
+`HARNESS DOCTOR` не заменяет этот validator: он использует его как required health check и дополнительно показывает dependency/capability availability. Отсутствующий optional runtime или `gh` не превращает validator/Doctor в failure, если core Harness исправен.
+
+Harness UX regression отдельно выполняет `.harness/tools/harness-ux-self-test.py`, который проверяет STEP LIST/SHOW и RESUME semantics на synthetic repository.
+
 ---
 
 # 2. Command Transition System validator
@@ -204,6 +209,8 @@ python3 .harness/tools/validate-command.py -- 'GIT PR > COMMIT'
 - known runtime preconditions;
 - duplicate/ambiguous edges;
 - parsing и normalization raw command text.
+
+Общий `validate.py` дополнительно проверяет cross-file contract поля `documentation`: формат `<path>#<anchor>`, repository-contained path, существование файла, уникальность ссылки и ровно один explicit `<a id="...">` в target Markdown.
 
 ---
 
@@ -559,13 +566,14 @@ Tool **не выполняет commit/push/PR/merge**. Разрешён толь
 - перед `GIT COMMIT`;
 - перед `GIT PUSH`;
 - перед `GIT PR`;
+- перед `GIT PR FINISH`;
 - перед `GIT SYNC`.
 
 ## CLI
 
 ```bash
 python3 .harness/tools/git-preflight.py \
-  check|commit|push|pr|sync \
+  check|commit|push|pr|pr-finish|sync \
   [--json] \
   [--commit-type <type>] \
   [--slug <slug>]
@@ -573,7 +581,7 @@ python3 .harness/tools/git-preflight.py \
 
 ### Аргументы
 
-- action — `check`, `commit`, `push`, `pr`, `sync`;
+- action — `check`, `commit`, `push`, `pr`, `pr-finish`, `sync`;
 - `--json` — machine-readable PASS/BLOCKED result;
 - `--commit-type` — Conventional Commit type для deterministic branch planning;
 - `--slug` — semantic branch slug; используется вместе с `commit`.
@@ -595,6 +603,7 @@ python3 .harness/tools/git-preflight.py \
 
 python3 .harness/tools/git-preflight.py push --json
 python3 .harness/tools/git-preflight.py pr --json
+python3 .harness/tools/git-preflight.py pr-finish --json
 python3 .harness/tools/git-preflight.py sync --json
 ```
 
@@ -612,6 +621,7 @@ Engine проверяет:
 - unconditional remote-ahead blocker при `force=never`;
 - published PR head equality;
 - PR base/template/tool availability;
+- merged-PR provider state, local PR state, safe return-branch ff-only и non-force branch deletion для `pr-finish`;
 - ff-only sync;
 - Harness validator перед mutation, если это требует policy.
 

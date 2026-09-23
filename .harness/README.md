@@ -28,12 +28,12 @@ Namespace/control plane AI Development Harness. Здесь собраны core d
 
 ## Repository policies
 
-- `git-policy.toml` — поведение GIT COMMIT / GIT PUSH / GIT PR / GIT SYNC, ветки и commit messages.
+- `git-policy.toml` — поведение GIT COMMIT / GIT PUSH / GIT PR / GIT PR FINISH / GIT SYNC, ветки и commit messages.
 - `harness-policy.toml` — deterministic integrity/safety checks для local preflight и CI.
 - `harness-update.toml` — source repository, ownership classes, путь к remote update manifest и merge policy для self-update.
 - `harness.lock.json` — машинный known BASE текущего Harness release; JSON намеренно не требует inline-комментариев.
 - `harness-update-graph.json` — machine-readable граф допустимых переходов между immutable Harness releases; локальная копия входит в protocol layer, а выбор маршрута делается по версии из canonical `default_branch`.
-- `command-transitions.json` — machine-readable source of truth для canonical command surface, chain eligibility, explicit transition edges, `onPreviousResult` и runtime preconditions. До skill routing canonical command проходит structural validation по этому graph.
+- `command-transitions.json` — machine-readable source of truth для canonical command surface, краткие descriptions/docs links, chain eligibility, explicit transition edges, `onPreviousResult` и runtime preconditions. До skill routing canonical command проходит structural validation по этому graph.
 `.harness/local/execution/execution-status.json` — единый local operational state всех canonical Harness executions. Он игнорируется Git, не является product evidence и может хранить несколько независимых running/completed records. Canonical repository artifacts имеют приоритет над local state.
 
 `harness.lock.json` не содержит secrets. Его нужно хранить в Git вместе с проектом; удаление lock переводит updater в legacy-adoption mode.

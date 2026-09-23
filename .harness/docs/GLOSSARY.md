@@ -566,6 +566,10 @@ Harness дополняет его body с Context / Changes / Verification / Tra
 
 Запрос на интеграцию опубликованной ветки в base branch. Harness может создавать или переиспользовать PR согласно `.harness/git-policy.toml`.
 
+### GIT PR FINISH
+
+Standalone post-merge cleanup-команда. Подтверждает merged PR через provider, возвращается на сохранённую return/base branch, допускает только safe ff-only update и удаляет локальную PR-ветку без force.
+
 ### GIT SYNC
 
 Проверка состояния local/remote branch. По умолчанию read-only report; policy может разрешать только безопасный fast-forward.

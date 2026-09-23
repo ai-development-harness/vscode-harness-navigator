@@ -33,7 +33,7 @@ Harness skills описывают **workflow**, а не конкретный tec
 
 Дополнительные technology/project skills ищи через `SKILL FIND`, устанавливай через `SKILL INSTALL` и создавай через `SKILL CREATE`. Third-party content проходит inspection и provenance tracking; registry находится в `docs/skills/REGISTRY.md`.
 
-- `git-workflow` — GIT CHECK / GIT COMMIT / GIT PUSH / GIT PR / GIT SYNC и repository publication policy.
+- `git-workflow` — GIT CHECK / GIT COMMIT / GIT PUSH / GIT PR / GIT PR FINISH / GIT SYNC и repository publication policy.
 
 ## Дополнительные core workflow skills
 

@@ -49,15 +49,19 @@
 - `STEP NEXT`
 - `PROJECT RECONCILE`
 - `RELEASE CHECK`
+- `HARNESS HELP`
 - `HARNESS UPDATE CHECK`
 - `HARNESS UPDATE APPLY`
 - `GIT CHECK`
 - `GIT COMMIT` / `GIT COMMIT: <подсказка>`
 - `GIT PUSH`
 - `GIT PR`
+- `GIT PR FINISH`
 - `GIT SYNC`
 
 Канонический синтаксис и chain operator описаны в `.harness/docs/COMMAND_SYNTAX.md`. Полный machine-readable graph команд и переходов — `.harness/command-transitions.json`, человекочитаемая матрица — `.harness/docs/COMMAND_TRANSITIONS.md`. Точная семантика project execution находится в `.harness/docs/EXECUTION_PROTOCOL.md`. Maintenance semantics self-update — в `.harness/docs/UPDATES.md`. Термины Harness определены в `.harness/docs/GLOSSARY.md`.
+
+Для STEP-команд пользователь может передать target как `STEP-NNN` или `NNN`; structural parser всегда нормализует short form в canonical `STEP-NNN` до execution tracking.
 
 ### Обязательный command preflight
 
@@ -77,12 +81,14 @@ tokenize
 
 Если gate возвращает `INVALID_CHAIN`, `CHAIN_NOT_ALLOWED`, `DOMAIN_MISMATCH`, `TARGET_MISMATCH` или другую structural error — не исполняй ни один segment, не создавай execution record и не route-ь команду в skill.
 
-После structural PASS зарегистрируй root execution **до command-specific dispatch**:
+После structural PASS зарегистрируй root execution **до command-specific dispatch**, кроме control-команды `HARNESS RESUME`:
 
 ```bash
 python3 .harness/tools/execution-state.py start \
   --command '<raw canonical command>'
 ```
+
+Для `HARNESS RESUME` после CTS PASS выполни `python3 .harness/tools/harness-ux.py resume --json`. Не создавай отдельное корневое выполнение. Продолжай только если resolver вернул ровно одну допустимую точку; при `NO_RESUMABLE_EXECUTION` или `MULTIPLE_RESUMABLE_EXECUTIONS` остановись.
 
 Единый local state:
 
@@ -146,6 +152,22 @@ Canonical repository artifacts имеют приоритет над local operat
 Для PLAN durable proof = current `plan.status=ready` + exact `context_basis` + `content_hash` + matching immutable planning-review PASS. Для REVIEW durable proof = schema-valid immutable report для той же exact `git_head/worktree_hash` revision.
 
 Подробно: `.harness/docs/EXECUTION_STATUS.md`.
+
+
+### Deterministic UX queries
+
+Без отдельного skill выполняй:
+
+```text
+HARNESS STATUS  -> harness-ux.py status
+HARNESS DOCTOR  -> harness-ux.py doctor
+HARNESS CONFIG  -> harness-ux.py config
+STEP LIST       -> harness-ux.py step-list
+STEP SHOW STEP-NNN -> harness-ux.py step-show --step STEP-NNN
+HARNESS RESUME  -> harness-ux.py resume
+```
+
+Для STATUS/DOCTOR/CONFIG/LIST/SHOW не добавляй state/diagnostics, которых нет в deterministic output. `gh`, Codex и Claude — capability-specific dependencies: отсутствие неактивного runtime или `gh` не превращай в global Harness failure.
 
 ### Цепочки команд
 
@@ -287,6 +309,10 @@ Self-update самого Harness выполняется только через 
 
 Если пользователь уже внёс такую мелкую правку вручную, разрешён прямой `GIT CHECK` → `GIT COMMIT` без STEP после проверки diff. Если изменение оказалось не мелким — остановись и предложи `STEP ADD:`. Подробности: `.harness/docs/QUICK_CHANGES.md`.
 
+### `HARNESS HELP`
+
+После обычного structural gate запусти `python3 .harness/tools/harness-help.py`. Не собирай command list из памяти и не дополняй его командами, которых нет в CTS registry.
+
 ## 15. Harness self-update
 
 Self-update protocol layer не является STEP.
@@ -326,7 +352,7 @@ Self-update protocol layer не является STEP.
 
 ## 17. Git workflow
 
-Git mutation выполняется только явными командами `GIT COMMIT`, `GIT PUSH`, `GIT PR`, `GIT SYNC` и по configured `repository.gitPolicy`.
+Git mutation выполняется только явными командами `GIT COMMIT`, `GIT PUSH`, `GIT PR`, `GIT PR FINISH`, `GIT SYNC` и по configured `repository.gitPolicy`.
 
 Safety-critical Git decision перед mutation принадлежит deterministic preflight:
 

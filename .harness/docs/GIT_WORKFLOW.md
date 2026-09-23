@@ -2,6 +2,8 @@
 
 Harness отделяет разработку от публикации изменений. `STEP IMPLEMENT` / `STEP REVIEW` не создают commits автоматически. Git-операции выполняются явными командами области `GIT` и управляются policy по `.harness/manifest.yaml → repository.gitPolicy`.
 
+GitHub CLI `gh` не является dependency всего Git workflow: `GIT CHECK`, `GIT COMMIT`, `GIT PUSH`, `GIT SYNC` используют обычный Git. Установленный и авторизованный `gh` требуется только для текущей GitHub Pull Request capability — `GIT PR` и `GIT PR FINISH`. Подробнее: [`DEPENDENCIES.md`](DEPENDENCIES.md).
+
 ## Команды
 
 ```text
@@ -10,6 +12,7 @@ GIT COMMIT
 GIT COMMIT: <необязательная подсказка>
 GIT PUSH
 GIT PR
+GIT PR FINISH
 GIT SYNC
 
 # shorthand-цепочка
@@ -113,6 +116,18 @@ after_push = "never"
 ### `GIT PR`
 
 `GIT PR` можно вызвать отдельно. Перед provider action обязательный `git-preflight.py pr` доказывает, что exact local HEAD опубликован, configured base существует, preferred tool доступен и body template остаётся внутри repository. После `PASS` агент не создаёт duplicate PR при `reuse_existing=true` и заполняет traceability/verification из repository evidence. Default template — `.github/pull_request_template.md`.
+
+### `GIT PR FINISH`
+
+После merge Pull Request команда завершает локальный lifecycle feature branch.
+
+```bash
+python3 .harness/tools/git-preflight.py pr-finish --json
+```
+
+PASS требует чистое рабочее дерево, состояние provider `MERGED`, совпадение текущего локального HEAD с GitHub `headRefOid`, согласованный local PR state и существующую return branch без local-ahead/divergence. Это позволяет безопасно завершать как обычный merge, так и squash/rebase merge.
+
+После PASS выполняй exact ordered `mutationPlan.steps`: switch → optional ff-only sync → удаление локальной PR-ветки. При сохранённом Git ancestry используется `git branch -d`; после squash/rebase merge — `git update-ref -d <ref> <verified-head-oid>`, где old OID обязан совпадать с подтверждённым GitHub `headRefOid`. `git branch -D`, удаление удалённой ветки, reset/rebase запрещены. Local-only `.harness/local/git/pr-state.json` удаляется только после полностью успешного FINISH.
 
 ### `GIT SYNC`
 

@@ -45,7 +45,7 @@ HARNESS UPDATE CHECK TO vX.X.X > APPLY
 
 1. до первого выполнения разобрать и валидировать всю цепочку;
 2. DOMAIN наследуется от первого сегмента; смена DOMAIN внутри цепочки запрещена;
-3. STEP target наследуется и остаётся неизменным;
+3. STEP target `STEP-NNN` или shorthand `NNN` сначала нормализуется в canonical `STEP-NNN`, затем наследуется и остаётся неизменным;
 4. HARNESS UPDATE target `TO <tag>` наследуется от CHECK к APPLY;
 5. допустимый порядок определяется только explicit edges из `.harness/command-transitions.json`;
 6. same-domain reverse/invalid order (например `GIT PR > COMMIT`) = `INVALID_CHAIN`; ни один сегмент не выполняется;
@@ -149,6 +149,25 @@ Canonical artifacts имеют приоритет над local operational state
 Эти проверки не создают profiles и не меняют command surface.
 
 Подробно: `.harness/docs/EXECUTION_STATUS.md`.
+
+### 0.3. `HARNESS HELP`
+
+`HARNESS HELP` — standalone read-only команда. После structural PASS она запускает только deterministic:
+
+```bash
+python3 .harness/tools/harness-help.py
+```
+
+Output строится из command metadata в `.harness/command-transitions.json`; command-specific project/Git state и LLM reasoning для справки не требуются.
+
+
+### 0.4. Operational UX commands
+
+`HARNESS STATUS`, `HARNESS DOCTOR`, `HARNESS CONFIG`, `STEP LIST` и `STEP SHOW STEP-NNN` выполняются deterministic через `.harness/tools/harness-ux.py` и не мутируют product/project artifacts.
+
+`HARNESS DOCTOR` разделяет required core dependencies и optional capabilities; отсутствие неактивного Claude/Codex runtime или GitHub CLI не является global blocker.
+
+`HARNESS RESUME` — управляющая команда без параметров. После CTS PASS она не регистрируется как новое корневое выполнение: если существует ровно одна безопасная точка продолжения, resolver возвращает соответствующую текущую или следующую команду. При нуле или нескольких возможных точках команда возвращает `BLOCKED`.
 
 ## 1. Сущности
 
@@ -573,7 +592,19 @@ Tool разрешает configured `.harness/manifest.yaml → repository.gitPol
 4. При `reuse_existing=true` не создавать duplicate.
 5. Title должен отражать actual change; body заполняется по configured template из STEP/REQ/ADR/evidence/review.
 
-## 22. `GIT SYNC`
+## 22. `GIT PR FINISH`
+
+1. Команда standalone-only и применяется после merge PR.
+2. После успешного `GIT PR` сохранить local-only `.harness/local/git/pr-state.json` schema v1: PR number, headBranch, baseBranch, returnBranch и URL. `returnBranch` = корректная предыдущая local branch; если она недоступна/невалидна — PR base.
+3. Перед mutation выполнить:
+   ```bash
+   python3 .harness/tools/git-preflight.py pr-finish --json
+   ```
+4. PASS должен доказать: clean worktree, provider state MERGED, matching head/base, существующую return branch, safe ff-only update и возможность удалить head обычным `git branch -d`.
+5. Выполнять `mutationPlan.steps[*].argv` строго по порядку. Не добавлять `-D`, reset/rebase или remote deletion.
+6. Local PR state удалять только после успеха всех steps. При любом failure оставить state для диагностики/handoff.
+
+## 23. `GIT SYNC`
 
 1. Выполнить:
    ```bash
@@ -584,7 +615,7 @@ Tool разрешает configured `.harness/manifest.yaml → repository.gitPol
 4. `mode=ff-only` → выполнять exact `mutationPlan.argv` только для clean behind-only state.
 5. Local-ahead/diverged/dirty state блокирует automatic sync. Automatic merge/rebase запрещены.
 
-## 23. Dependency corrections
+## 24. Dependency corrections
 
 Если STEP требует незапланированный hard prerequisite:
 
@@ -598,7 +629,7 @@ current STEP resumes
 
 Используй следующий свободный ID; не перенумеровывай историю.
 
-## 24. Evidence
+## 25. Evidence
 
 Подходят:
 
@@ -611,7 +642,7 @@ current STEP resumes
 
 Недостаточно: «проверено», «работает», «готово» без конкретики.
 
-## 25. Completion
+## 26. Completion
 
 STEP закрывается только если:
 

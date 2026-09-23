@@ -146,6 +146,14 @@ def validate_transition_table(table: dict[str, Any]) -> list[str]:
                     f"command-transitions: {domain_name}.{operation}.input must be one of {sorted(ALLOWED_INPUTS)}"
                 )
 
+            for metadata_key in ("summary", "documentation"):
+                metadata_value = spec.get(metadata_key)
+                if not isinstance(metadata_value, str) or not metadata_value.strip():
+                    errors.append(
+                        f"command-transitions: {domain_name}.{operation}.{metadata_key} "
+                        "must be a non-empty string"
+                    )
+
         for alias, operation in aliases.items():
             if operation not in commands:
                 errors.append(
@@ -327,6 +335,11 @@ def _parse_segment(
             if re.fullmatch(r"STEP-\d{3,}", token):
                 target = token
                 rest = tail.strip()
+            elif re.fullmatch(r"\d{3,}", token):
+                # Пользовательский shorthand нормализуется до canonical STEP-NNN
+                # до inheritance/mismatch checks, поэтому 024 и STEP-024 равны.
+                target = f"STEP-{token}"
+                rest = tail.strip()
         if target is None:
             if inherited_target is not None:
                 target = inherited_target
@@ -334,7 +347,7 @@ def _parse_segment(
                 return {
                     "valid": False,
                     "code": "MISSING_TARGET",
-                    "message": f"{domain_name} {operation} requires STEP-NNN target",
+                    "message": f"{domain_name} {operation} requires STEP-NNN or NNN target",
                 }
 
     elif target_kind == "release-optional":

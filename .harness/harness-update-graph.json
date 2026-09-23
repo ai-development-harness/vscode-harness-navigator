@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "latest": "v0.6.0",
+  "latest": "v0.7.0",
   "transitions": [
     {
       "from": "v0.1.0",
@@ -118,6 +118,12 @@
       "kind": "bridge",
       "reloadRequired": true,
       "reason": "v0.6.0 installs deterministic updater and protocol contracts that the v0.5.3 runtime cannot safely continue using in the same session"
+    },
+    {
+      "from": "v0.6.0",
+      "to": "v0.7.0",
+      "kind": "standard",
+      "reloadRequired": true
     }
   ]
 }

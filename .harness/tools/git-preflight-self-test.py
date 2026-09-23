@@ -11,6 +11,7 @@ from git_preflight import (
     GitPreflightError,
     commit_preflight,
     pr_preflight,
+    pr_finish_preflight,
     push_preflight,
     sync_preflight,
 )
@@ -223,6 +224,92 @@ def main() -> int:
         run(project, "git", "add", "local.txt")
         run(project, "git", "commit", "-qm", "local")
         expect_blocked("HEAD_NOT_FULLY_PUBLISHED", lambda: pr_preflight(project))
+
+
+        # Independent merged-PR lifecycle regression. Provider metadata is injected
+        # directly so test remains network-free; Git ancestry/state stays real.
+        finish_remote = base / "finish-remote.git"
+        run(base, "git", "init", "--bare", "-q", str(finish_remote))
+        finish_project = base / "finish-project"
+        finish_project.mkdir()
+        run(finish_project, "git", "init", "-q", "-b", "main")
+        run(finish_project, "git", "config", "user.email", "finish@example.invalid")
+        run(finish_project, "git", "config", "user.name", "Finish Test")
+        run(finish_project, "git", "remote", "add", "origin", str(finish_remote))
+        write(finish_project, ".harness/manifest.yaml", manifest())
+        write(finish_project, ".harness/git-policy.toml", policy())
+        write(finish_project, ".harness/tools/validate.py", validator())
+        write(finish_project, ".github/pull_request_template.md", "# PR\n")
+        write(finish_project, ".gitignore", ".harness/local/\n")
+        write(finish_project, "README.md", "finish base\n")
+        run(finish_project, "git", "add", ".")
+        run(finish_project, "git", "commit", "-qm", "initial")
+        run(finish_project, "git", "push", "-q", "-u", "origin", "main")
+        run(finish_project, "git", "switch", "-c", "feature/finish")
+        write(finish_project, "finish.txt", "done\n")
+        run(finish_project, "git", "add", "finish.txt")
+        run(finish_project, "git", "commit", "-qm", "feat: finish")
+        run(finish_project, "git", "push", "-q", "-u", "origin", "feature/finish")
+        finish_head = run(finish_project, "git", "rev-parse", "HEAD")
+
+        merger = base / "finish-merger"
+        run(base, "git", "clone", "-q", str(finish_remote), str(merger))
+        run(merger, "git", "config", "user.email", "merge@example.invalid")
+        run(merger, "git", "config", "user.name", "Merge Test")
+        run(merger, "git", "switch", "-c", "main", "--track", "origin/main")
+        run(merger, "git", "merge", "--squash", "origin/feature/finish")
+        run(merger, "git", "commit", "-qm", "squash PR")
+        run(merger, "git", "push", "-q", "origin", "main")
+
+        pr_state = {
+            "version": 1,
+            "pr": 42,
+            "headBranch": "feature/finish",
+            "baseBranch": "main",
+            "returnBranch": "main",
+            "url": "https://example.invalid/pr/42",
+        }
+        write(
+            finish_project,
+            ".harness/local/git/pr-state.json",
+            json.dumps(pr_state, ensure_ascii=False, indent=2) + "\n",
+        )
+        merged_pr = {
+            "number": 42,
+            "state": "MERGED",
+            "mergedAt": "2026-09-22T00:00:00Z",
+            "headRefName": "feature/finish",
+            "headRefOid": finish_head,
+            "baseRefName": "main",
+            "url": "https://example.invalid/pr/42",
+        }
+
+        write(finish_project, "dirty.tmp", "dirty\n")
+        expect_blocked(
+            "PR_FINISH_DIRTY_WORKTREE",
+            lambda: pr_finish_preflight(finish_project, pr_data=merged_pr),
+        )
+        (finish_project / "dirty.tmp").unlink()
+
+        finish_gate = pr_finish_preflight(finish_project, pr_data=merged_pr)
+        assert finish_gate["status"] == "PASS", finish_gate
+        assert finish_gate["returnBranch"] == "main", finish_gate
+        assert finish_gate["gitAncestryMerged"] is False, finish_gate
+        assert finish_gate["mergedHeadOid"] == finish_head, finish_gate
+        assert finish_gate["mutationPlan"]["steps"][-1]["mode"] == "provider-verified-head", finish_gate
+        assert finish_gate["mutationPlan"]["steps"][-1]["argv"] == [
+            "git", "update-ref", "-d", "refs/heads/feature/finish", finish_head
+        ], finish_gate
+        assert finish_gate["mutationPlan"]["forceDeleteForbidden"] is True
+        assert finish_gate["mutationPlan"]["deleteRemoteBranch"] is False
+        for step in finish_gate["mutationPlan"]["steps"]:
+            run(finish_project, *step["argv"])
+        assert run(finish_project, "git", "branch", "--show-current") == "main"
+        missing = subprocess.run(
+            ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/finish"],
+            cwd=finish_project,
+        )
+        assert missing.returncode != 0
 
     print("GIT PREFLIGHT SELF-TEST: PASS")
     return 0

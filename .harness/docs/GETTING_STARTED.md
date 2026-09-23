@@ -2,11 +2,14 @@
 
 ## Требования
 
-- Git;
-- Python 3.11+ для dependency-free Harness tooling;
-- Codex или Claude Code.
+- Git — обязательный repository executable;
+- Python 3.11+ — обязательный runtime deterministic Harness tooling;
+- Codex **или** Claude Code — один runtime для agent-session; оба одновременно не требуются;
+- GitHub CLI `gh` — optional: нужен только для `GIT PR` / `GIT PR FINISH` и должен быть авторизован.
 
-Harness не зависит от product runtime будущего проекта.
+Harness не зависит от product runtime будущего проекта. Отсутствующий `gh` не блокирует Harness/Git workflow целиком, а только GitHub Pull Request capability.
+
+Полный dependency contract: [`DEPENDENCIES.md`](DEPENDENCIES.md).
 
 ## 1. Создай repository из template
 

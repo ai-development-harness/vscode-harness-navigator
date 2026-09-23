@@ -39,7 +39,7 @@
 
 Не вставляй в completion report длинный пересказ task/REQ/ADR. Durable details уже находятся в repository artifacts.
 
-## GIT CHECK / GIT COMMIT / GIT PUSH / GIT PR / GIT SYNC
+## GIT CHECK / GIT COMMIT / GIT PUSH / GIT PR / GIT PR FINISH / GIT SYNC
 
 - current branch/upstream;
 - Harness validation result;

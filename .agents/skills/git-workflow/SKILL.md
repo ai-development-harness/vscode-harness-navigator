@@ -4,7 +4,7 @@ description: Safe Git workflow using configured repository policy plus determini
 ---
 # git-workflow
 
-Используй для `GIT CHECK`, `GIT COMMIT`, `GIT PUSH`, `GIT PR`, `GIT SYNC` и валидных Git-chain segments.
+Используй для `GIT CHECK`, `GIT COMMIT`, `GIT PUSH`, `GIT PR`, `GIT PR FINISH`, `GIT SYNC` и валидных Git-chain segments.
 
 ## Главный принцип
 
@@ -110,6 +110,17 @@ PASS доказывает:
 - draft/reuse/title flags прочитаны из policy.
 
 Используй `mutationPlan` и policy буквально. Не подменяй provider/tool самостоятельно. Если `reuse_existing=true`, сначала переиспользуй существующий open PR той же head/base.
+
+После успешного создания/переиспользования PR сохрани local-only `.harness/local/git/pr-state.json` schema v1 с полями `pr`, `headBranch`, `baseBranch`, `returnBranch`, `url`. Для `returnBranch` используй предыдущую существующую локальную ветку из истории переключений Git, если она отличается от head; иначе configured/actual PR base. Файл находится под уже ignored `.harness/local/**` и не коммитится. `GIT PR FINISH` дополнительно сверяет текущий локальный HEAD с GitHub `headRefOid`, поэтому squash/rebase merge не требует Git ancestry.
+
+## GIT PR FINISH
+
+1. Запусти `python3 .harness/tools/git-preflight.py pr-finish --json`.
+2. При `BLOCKED` остановись и покажи `reasonCode`; не обходи его ручным switch/delete.
+3. При PASS выполни каждый `mutationPlan.steps[*].argv` строго по порядку.
+4. Не используй `git branch -D`. Для обычного merge deterministic plan использует `git branch -d`; для squash/rebase merge он может вернуть `git update-ref -d <ref> <verified-head-oid>` с обязательным old OID. Не меняй эту команду вручную, не удаляй удалённую ветку и не делай reset/rebase.
+5. Если любой step завершился ошибкой, остановись и сохрани local PR state.
+6. Только после успеха всех steps и `deleteStateFileAfterSuccess=true` удали указанный `stateFile`.
 
 ## GIT SYNC
 

@@ -18,25 +18,33 @@
           "canonical": "PROJECT INIT",
           "chainAllowed": false,
           "target": "none",
-          "input": "none"
+          "input": "none",
+          "summary": "Инициализировать проект под управлением Harness из локального описания проекта.",
+          "documentation": ".harness/docs/COMMANDS.md#command-project-init"
         },
         "STATUS": {
           "canonical": "PROJECT STATUS",
           "chainAllowed": false,
           "target": "none",
-          "input": "none"
+          "input": "none",
+          "summary": "Показать текущее состояние проекта, блокирующие проблемы и доступную работу.",
+          "documentation": ".harness/docs/COMMANDS.md#command-project-status"
         },
         "RECONCILE": {
           "canonical": "PROJECT RECONCILE",
           "chainAllowed": false,
           "target": "none",
-          "input": "none"
+          "input": "none",
+          "summary": "Сверить артефакты проекта с фактическим состоянием репозитория и подготовить необходимые исправления.",
+          "documentation": ".harness/docs/COMMANDS.md#command-project-reconcile"
         },
         "QUICK FIX": {
           "canonical": "PROJECT QUICK FIX:",
           "chainAllowed": false,
           "target": "none",
-          "input": "required"
+          "input": "required",
+          "summary": "Выполнить небольшое безопасное изменение без отдельного STEP.",
+          "documentation": ".harness/docs/COMMANDS.md#command-project-quick-fix"
         }
       },
       "transitions": []
@@ -50,49 +58,81 @@
           "canonical": "STEP ADD:",
           "chainAllowed": false,
           "target": "none",
-          "input": "required"
+          "input": "required",
+          "summary": "Создать новый STEP из краткого описания задачи.",
+          "documentation": ".harness/docs/COMMANDS.md#command-step-add"
+        },
+        "LIST": {
+          "canonical": "STEP LIST",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none",
+          "summary": "Показать компактный список STEP и их текущих состояний.",
+          "documentation": ".harness/docs/COMMANDS.md#command-step-list"
+        },
+        "SHOW": {
+          "canonical": "STEP SHOW STEP-NNN",
+          "chainAllowed": false,
+          "target": "step",
+          "input": "none",
+          "summary": "Показать подробное состояние выбранного STEP и связанный контекст выполнения.",
+          "documentation": ".harness/docs/COMMANDS.md#command-step-show"
         },
         "NEXT": {
           "canonical": "STEP NEXT",
           "chainAllowed": false,
           "target": "none",
-          "input": "none"
+          "input": "none",
+          "summary": "Рекомендовать следующий STEP, который можно выполнять.",
+          "documentation": ".harness/docs/COMMANDS.md#command-step-next"
         },
         "PLAN": {
           "canonical": "STEP PLAN STEP-NNN",
           "chainAllowed": true,
           "target": "step",
-          "input": "none"
+          "input": "none",
+          "summary": "Подготовить и независимо проверить план реализации STEP.",
+          "documentation": ".harness/docs/COMMANDS.md#command-step-plan"
         },
         "IMPLEMENT": {
           "canonical": "STEP IMPLEMENT STEP-NNN",
           "chainAllowed": true,
           "target": "step",
-          "input": "none"
+          "input": "none",
+          "summary": "Выполнить утверждённый план реализации выбранного STEP.",
+          "documentation": ".harness/docs/COMMANDS.md#command-step-implement"
         },
         "REVIEW": {
           "canonical": "STEP REVIEW STEP-NNN",
           "chainAllowed": true,
           "target": "step",
-          "input": "none"
+          "input": "none",
+          "summary": "Провести независимую проверку текущей реализации STEP.",
+          "documentation": ".harness/docs/COMMANDS.md#command-step-review"
         },
         "FIX": {
           "canonical": "STEP FIX STEP-NNN",
           "chainAllowed": true,
           "target": "step",
-          "input": "none"
+          "input": "none",
+          "summary": "Исправить подтверждённые замечания последней неуспешной проверки.",
+          "documentation": ".harness/docs/COMMANDS.md#command-step-fix"
         },
         "RUN": {
           "canonical": "STEP RUN STEP-NNN",
           "chainAllowed": false,
           "target": "step",
-          "input": "none"
+          "input": "none",
+          "summary": "Автоматически провести STEP через планирование, реализацию, проверку и циклы исправлений.",
+          "documentation": ".harness/docs/COMMANDS.md#command-step-run"
         },
         "AUDIT": {
           "canonical": "STEP AUDIT STEP-NNN",
           "chainAllowed": false,
           "target": "step",
-          "input": "none"
+          "input": "none",
+          "summary": "Провести формальный аудит STEP без изменения рабочего кода и данных проекта.",
+          "documentation": ".harness/docs/COMMANDS.md#command-step-audit"
         }
       },
       "transitions": [
@@ -139,19 +179,25 @@
           "canonical": "SKILL FIND:",
           "chainAllowed": false,
           "target": "none",
-          "input": "required"
+          "input": "required",
+          "summary": "Найти подходящие навыки и сформировать короткий список кандидатов.",
+          "documentation": ".harness/docs/COMMANDS.md#command-skill-find"
         },
         "INSTALL": {
           "canonical": "SKILL INSTALL:",
           "chainAllowed": false,
           "target": "none",
-          "input": "required"
+          "input": "required",
+          "summary": "Установить выбранный навык после проверки содержимого и происхождения.",
+          "documentation": ".harness/docs/COMMANDS.md#command-skill-install"
         },
         "CREATE": {
           "canonical": "SKILL CREATE:",
           "chainAllowed": false,
           "target": "none",
-          "input": "required"
+          "input": "required",
+          "summary": "Создать навык проекта для отсутствующего сценария работы.",
+          "documentation": ".harness/docs/COMMANDS.md#command-skill-create"
         }
       },
       "transitions": []
@@ -165,7 +211,9 @@
           "canonical": "GITHUB GENERATE TEMPLATES",
           "chainAllowed": false,
           "target": "none",
-          "input": "none"
+          "input": "none",
+          "summary": "Пересоздать шаблоны GitHub для задач и запросов на слияние с учётом текущего проекта.",
+          "documentation": ".harness/docs/COMMANDS.md#command-github-generate-templates"
         }
       },
       "transitions": []
@@ -179,7 +227,9 @@
           "canonical": "RELEASE CHECK",
           "chainAllowed": false,
           "target": "none",
-          "input": "none"
+          "input": "none",
+          "summary": "Проверить готовность проекта к выпуску новой версии.",
+          "documentation": ".harness/docs/COMMANDS.md#command-release-check"
         }
       },
       "transitions": []
@@ -191,17 +241,61 @@
         "APPLY": "UPDATE APPLY"
       },
       "commands": {
+        "HELP": {
+          "canonical": "HARNESS HELP",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none",
+          "summary": "Показать доступные команды Harness с краткими описаниями и ссылками на документацию.",
+          "documentation": ".harness/docs/COMMANDS.md#command-harness-help"
+        },
         "UPDATE CHECK": {
           "canonical": "HARNESS UPDATE CHECK",
           "chainAllowed": true,
           "target": "release-optional",
-          "input": "none"
+          "input": "none",
+          "summary": "Проверить доступный путь обновления Harness без внесения изменений.",
+          "documentation": ".harness/docs/COMMANDS.md#command-harness-update-check"
         },
         "UPDATE APPLY": {
           "canonical": "HARNESS UPDATE APPLY",
           "chainAllowed": true,
           "target": "release-optional",
-          "input": "none"
+          "input": "none",
+          "summary": "Применить допустимое обновление Harness.",
+          "documentation": ".harness/docs/COMMANDS.md#command-harness-update-apply"
+        },
+        "STATUS": {
+          "canonical": "HARNESS STATUS",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none",
+          "summary": "Показать текущее состояние Harness, Git и незавершённых выполнений команд.",
+          "documentation": ".harness/docs/COMMANDS.md#command-harness-status"
+        },
+        "RESUME": {
+          "canonical": "HARNESS RESUME",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none",
+          "summary": "Продолжить единственное выполнение, которое можно безопасно возобновить.",
+          "documentation": ".harness/docs/COMMANDS.md#command-harness-resume"
+        },
+        "DOCTOR": {
+          "canonical": "HARNESS DOCTOR",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none",
+          "summary": "Проверить обязательные зависимости, исправность Harness и доступность необязательных возможностей.",
+          "documentation": ".harness/docs/COMMANDS.md#command-harness-doctor"
+        },
+        "CONFIG": {
+          "canonical": "HARNESS CONFIG",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none",
+          "summary": "Показать фактически применяемую конфигурацию Harness и файлы, из которых она получена.",
+          "documentation": ".harness/docs/COMMANDS.md#command-harness-config"
         }
       },
       "transitions": [
@@ -226,31 +320,49 @@
           "canonical": "GIT CHECK",
           "chainAllowed": true,
           "target": "none",
-          "input": "none"
+          "input": "none",
+          "summary": "Показать результаты предварительной проверки Git и текущее состояние репозитория.",
+          "documentation": ".harness/docs/COMMANDS.md#command-git-check"
         },
         "COMMIT": {
           "canonical": "GIT COMMIT",
           "chainAllowed": true,
           "target": "none",
-          "input": "optional"
+          "input": "optional",
+          "summary": "Безопасно подготовить и создать локальный коммит в соответствии с политикой Git.",
+          "documentation": ".harness/docs/COMMANDS.md#command-git-commit"
         },
         "PUSH": {
           "canonical": "GIT PUSH",
           "chainAllowed": true,
           "target": "none",
-          "input": "none"
+          "input": "none",
+          "summary": "Отправить текущую ветку в настроенный удалённый репозиторий без принудительной отправки.",
+          "documentation": ".harness/docs/COMMANDS.md#command-git-push"
         },
         "PR": {
           "canonical": "GIT PR",
           "chainAllowed": true,
           "target": "none",
-          "input": "none"
+          "input": "none",
+          "summary": "Создать или переиспользовать запрос на слияние для опубликованной ветки.",
+          "documentation": ".harness/docs/COMMANDS.md#command-git-pr"
+        },
+        "PR FINISH": {
+          "canonical": "GIT PR FINISH",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none",
+          "summary": "Завершить локальную работу после слияния запроса: вернуться на исходную ветку и удалить локальную ветку запроса.",
+          "documentation": ".harness/docs/COMMANDS.md#command-git-pr-finish"
         },
         "SYNC": {
           "canonical": "GIT SYNC",
           "chainAllowed": false,
           "target": "none",
-          "input": "none"
+          "input": "none",
+          "summary": "Показать расхождение с удалённой веткой или выполнить разрешённую синхронизацию в режиме fast-forward.",
+          "documentation": ".harness/docs/COMMANDS.md#command-git-sync"
         }
       },
       "transitions": [
