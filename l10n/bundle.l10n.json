@@ -41,5 +41,20 @@
   "Phase": "Phase",
   "Select a value for {0}": "Select a value for {0}",
   "Any (clear this filter)": "Any (clear this filter)",
-  "Enter the STEP phase to filter by, or leave empty to clear it": "Enter the STEP phase to filter by, or leave empty to clear it"
+  "Enter the STEP phase to filter by, or leave empty to clear it": "Enter the STEP phase to filter by, or leave empty to clear it",
+  "Kind: {0}": "Kind: {0}",
+  "Outgoing relations: {0} · Incoming relations: {1} · Mentions: {2}": "Outgoing relations: {0} · Incoming relations: {1} · Mentions: {2}",
+  "Open the Harness artifact {0}": "Open the Harness artifact {0}",
+  "The Harness identifier {0} was not found in this project.": "The Harness identifier {0} was not found in this project.",
+  "Place the cursor on a Harness identifier or select a Harness artifact.": "Place the cursor on a Harness identifier or select a Harness artifact.",
+  "The Harness identifier {0} is not in this project.": "The Harness identifier {0} is not in this project.",
+  "No references to {0} were found.": "No references to {0} were found.",
+  "Relations of {0}": "Relations of {0}",
+  "Outgoing relations": "Outgoing relations",
+  "Incoming relations": "Incoming relations",
+  "Mentions": "Mentions",
+  "unresolved": "unresolved",
+  "{0} mention(s)": "{0} mention(s)",
+  "Find All References": "Find All References",
+  "Harness artifact identifier": "Harness artifact identifier"
 }

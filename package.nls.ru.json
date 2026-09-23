@@ -17,5 +17,8 @@
   "configuration.filterStatus.description": "Показывать только STEP артефакты с этим статусом в представлении Harness Artifacts.",
   "configuration.filterType.description": "Показывать только STEP артефакты с этим типом в представлении Harness Artifacts.",
   "configuration.filterPriority.description": "Показывать только STEP артефакты с этим приоритетом в представлении Harness Artifacts.",
-  "configuration.filterPhase.description": "Показывать только STEP артефакты с этой фазой в представлении Harness Artifacts."
+  "configuration.filterPhase.description": "Показывать только STEP артефакты с этой фазой в представлении Harness Artifacts.",
+  "command.findAllReferences.title": "Harness: Найти все ссылки",
+  "command.showRelations.title": "Harness: Показать связи",
+  "semanticToken.harnessArtifactId.description": "Идентификатор артефакта Harness"
 }

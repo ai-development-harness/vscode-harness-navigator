@@ -32,11 +32,66 @@ export interface ArtifactSnapshot {
   readonly references: readonly ArtifactReference[];
 }
 
-export interface ArtifactReference {
+/** Готовая позиция (0-based line/character) без повторного чтения файла. */
+export interface TextRange {
+  readonly startLine: number;
+  readonly startCharacter: number;
+  readonly endLine: number;
+  readonly endCharacter: number;
+}
+
+export interface ArtifactReference extends TextRange {
   readonly file: string;
   readonly offset: number;
   readonly length: number;
   readonly targetId: string;
+}
+
+/** Диапазон определения ID в canonical файле: frontmatter `id:` либо H1. */
+export interface DefinitionRange extends TextRange {
+  readonly file: string;
+}
+
+interface ParsedArtifact {
+  readonly artifact: Omit<Artifact, 'incomingRelations'>;
+  readonly definitions: readonly DefinitionRange[];
+}
+
+/**
+ * Считает line/character из offset, пока исходный текст в памяти. CRLF не
+ * влияет на character (\r остаётся в конце строки), BOM в начале файла
+ * VS Code отбрасывает из текста документа, поэтому сдвигаем первую строку.
+ */
+function createPositionResolver(source: string): (offset: number) => [number, number] {
+  const lineStarts = [0];
+  for (let index = 0; index < source.length; index += 1)
+    if (source.charCodeAt(index) === 10) lineStarts.push(index + 1);
+  const bom = source.charCodeAt(0) === 0xfeff ? 1 : 0;
+  return (offset) => {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+      const middle = (low + high + 1) >> 1;
+      if ((lineStarts[middle] as number) <= offset) low = middle;
+      else high = middle - 1;
+    }
+    return [low, offset - (lineStarts[low] as number) - (low === 0 ? bom : 0)];
+  };
+}
+
+function rangeOf(resolve: (offset: number) => [number, number], offset: number, length: number) {
+  const [startLine, startCharacter] = resolve(offset);
+  const [endLine, endCharacter] = resolve(offset + length);
+  return { startLine, startCharacter, endLine, endCharacter };
+}
+
+function sameStart(left: TextRange, right: TextRange): boolean {
+  return left.startLine === right.startLine && left.startCharacter === right.startCharacter;
+}
+
+/** Добавляет элементы циклом: `push(...items)` на десятках тысяч элементов упирается в лимит стека. */
+function appendAll<T>(target: T[], items: readonly T[]): void {
+  for (const item of items) target.push(item);
 }
 
 const MESSAGES = {
@@ -234,7 +289,7 @@ function isCandidateArtifact(file: string, kind: ArtifactKind): boolean {
   return new RegExp(`^${kind}-\\d+.*\\.md$`, 'u').test(path.basename(file));
 }
 
-function parseArtifact(file: string, root: string): Omit<Artifact, 'incomingRelations'> {
+function parseArtifact(file: string, root: string): ParsedArtifact {
   const source = readContainedMarkdown(root, file);
   const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/u.exec(source);
   const frontmatterSource = frontmatter?.[1];
@@ -249,6 +304,7 @@ function parseArtifact(file: string, root: string): Omit<Artifact, 'incomingRela
   const kind = artifactKind(id);
   const heading = /^#\s+(.+)$/mu.exec(source.slice(frontmatterBlock.length));
   const headingText = heading?.[1];
+  const headingIndex = heading?.index;
   if (
     kind === undefined ||
     headingText === undefined ||
@@ -271,14 +327,30 @@ function parseArtifact(file: string, root: string): Omit<Artifact, 'incomingRela
       for (const item of value)
         if (typeof item === 'string' && artifactKind(item) !== undefined) relations.add(item);
   }
+  // Диапазоны определения вычисляются один раз при parsing (а не по запросу
+  // hover/references): frontmatter `id:` и ID в H1 canonical файла.
+  const resolve = createPositionResolver(source);
+  const definitions: DefinitionRange[] = [];
+  const idLine = /^id:[ \t]*["']?(\S+?)["']?[ \t]*\r?$/mu.exec(frontmatterBlock);
+  if (idLine !== null && idLine[1] === id) {
+    const offset = idLine.index + idLine[0].indexOf(id, 3);
+    definitions.push({ file, ...rangeOf(resolve, offset, id.length) });
+  }
+  if (heading !== null && headingIndex !== undefined) {
+    const offset = frontmatterBlock.length + headingIndex + heading[0].indexOf(id);
+    definitions.push({ file, ...rangeOf(resolve, offset, id.length) });
+  }
   return {
-    id,
-    kind,
-    title: headingText.slice(id.length + 1).replace(/^[-—]\s*/u, ''),
-    status: typeof values.status === 'string' ? values.status : undefined,
-    file,
-    metadata: values,
-    outgoingRelations: [...relations],
+    artifact: {
+      id,
+      kind,
+      title: headingText.slice(id.length + 1).replace(/^[-—]\s*/u, ''),
+      status: typeof values.status === 'string' ? values.status : undefined,
+      file,
+      metadata: values,
+      outgoingRelations: [...relations],
+    },
+    definitions,
   };
 }
 
@@ -526,12 +598,23 @@ export class ArtifactIndex {
   private readonly candidates = new Map<string, Omit<Artifact, 'incomingRelations'>>();
   private readonly diagnostics: ProjectDiagnostic[] = [];
   private references: ArtifactReference[] = [];
+  // Индексы lookups обновляются вместе с `references` (см. `setFileReferences`):
+  // массивы внутри Map заменяются, а не мутируются, поэтому ранее выданные
+  // read-only результаты остаются стабильными.
+  private referencesByFile = new Map<string, readonly ArtifactReference[]>();
+  private referencesByTargetId = new Map<string, readonly ArtifactReference[]>();
+  private readonly definitionsByFile = new Map<string, readonly DefinitionRange[]>();
+  private readonly idByFile = new Map<string, string>();
 
   rebuild(project: ValidProjectState): void {
     this.byId.clear();
     this.candidates.clear();
+    this.definitionsByFile.clear();
+    this.idByFile.clear();
     this.diagnostics.splice(0);
     this.references = [];
+    this.referencesByFile = new Map();
+    this.referencesByTargetId = new Map();
     const directories: readonly [string, ArtifactKind][] = [
       [project.configuredPaths.taskDirectory, 'STEP'],
       [project.configuredPaths.requirements, 'REQ'],
@@ -559,9 +642,10 @@ export class ArtifactIndex {
       }
       for (const file of files.filter((item) => isCandidateArtifact(item, expected))) {
         try {
-          const parsed = parseArtifact(file, project.workspaceRoot);
+          const { artifact: parsed, definitions } = parseArtifact(file, project.workspaceRoot);
           if (parsed.kind !== expected) throw new Error('kind');
           this.candidates.set(file, parsed);
+          this.definitionsByFile.set(file, definitions);
         } catch {
           this.diagnostics.push(
             diagnostic('ArtifactParseError', MESSAGES.parseError, path.basename(file)),
@@ -585,6 +669,7 @@ export class ArtifactIndex {
           });
       }
     this.references = this.collectReferences(project.workspaceRoot, project.configuredPaths);
+    this.reindexReferences();
     this.rebuildReferenceDiagnostics();
   }
 
@@ -596,18 +681,16 @@ export class ArtifactIndex {
     const file = path.resolve(changedPath);
     if (!isHarnessAwareMarkdown(project.workspaceRoot, file, project.configuredPaths)) return;
     this.references = this.references.filter((reference) => reference.file !== file);
-    this.diagnostics.splice(
-      0,
-      this.diagnostics.length,
-      ...this.diagnostics.filter((item) => item.messageArguments[0] !== path.basename(file)),
-    );
+    this.definitionsByFile.delete(file);
+    this.retainDiagnostics((item) => item.messageArguments[0] !== path.basename(file));
     this.candidates.delete(file);
     const expected = this.expectedKind(project, file);
     if (expected !== undefined) {
       try {
-        const parsed = parseArtifact(file, project.workspaceRoot);
+        const { artifact: parsed, definitions } = parseArtifact(file, project.workspaceRoot);
         if (parsed.kind !== expected) throw new Error('kind');
         this.candidates.set(file, parsed);
+        this.definitionsByFile.set(file, definitions);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
           this.diagnostics.push(
@@ -625,14 +708,55 @@ export class ArtifactIndex {
       // изменение не запускает scan artifacts, но обновляет derived statuses.
       this.resetRequirementStatuses(project.workspaceRoot, project.configuredPaths);
     }
-    this.references.push(
-      ...this.referencesForFile(project.workspaceRoot, project.configuredPaths, file),
-    );
+    const fresh = this.referencesForFile(project.workspaceRoot, project.configuredPaths, file);
+    // Цикл вместо `push(...fresh)`: spread десятков тысяч аргументов упирается в лимит стека.
+    for (const reference of fresh) this.references.push(reference);
+    this.setFileReferences(file, fresh);
     this.rebuildReferenceDiagnostics();
   }
 
   get(id: string): Artifact | undefined {
     return this.byId.get(id);
+  }
+
+  /** Artifact, canonical файл которого равен `file` (Map lookup, без scan). */
+  getByFile(file: string): Artifact | undefined {
+    const id = this.idByFile.get(path.resolve(file));
+    return id === undefined ? undefined : this.byId.get(id);
+  }
+
+  /** Известные ID без копирования и сортировки snapshot (для completion). */
+  artifactIds(): IterableIterator<string> {
+    return this.byId.keys();
+  }
+
+  /** References одного файла, отсортированные по offset. */
+  referencesInFile(file: string): readonly ArtifactReference[] {
+    return this.referencesByFile.get(path.resolve(file)) ?? [];
+  }
+
+  /**
+   * Все references на `id` из общего Reference Index. При
+   * `includeDeclaration=false` canonical definition (frontmatter `id:` и H1)
+   * исключается.
+   */
+  referencesTo(id: string, includeDeclaration = true): readonly ArtifactReference[] {
+    const all = this.referencesByTargetId.get(id) ?? [];
+    if (includeDeclaration) return all;
+    const definitions = this.definitionRangesOf(id);
+    if (definitions.length === 0) return all;
+    return all.filter(
+      (reference) =>
+        !definitions.some(
+          (definition) => definition.file === reference.file && sameStart(definition, reference),
+        ),
+    );
+  }
+
+  /** Диапазоны frontmatter `id:` и H1 canonical файла artifact. */
+  definitionRangesOf(id: string): readonly DefinitionRange[] {
+    const artifact = this.byId.get(id);
+    return artifact === undefined ? [] : (this.definitionsByFile.get(artifact.file) ?? []);
   }
   snapshot(): ArtifactSnapshot {
     return {
@@ -662,11 +786,8 @@ export class ArtifactIndex {
    * следующий файл публикуется детерминированно без полного scan workspace. */
   private materializeCandidates(): void {
     this.byId.clear();
-    this.diagnostics.splice(
-      0,
-      this.diagnostics.length,
-      ...this.diagnostics.filter((item) => item.category !== 'DuplicateArtifactId'),
-    );
+    this.retainDiagnostics((item) => item.category !== 'DuplicateArtifactId');
+    this.idByFile.clear();
     for (const candidate of [...this.candidates.values()].sort((left, right) =>
       left.file.localeCompare(right.file),
     )) {
@@ -676,8 +797,55 @@ export class ArtifactIndex {
         );
       } else {
         this.byId.set(candidate.id, { ...candidate, incomingRelations: [] });
+        this.idByFile.set(candidate.file, candidate.id);
       }
     }
+  }
+
+  /** Полная пересборка обоих lookup-индексов из `this.references`. */
+  private reindexReferences(): void {
+    const byFile = new Map<string, ArtifactReference[]>();
+    const byTarget = new Map<string, ArtifactReference[]>();
+    for (const reference of this.references) {
+      const fileList = byFile.get(reference.file) ?? [];
+      fileList.push(reference);
+      byFile.set(reference.file, fileList);
+      const targetList = byTarget.get(reference.targetId) ?? [];
+      targetList.push(reference);
+      byTarget.set(reference.targetId, targetList);
+    }
+    for (const list of byFile.values()) list.sort((a, b) => a.offset - b.offset);
+    this.referencesByFile = byFile;
+    this.referencesByTargetId = byTarget;
+  }
+
+  /** Атомарно заменяет references одного файла в обоих lookup-индексах. */
+  private setFileReferences(file: string, fresh: readonly ArtifactReference[]): void {
+    // Список каждого затронутого targetId пересобирается ровно один раз:
+    // файл с десятками тысяч повторов одного ID иначе давал O(k^2) на
+    // фильтрации и копировании spread-ом и блокировал Extension Host.
+    const freshByTarget = new Map<string, ArtifactReference[]>();
+    for (const reference of fresh) {
+      const group = freshByTarget.get(reference.targetId) ?? [];
+      group.push(reference);
+      freshByTarget.set(reference.targetId, group);
+    }
+    const affected = new Set(freshByTarget.keys());
+    for (const old of this.referencesByFile.get(file) ?? []) affected.add(old.targetId);
+    for (const targetId of affected) {
+      const merged = (this.referencesByTargetId.get(targetId) ?? []).filter(
+        (item) => item.file !== file,
+      );
+      for (const reference of freshByTarget.get(targetId) ?? []) merged.push(reference);
+      if (merged.length === 0) this.referencesByTargetId.delete(targetId);
+      else this.referencesByTargetId.set(targetId, merged);
+    }
+    if (fresh.length === 0) this.referencesByFile.delete(file);
+    else
+      this.referencesByFile.set(
+        file,
+        [...fresh].sort((a, b) => a.offset - b.offset),
+      );
   }
 
   private resetRequirementStatuses(root: string, paths: ConfiguredPaths): void {
@@ -689,12 +857,19 @@ export class ArtifactIndex {
     this.applyRequirementStatuses(root, paths);
   }
 
+  /**
+   * Оставляет в `diagnostics` только элементы, удовлетворяющие `keep`, на месте
+   * и без variadic-вызова: `splice(0, n, ...filtered)` с >~120k элементов
+   * бросает RangeError (лимит стека) и рассинхронизирует индекс.
+   */
+  private retainDiagnostics(keep: (item: ProjectDiagnostic) => boolean): void {
+    let written = 0;
+    for (const item of this.diagnostics) if (keep(item)) this.diagnostics[written++] = item;
+    this.diagnostics.length = written;
+  }
+
   private rebuildRelations(): void {
-    this.diagnostics.splice(
-      0,
-      this.diagnostics.length,
-      ...this.diagnostics.filter((item) => item.category !== 'InvalidArtifactReference'),
-    );
+    this.retainDiagnostics((item) => item.category !== 'InvalidArtifactReference');
     for (const artifact of this.byId.values()) {
       this.byId.set(artifact.id, { ...artifact, incomingRelations: [] });
     }
@@ -715,11 +890,7 @@ export class ArtifactIndex {
   }
 
   private rebuildReferenceDiagnostics(): void {
-    this.diagnostics.splice(
-      0,
-      this.diagnostics.length,
-      ...this.diagnostics.filter((item) => !item.detail.startsWith('reference:')),
-    );
+    this.retainDiagnostics((item) => !item.detail.startsWith('reference:'));
     for (const reference of this.references) {
       if (this.byId.has(reference.targetId)) continue;
       this.diagnostics.push({
@@ -747,11 +918,7 @@ export class ArtifactIndex {
           this.byId.set(artifact.id, { ...artifact, status: status.trim() });
       }
       if (source.includes('REQ-') && parsedRows === 0) throw new Error('ProjectionFormatError');
-      this.diagnostics.splice(
-        0,
-        this.diagnostics.length,
-        ...this.diagnostics.filter((item) => item.category !== 'ProjectionReadError'),
-      );
+      this.retainDiagnostics((item) => item.category !== 'ProjectionReadError');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
         this.diagnostics.push(diagnostic('ProjectionReadError', MESSAGES.projectionError));
@@ -787,7 +954,7 @@ export class ArtifactIndex {
       for (const file of files.filter((item) => isHarnessAwareMarkdown(root, item, paths))) {
         if (seen.has(file)) continue;
         seen.add(file);
-        references.push(...this.referencesForFile(root, paths, file));
+        appendAll(references, this.referencesForFile(root, paths, file));
       }
     }
     for (const relative of [
@@ -799,7 +966,7 @@ export class ArtifactIndex {
     ]) {
       const file = path.resolve(root, relative);
       if (!isHarnessAwareMarkdown(root, file, paths)) continue;
-      if (!seen.has(file)) references.push(...this.referencesForFile(root, paths, file));
+      if (!seen.has(file)) appendAll(references, this.referencesForFile(root, paths, file));
     }
     return references;
   }
@@ -812,11 +979,13 @@ export class ArtifactIndex {
     if (!isHarnessAwareMarkdown(root, file, paths)) return [];
     try {
       const source = readContainedMarkdown(root, file);
+      const resolve = createPositionResolver(source);
       return [...source.matchAll(/\b(?:STEP|REQ|ADR|OQ)-\d+\b/gu)].map((match) => ({
         file,
         offset: match.index,
         length: match[0].length,
         targetId: match[0],
+        ...rangeOf(resolve, match.index, match[0].length),
       }));
     } catch {
       // Удалённый или malformed reference-файл не отменяет остальные индексы.

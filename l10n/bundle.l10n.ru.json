@@ -40,5 +40,20 @@
   "Phase": "Фаза",
   "Select a value for {0}": "Выберите значение для {0}",
   "Any (clear this filter)": "Любое (очистить этот фильтр)",
-  "Enter the STEP phase to filter by, or leave empty to clear it": "Введите фазу STEP для фильтрации или оставьте поле пустым, чтобы очистить фильтр"
+  "Enter the STEP phase to filter by, or leave empty to clear it": "Введите фазу STEP для фильтрации или оставьте поле пустым, чтобы очистить фильтр",
+  "Kind: {0}": "Тип: {0}",
+  "Outgoing relations: {0} · Incoming relations: {1} · Mentions: {2}": "Исходящие связи: {0} · Входящие связи: {1} · Упоминания: {2}",
+  "Open the Harness artifact {0}": "Открыть артефакт Harness {0}",
+  "The Harness identifier {0} was not found in this project.": "Идентификатор Harness {0} не найден в этом проекте.",
+  "Place the cursor on a Harness identifier or select a Harness artifact.": "Поставьте курсор на идентификатор Harness или выберите артефакт Harness.",
+  "The Harness identifier {0} is not in this project.": "Идентификатора Harness {0} нет в этом проекте.",
+  "No references to {0} were found.": "Ссылки на {0} не найдены.",
+  "Relations of {0}": "Связи {0}",
+  "Outgoing relations": "Исходящие связи",
+  "Incoming relations": "Входящие связи",
+  "Mentions": "Упоминания",
+  "unresolved": "не найден",
+  "{0} mention(s)": "Упоминаний: {0}",
+  "Find All References": "Найти все ссылки",
+  "Harness artifact identifier": "Идентификатор артефакта Harness"
 }

@@ -690,9 +690,11 @@ suite('extension lifecycle (Extension Host)', () => {
     // поэтому он не может быть статическим импортом.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const extensionModule = require(extension.extensionPath + '/dist/extension.js') as {
+      activate: (context: vscode.ExtensionContext) => unknown;
       deactivate: () => void;
       getActiveRegistrationCount: () => number;
     };
+    const registrationsBefore = extensionModule.getActiveRegistrationCount();
 
     assert.ok(
       extensionModule.getActiveRegistrationCount() > 0,
@@ -711,6 +713,16 @@ suite('extension lifecycle (Extension Host)', () => {
       extensionModule.deactivate();
     });
     assert.equal(extensionModule.getActiveRegistrationCount(), 0);
+
+    // activate → deactivate → activate: повторная активация регистрирует ровно
+    // тот же набор (providers/commands/diagnostics STEP-005 не накапливаются и
+    // не теряются) и оставляет Extension Host рабочим для следующих тестов.
+    extensionModule.activate({ subscriptions: [] } as unknown as vscode.ExtensionContext);
+    assert.equal(extensionModule.getActiveRegistrationCount(), registrationsBefore);
+    extensionModule.deactivate();
+    assert.equal(extensionModule.getActiveRegistrationCount(), 0);
+    extensionModule.activate({ subscriptions: [] } as unknown as vscode.ExtensionContext);
+    assert.equal(extensionModule.getActiveRegistrationCount(), registrationsBefore);
   });
 });
 
