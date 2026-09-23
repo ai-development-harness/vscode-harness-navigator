@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  readFileSync,
   constants,
   mkdtempSync,
   mkdirSync,
@@ -792,5 +793,143 @@ test('F-021/F-024: watcher-обработчик вызывает инкреме�
       'STEP-001 уже удалён с диска, но остаётся в индексе: полный rebuild потерял бы его, ' +
         'поэтому его присутствие доказывает именно инкрементальный updatePath, а не rebuild',
     );
+  });
+});
+
+// STEP-005: индексированные lookups для navigation providers.
+function positionOf(text: string, offset: number): [number, number] {
+  const before = text.slice(0, offset).split('\n');
+  return [before.length - 1, (before[before.length - 1] as string).length];
+}
+
+test('lookups: referencesTo/referencesInFile/getByFile/artifactIds после rebuild', () => {
+  withProject((root) => {
+    write(root, 'planning/tasks/STEP-001.md', artifact('STEP-001', 'requirements:\n  - REQ-001\n'));
+    write(root, 'docs/requirements/REQ-001.md', artifact('REQ-001', 'status: draft\n'));
+    write(root, 'docs/guides/usage.md', 'См. REQ-001 и REQ-001.\n');
+    const index = new ArtifactIndex();
+    index.rebuild(project(root));
+    const artifactFile = index.get('REQ-001')?.file as string;
+    assert.equal(index.getByFile(artifactFile)?.id, 'REQ-001');
+    assert.deepEqual([...index.artifactIds()].sort(), ['REQ-001', 'STEP-001']);
+    const all = index.referencesTo('REQ-001');
+    // frontmatter id + H1 + STEP-001 relation + 2 упоминания в guide
+    assert.equal(all.length, 5);
+    const definitions = index.definitionRangesOf('REQ-001');
+    assert.equal(definitions.length, 2);
+    const withoutDeclaration = index.referencesTo('REQ-001', false);
+    assert.equal(withoutDeclaration.length, 3);
+    assert.ok(withoutDeclaration.every((item) => item.file !== artifactFile));
+    assert.equal(index.referencesInFile(path.join(root, 'docs/guides/usage.md')).length, 2);
+    assert.deepEqual(index.referencesTo('REQ-404'), []);
+  });
+});
+
+test('lookups: line/character совпадают с offset, включая CRLF', () => {
+  withProject((root) => {
+    const source = artifact('REQ-001', 'status: draft\n').replace(/\n/gu, '\r\n');
+    write(root, 'docs/requirements/REQ-001.md', source);
+    write(root, 'docs/guides/usage.md', 'a\r\nb REQ-001 c\r\n\r\nREQ-001\r\n');
+    const index = new ArtifactIndex();
+    index.rebuild(project(root));
+    for (const file of ['docs/requirements/REQ-001.md', 'docs/guides/usage.md']) {
+      const text = readFileSync(path.join(root, file), 'utf8');
+      for (const reference of index.referencesInFile(path.join(root, file))) {
+        const [line, character] = positionOf(text, reference.offset);
+        assert.equal(reference.startLine, line);
+        assert.equal(reference.startCharacter, character);
+        assert.equal(reference.endCharacter, character + reference.length);
+      }
+    }
+    // definition ranges совпадают с references canonical файла
+    for (const definition of index.definitionRangesOf('REQ-001')) {
+      assert.ok(
+        index
+          .referencesInFile(definition.file)
+          .some(
+            (item) =>
+              item.startLine === definition.startLine &&
+              item.startCharacter === definition.startCharacter,
+          ),
+      );
+    }
+  });
+});
+
+test('lookups обновляются в updatePath: изменение и удаление файла, старый snapshot стабилен', () => {
+  withProject((root) => {
+    write(root, 'docs/requirements/REQ-001.md', artifact('REQ-001', 'status: draft\n'));
+    write(root, 'docs/guides/usage.md', 'REQ-001\n');
+    const index = new ArtifactIndex();
+    const state = project(root);
+    index.rebuild(state);
+    const before = index.snapshot();
+    const guide = path.join(root, 'docs/guides/usage.md');
+    assert.equal(index.referencesTo('REQ-001', false).length, 1);
+    write(root, 'docs/guides/usage.md', '\nREQ-001 и REQ-001\nREQ-002\n');
+    index.updatePath(state, guide);
+    assert.equal(index.referencesTo('REQ-001', false).length, 2);
+    assert.equal(index.referencesTo('REQ-002').length, 1);
+    assert.equal(index.referencesInFile(guide)[0]?.startLine, 1);
+    assert.equal(index.snapshot().references.length, index.referencesTo('REQ-001').length + 1);
+    unlinkSync(guide);
+    index.updatePath(state, guide);
+    assert.deepEqual(index.referencesTo('REQ-001', false), []);
+    assert.deepEqual(index.referencesInFile(guide), []);
+    // изменение canonical файла пересчитывает definition ranges
+    const canonical = path.join(root, 'docs/requirements/REQ-001.md');
+    write(root, 'docs/requirements/REQ-001.md', artifact('REQ-001', 'status: draft\nx: y\n'));
+    index.updatePath(state, canonical);
+    assert.equal(index.definitionRangesOf('REQ-001').length, 2);
+    unlinkSync(canonical);
+    index.updatePath(state, canonical);
+    assert.deepEqual(index.definitionRangesOf('REQ-001'), []);
+    assert.equal(index.getByFile(canonical), undefined);
+    assert.equal(before.references.length, 3);
+  });
+});
+
+test('updatePath файла с десятками тысяч повторов одного ID остаётся линейным', () => {
+  withProject((root) => {
+    write(root, 'planning/tasks/STEP-001.md', artifact('STEP-001', 'status: planned\n'));
+    const index = new ArtifactIndex();
+    index.rebuild(project(root));
+    const relative = 'docs/architecture.md';
+    const repeats = 60_000;
+    write(root, relative, `${'STEP-001 '.repeat(repeats)}\n`);
+    const started = process.hrtime.bigint();
+    index.updatePath(project(root), path.join(root, relative));
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    // Квадратичная реализация давала десятки секунд на таких данных; бюджет
+    // намеренно щедрый, чтобы тест не зависел от скорости CI.
+    assert.ok(elapsedMs < 3000, `updatePath took ${elapsedMs} ms`);
+    const inFile = index.referencesInFile(path.join(root, relative));
+    assert.equal(inFile.length, repeats);
+    assert.equal(index.referencesTo('STEP-001', false).length, repeats);
+    // Повторное обновление того же файла заменяет, а не накапливает references.
+    write(root, relative, 'STEP-001\n');
+    index.updatePath(project(root), path.join(root, relative));
+    assert.equal(index.referencesTo('STEP-001', false).length, 1);
+  });
+});
+
+test('rebuild и последующий updatePath переживают ≥130k упоминаний без RangeError', () => {
+  withProject((root) => {
+    write(root, 'planning/tasks/STEP-1.md', artifact('STEP-1', 'status: planned\n'));
+    // 130k коротких упоминаний остаются меньше MAXIMUM_MARKDOWN_SIZE_BYTES.
+    const repeats = 130_000;
+    // Один файл с очень большим числом references (spread в push упирался в
+    // лимит стека) и два файла с неизвестным ID (много diagnostics для splice).
+    write(root, 'docs/architecture.md', `${'STEP-1 '.repeat(repeats)}\n`);
+    write(root, 'docs/notes-a.md', `${'STEP-9 '.repeat(repeats / 2)}\n`);
+    write(root, 'docs/notes-b.md', `${'STEP-9 '.repeat(repeats / 2)}\n`);
+    const index = new ArtifactIndex();
+    index.rebuild(project(root));
+    assert.equal(index.referencesTo('STEP-1', false).length, repeats);
+    assert.ok(index.snapshot().diagnostics.length >= repeats);
+    write(root, 'docs/notes-c.md', 'STEP-1\n');
+    index.updatePath(project(root), path.join(root, 'docs/notes-c.md'));
+    assert.equal(index.referencesTo('STEP-1', false).length, repeats + 1);
+    assert.equal(index.referencesInFile(path.join(root, 'docs/notes-c.md')).length, 1);
   });
 });

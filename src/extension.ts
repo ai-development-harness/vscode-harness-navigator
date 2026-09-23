@@ -12,6 +12,19 @@ import {
 import { FocusTreeDataProvider } from './views/focusView';
 import { registerGoToArtifactCommand } from './commands/goToArtifact';
 import { registerCopyArtifactCommands } from './commands/copyArtifact';
+import { registerFindAllReferencesCommand } from './commands/findAllReferences';
+import { registerShowRelationsCommand } from './commands/showRelations';
+import { NavigationContext, MARKDOWN_FILE_SELECTOR } from './navigation/harnessScope';
+import { HarnessDefinitionProvider } from './navigation/definitionProvider';
+import { HarnessDocumentLinkProvider } from './navigation/documentLinkProvider';
+import { HarnessHoverProvider } from './navigation/hoverProvider';
+import { HarnessCompletionProvider } from './navigation/completionProvider';
+import { HarnessReferenceProvider } from './navigation/referenceProvider';
+import {
+  HARNESS_TOKEN_LEGEND,
+  HarnessSemanticTokensProvider,
+} from './navigation/semanticTokensProvider';
+import { UnknownIdDiagnostics } from './navigation/unknownIdDiagnostics';
 
 /**
  * Минимальный, test-observable результат активации. Намеренно ограничен
@@ -112,6 +125,57 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
     ),
   );
   for (const disposable of registerCopyArtifactCommands()) registry.register(disposable);
+
+  // STEP-005: один provider на язык; root резолвится по документу (multi-root).
+  const navigation = new NavigationContext(projectStates, output);
+  registry.register(
+    vscode.languages.registerDefinitionProvider(
+      MARKDOWN_FILE_SELECTOR,
+      new HarnessDefinitionProvider(navigation),
+    ),
+  );
+  registry.register(
+    vscode.languages.registerDocumentLinkProvider(
+      MARKDOWN_FILE_SELECTOR,
+      new HarnessDocumentLinkProvider(navigation),
+    ),
+  );
+  registry.register(
+    vscode.languages.registerHoverProvider(
+      MARKDOWN_FILE_SELECTOR,
+      new HarnessHoverProvider(navigation),
+    ),
+  );
+  registry.register(
+    vscode.languages.registerCompletionItemProvider(
+      MARKDOWN_FILE_SELECTOR,
+      new HarnessCompletionProvider(navigation),
+      '-',
+    ),
+  );
+  registry.register(
+    vscode.languages.registerReferenceProvider(
+      MARKDOWN_FILE_SELECTOR,
+      new HarnessReferenceProvider(navigation),
+    ),
+  );
+  const semanticTokens = registry.register(new HarnessSemanticTokensProvider(navigation));
+  registry.register(
+    vscode.languages.registerDocumentSemanticTokensProvider(
+      MARKDOWN_FILE_SELECTOR,
+      semanticTokens,
+      HARNESS_TOKEN_LEGEND,
+    ),
+  );
+  const unknownIdDiagnostics = registry.register(new UnknownIdDiagnostics(navigation));
+  registry.register(
+    projectStates.onDidChangeProjectModel(() => {
+      semanticTokens.fire();
+      unknownIdDiagnostics.refreshAll();
+    }),
+  );
+  registry.register(registerFindAllReferencesCommand(navigation));
+  registry.register(registerShowRelationsCommand(navigation));
 
   activeRegistry = registry;
   activeProjectStates = projectStates;

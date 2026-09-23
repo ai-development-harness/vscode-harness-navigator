@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { ARTIFACT_DIAGNOSTIC_MESSAGES } from '../../src/projectModel/artifactIndex';
 import { VIEW_MESSAGE_VALUES } from '../../src/views/viewMessages';
+import { NAVIGATION_MESSAGE_VALUES } from '../../src/navigation/navigationMessages';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../..');
@@ -49,6 +50,13 @@ test('ключи диагностик артефактов присутству�
 
 test('ключи Artifacts/Focus View и Go to Artifact присутствуют в обоих runtime bundle', () => {
   for (const key of VIEW_MESSAGE_VALUES) {
+    assert.ok(bundleL10nEn[key] !== undefined, `English key: ${key}`);
+    assert.ok(bundleL10nRu[key] !== undefined, `Russian key: ${key}`);
+  }
+});
+
+test('ключи navigation/relations присутствуют в обоих runtime bundle', () => {
+  for (const key of NAVIGATION_MESSAGE_VALUES) {
     assert.ok(bundleL10nEn[key] !== undefined, `English key: ${key}`);
     assert.ok(bundleL10nRu[key] !== undefined, `Russian key: ${key}`);
   }

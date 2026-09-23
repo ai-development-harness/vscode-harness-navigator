@@ -86,6 +86,10 @@ export class ProjectStateService implements vscode.Disposable {
     this.projectModelChangeEmitter.fire();
   }
 
+  getState(folder: vscode.WorkspaceFolder): ProjectState | undefined {
+    return this.states.get(folder.uri.toString());
+  }
+
   getIndex(folder: vscode.WorkspaceFolder): ArtifactIndex | undefined {
     return this.indexes.get(folder.uri.toString());
   }

@@ -79,6 +79,14 @@
       {
         "command": "harnessNavigator.copyArtifactPath",
         "title": "%command.copyArtifactPath.title%"
+      },
+      {
+        "command": "harnessNavigator.findAllReferences",
+        "title": "%command.findAllReferences.title%"
+      },
+      {
+        "command": "harnessNavigator.showRelations",
+        "title": "%command.showRelations.title%"
       }
     ],
     "menus": {
@@ -107,6 +115,16 @@
         {
           "command": "harnessNavigator.copyArtifactPath",
           "when": "view == harnessNavigator.artifacts && viewItem == harnessArtifactItem || view == harnessNavigator.focus && viewItem == harnessArtifactItem"
+        },
+        {
+          "command": "harnessNavigator.findAllReferences",
+          "when": "view == harnessNavigator.artifacts && viewItem == harnessArtifactItem || view == harnessNavigator.focus && viewItem == harnessArtifactItem",
+          "group": "navigation@1"
+        },
+        {
+          "command": "harnessNavigator.showRelations",
+          "when": "view == harnessNavigator.artifacts && viewItem == harnessArtifactItem || view == harnessNavigator.focus && viewItem == harnessArtifactItem",
+          "group": "navigation@2"
         }
       ],
       "commandPalette": [
@@ -133,6 +151,26 @@
         {
           "command": "harnessNavigator.copyArtifactPath",
           "when": "false"
+        },
+        {
+          "command": "harnessNavigator.findAllReferences",
+          "when": "editorLangId == markdown"
+        },
+        {
+          "command": "harnessNavigator.showRelations",
+          "when": "editorLangId == markdown"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "harnessNavigator.findAllReferences",
+          "when": "resourceLangId == markdown",
+          "group": "navigation@10"
+        },
+        {
+          "command": "harnessNavigator.showRelations",
+          "when": "resourceLangId == markdown",
+          "group": "navigation@11"
         }
       ]
     },
@@ -217,7 +255,24 @@
           "description": "%configuration.filterPhase.description%"
         }
       }
-    }
+    },
+    "semanticTokenTypes": [
+      {
+        "id": "harnessArtifactId",
+        "superType": "variable",
+        "description": "%semanticToken.harnessArtifactId.description%"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "markdown",
+        "scopes": {
+          "harnessArtifactId": [
+            "constant.other.reference"
+          ]
+        }
+      }
+    ]
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.unit.json && tsc --noEmit -p tsconfig.test.json",
