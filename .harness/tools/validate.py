@@ -54,6 +54,8 @@ from command_transitions import (
     validate_transition_table,
 )
 from command_references import DEPRECATED_COMMAND_PATTERNS, find_deprecated_commands
+from context_budget import evaluate_context_budget
+from document_contract import DocumentError, split_frontmatter
 from harness_config import (
     ConfigError,
     get,
@@ -62,6 +64,7 @@ from harness_config import (
     load_update_policy,
     local_brief_path,
     max_fix_review_cycles,
+    verification_command_timeout_seconds,
     protocol_path,
     repository_path,
     resolve_repo_path,
@@ -71,6 +74,33 @@ from harness_config import (
 )
 from project_integrity import validate_project_integrity
 from project_migration import legacy_manual_bypass_allowed, legacy_schema_pending
+from reasoning_boundaries import projection_drift_errors
+
+
+# Claude-specific defense-in-depth. Эти rules не являются canonical Git policy:
+# они только мешают Claude Code обходить deterministic git-action.py через
+# обычный Bash/PowerShell tool. Runtime-neutral source of truth остаётся
+# `.harness/git-policy.toml` + git_preflight/git_action.
+CLAUDE_REQUIRED_GIT_DENY_RULES = {
+    "Bash(git commit *)",
+    "Bash(git push *)",
+    "Bash(git merge *)",
+    "Bash(git branch -d *)",
+    "Bash(git branch -D *)",
+    "Bash(git update-ref -d *)",
+    "Bash(git reset --hard *)",
+    "Bash(git clean -f*)",
+    "Bash(git clean --force *)",
+    "PowerShell(git commit *)",
+    "PowerShell(git push *)",
+    "PowerShell(git merge *)",
+    "PowerShell(git branch -d *)",
+    "PowerShell(git branch -D *)",
+    "PowerShell(git update-ref -d *)",
+    "PowerShell(git reset --hard *)",
+    "PowerShell(git clean -f*)",
+    "PowerShell(git clean --force *)",
+}
 
 
 # Безопасно вызвать Git и вернуть (exit_code, stdout). Ошибка запуска Git превращается в код 127, а не необработанное исключение.
@@ -151,6 +181,12 @@ def validate_harness_policy_schema(policy: dict, errors: list[str]) -> None:
             isinstance(item, str) and item.strip() for item in value
         ):
             errors.append(f"harness-policy: {key} must be a string array")
+        elif len(set(value)) != len(value):
+            duplicates = sorted({item for item in value if value.count(item) > 1})
+            errors.append(
+                f"harness-policy: {key} must not contain duplicates: "
+                + ", ".join(duplicates)
+            )
 
     bool_keys = (
         "check_config_parameter_comments",
@@ -213,26 +249,18 @@ def text_file(path: Path) -> bool:
 
 
 # Разобрать только простой scalar-subset YAML frontmatter, который использует Harness. Полный YAML parser намеренно не добавляется как dependency.
-def parse_markdown_frontmatter(path: Path) -> dict[str, str]:
-    """Parse the simple top-level scalar subset used by Harness skill/agent frontmatter."""
+def parse_markdown_frontmatter(path: Path) -> dict:
+    """Прочитать Markdown frontmatter через canonical restricted YAML parser.
+
+    Skill/agent documents используют тот же YAML subset, что и REQ/ADR/STEP.
+    Ошибка parsing fail-closed для caller-а через пустой result, как и прежний
+    local helper, но отдельной несовместимой YAML реализации больше нет.
+    """
     try:
-        text = path.read_text(encoding="utf-8")
-    except Exception:
+        data, _body = split_frontmatter(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, DocumentError):
         return {}
-    if not text.startswith("---\n"):
-        return {}
-    end = text.find("\n---\n", 4)
-    if end < 0:
-        return {}
-    result: dict[str, str] = {}
-    for line in text[4:end].splitlines():
-        if not line or line[0].isspace() or ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        value = value.strip().strip('"').strip("'")
-        if value:
-            result[key.strip()] = value
-    return result
+    return data or {}
 
 
 
@@ -437,66 +465,19 @@ def validate_update_graph(root: Path, errors: list[str]) -> None:
 
 
 
+
 # ---------------------------------------------------------------------------
-# Главный orchestration flow validator-а.
-# Порядок намеренно идёт от bootstrap/config boundaries к project/document/Git
-# checks: downstream validator нельзя запускать на config, которому уже нельзя
-# доверять.
+# Крупные validation surfaces.
+# main() оставляет только bootstrap/fail-fast orchestration; каждая функция ниже
+# получает явные inputs и дописывает errors/warnings без скрытого global state.
 # ---------------------------------------------------------------------------
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["ci", "commit", "manual"], default="manual")
-    args = parser.parse_args()
-
-    root = repo_root()
-    # Ошибки намеренно накапливаются: CI/пользователь за один запуск получает
-    # полный список drift/corruption. warnings не делают repository невалидным.
-    errors: list[str] = []
-    warnings: list[str] = []
-
-    # manifest — bootstrap config. Все остальные repository paths разрешаются
-    # через единый harness_config layer.
-    try:
-        load_manifest(root)
-        policy_path = repository_path(root, "harnessPolicy")
-    except ConfigError as exc:
-        print(f"ERROR: invalid Harness manifest/config: {exc}", file=sys.stderr)
-        return 2
-
-    if not policy_path.exists():
-        print(f"ERROR: missing configured harness policy: {policy_path}", file=sys.stderr)
-        return 2
-
-    try:
-        policy = load_toml(policy_path)
-    except Exception as exc:
-        print(f"ERROR: invalid harness policy TOML: {exc}", file=sys.stderr)
-        return 2
-
-    # Все filesystem-sensitive validation surfaces опираются только на Git index
-    # и явно configured paths. Ignored/vendor/generated TOML вне tracked state
-    # не должны становиться скрытой частью Harness contract.
-    files, git_blocker = tracked_files(root)
-    if git_blocker:
-        print("HARNESS VALIDATION: BLOCKED")
-        print(f"  - {git_blocker}")
-        return 2
-
-    validate_update_graph(root, errors)
-
-    # Semantics harness-policy должны быть валидны до того, как значения policy
-    # начнут использоваться в остальных проверках. Unknown/missing safety keys
-    # не могут молча отключить целый класс checks. Malformed policy не
-    # используется дальше даже ради накопления вторичных ошибок.
-    policy_errors: list[str] = []
-    validate_harness_policy_schema(policy, policy_errors)
-    if policy_errors:
-        print("HARNESS VALIDATION: FAIL")
-        for item in policy_errors:
-            print(f"  - {item}")
-        return 1
-    max_tracked_file_size_mb = policy["max_tracked_file_size_mb"]
-
+def validate_project_surface(
+    root: Path,
+    policy: dict,
+    mode: str,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
     # --- Обязательные protocol artifacts ---------------------------------
     # Удаление любого required file означает, что repository больше не является
     # полноценным экземпляром Harness.
@@ -509,7 +490,7 @@ def main() -> int:
     # mutation/commit/CI запрещены до идемпотентного PROJECT RECONCILE.
     legacy_pending = legacy_schema_pending(root)
     allow_legacy = (
-        args.mode == "manual"
+        mode == "manual"
         and legacy_pending
         and legacy_manual_bypass_allowed(root)
     )
@@ -528,10 +509,14 @@ def main() -> int:
             root,
             warnings=warnings,
             allow_legacy=allow_legacy,
-            ci_mode=args.mode == "ci",
+            ci_mode=mode == "ci",
         )
     )
 
+
+
+
+def validate_command_surface(root: Path, policy: dict, errors: list[str]) -> None:
     # --- Command Transition System: структура и полный command surface ----
     # Graph — structural source of truth. Пока он невалиден, нельзя доверять
     # command docs/routing: документация могла разъехаться с parser contract.
@@ -542,8 +527,80 @@ def main() -> int:
         errors.append(f"invalid .harness/command-transitions.json: {exc}")
 
     if transition_table is not None:
-        errors.extend(validate_transition_table(transition_table))
+        transition_errors = validate_transition_table(transition_table)
+        errors.extend(transition_errors)
         table_commands = set(canonical_commands(transition_table))
+        if not transition_errors:
+            errors.extend(
+                "reasoning-boundaries: " + item
+                for item in projection_drift_errors(root, transition_table)
+            )
+
+        # Command documentation reference — часть machine-readable contract.
+        # Каждая команда обязана ссылаться на уникальный local Markdown anchor,
+        # который реально существует ровно один раз. Так HARNESS HELP и внешние
+        # клиенты не публикуют общую/битую ссылку после rename или docs drift.
+        seen_documentation_refs: set[str] = set()
+        for domain_name, domain in transition_table.get("domains", {}).items():
+            for operation, spec in domain.get("commands", {}).items():
+                documentation = spec.get("documentation")
+                command_name = spec.get("canonical", f"{domain_name} {operation}")
+                if not isinstance(documentation, str) or "#" not in documentation:
+                    errors.append(
+                        f"command documentation for '{command_name}' must be '<path>#<anchor>'"
+                    )
+                    continue
+
+                path_text, fragment = documentation.split("#", 1)
+                if not path_text or not fragment:
+                    errors.append(
+                        f"command documentation for '{command_name}' must include path and anchor"
+                    )
+                    continue
+                if documentation in seen_documentation_refs:
+                    errors.append(
+                        f"duplicate command documentation reference: {documentation}"
+                    )
+                seen_documentation_refs.add(documentation)
+
+                relative_path = Path(path_text)
+                if relative_path.is_absolute() or ".." in relative_path.parts:
+                    errors.append(
+                        f"command documentation for '{command_name}' escapes repository: {documentation}"
+                    )
+                    continue
+
+                doc_path = (root / relative_path).resolve()
+                try:
+                    doc_path.relative_to(root.resolve())
+                except ValueError:
+                    errors.append(
+                        f"command documentation for '{command_name}' escapes repository: {documentation}"
+                    )
+                    continue
+                if not doc_path.is_file():
+                    errors.append(
+                        f"command documentation file for '{command_name}' does not exist: {path_text}"
+                    )
+                    continue
+
+                anchor_marker = f'<a id="{fragment}"></a>'
+                anchor_count = doc_path.read_text(encoding="utf-8").count(anchor_marker)
+                if anchor_count != 1:
+                    errors.append(
+                        f"command documentation anchor for '{command_name}' must exist exactly once: "
+                        f"{documentation} (found {anchor_count})"
+                    )
+
+                dispatch = spec.get("dispatch")
+                if isinstance(dispatch, dict) and dispatch.get("kind") == "semantic":
+                    skill = dispatch.get("skill")
+                    if isinstance(skill, str) and skill.strip():
+                        skill_path = root / ".agents" / "skills" / skill / "SKILL.md"
+                        if not skill_path.is_file():
+                            errors.append(
+                                f"command dispatch for '{command_name}' references missing skill: {skill}"
+                            )
 
         for command in policy.get("required_commands", []):
             if command not in table_commands:
@@ -674,6 +731,15 @@ def main() -> int:
         if cross_domain_probe.get("valid"):
             errors.append("command parser accepted forbidden cross-domain chain")
 
+
+
+
+def validate_runtime_surface(
+    root: Path,
+    policy: dict,
+    files: list[str],
+    errors: list[str],
+) -> None:
     # --- Обязательные core skills ------------------------------------------
     # Проверяем наличие обязательных skills и минимальный frontmatter, чтобы
     # runtime routing не ссылался на исчезнувший/безымянный playbook.
@@ -757,11 +823,26 @@ def main() -> int:
             effort = claude_settings.get("effortLevel")
             if effort not in {"low", "medium", "high", "xhigh", "max"}:
                 errors.append("Claude settings effortLevel must be low/medium/high/xhigh/max")
-            permissions = claude_settings.get("permissions", {})
-            if permissions and permissions.get("defaultMode") not in {
-                "default", "acceptEdits", "auto", "dontAsk", "bypassPermissions", "plan"
-            }:
-                errors.append("Claude settings permissions.defaultMode is invalid")
+            permissions = claude_settings.get("permissions")
+            if not isinstance(permissions, dict):
+                errors.append("Claude settings permissions must be an object")
+            else:
+                if permissions.get("defaultMode") not in {
+                    "default", "acceptEdits", "auto", "dontAsk", "bypassPermissions", "plan"
+                }:
+                    errors.append("Claude settings permissions.defaultMode is invalid")
+                deny = permissions.get("deny")
+                if not isinstance(deny, list) or not all(
+                    isinstance(item, str) and item.strip() for item in deny
+                ):
+                    errors.append("Claude settings permissions.deny must be a string array")
+                else:
+                    missing_deny = sorted(CLAUDE_REQUIRED_GIT_DENY_RULES - set(deny))
+                    if missing_deny:
+                        errors.append(
+                            "Claude settings missing required Git deny rules: "
+                            + ", ".join(missing_deny)
+                        )
         except Exception as exc:
             errors.append(f"invalid Claude settings JSON: {exc}")
 
@@ -822,6 +903,18 @@ def main() -> int:
             if p.exists() and command not in p.read_text(encoding="utf-8"):
                 errors.append(f"command '{command}' missing from {p.relative_to(root)}")
 
+
+
+
+def validate_repository_surface(
+    root: Path,
+    policy: dict,
+    files: list[str],
+    max_tracked_file_size_mb: int,
+    mode: str,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
     # --- Защита от возврата legacy syntax --------------------------------
     # Старые pre-namespace invocations запрещены в Harness-owned files.
     # Pattern definitions общие с PROJECT RECONCILE checker, чтобы два механизма
@@ -876,7 +969,6 @@ def main() -> int:
     required_ignored = [
         ("AGENTS.local.md", "AGENTS.local.md"),
         ("CLAUDE.local.md", "CLAUDE.local.md"),
-        (".project/local/", ".project/local/__harness_ignore_probe__"),
         (".harness/local/", ".harness/local/__harness_ignore_probe__"),
         (".codex/local/", ".codex/local/__harness_ignore_probe__"),
         (".claude/local/", ".claude/local/__harness_ignore_probe__"),
@@ -985,6 +1077,7 @@ def main() -> int:
         ):
             language_value(root, language_key)
         max_fix_review_cycles(root)
+        verification_command_timeout_seconds(root)
         review_policy(root, "security")
         review_policy(root, "tests")
         skill_search_max_results(root)
@@ -1241,7 +1334,7 @@ def main() -> int:
 
     # В commit-mode staged state — информационная проверка: агент ещё может
     # безопасно сформировать stage согласно git-policy.
-    if args.mode == "commit":
+    if mode == "commit":
         code, staged = run_git(root, "diff", "--cached", "--name-only")
         if code == 0 and not staged.strip():
             warnings.append("no staged files yet; COMMIT agent may stage files according to git-policy")
@@ -1250,6 +1343,90 @@ def main() -> int:
         print("WARNINGS:")
         for item in warnings:
             print(f"  - {item}")
+
+
+# ---------------------------------------------------------------------------
+# Главный orchestration flow validator-а.
+# Порядок намеренно идёт от bootstrap/config boundaries к project/document/Git
+# checks: downstream validator нельзя запускать на config, которому уже нельзя
+# доверять.
+# ---------------------------------------------------------------------------
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["ci", "commit", "manual"], default="manual")
+    args = parser.parse_args()
+
+    root = repo_root()
+    # Ошибки намеренно накапливаются: CI/пользователь за один запуск получает
+    # полный список drift/corruption. warnings не делают repository невалидным.
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    # manifest — bootstrap config. Все остальные repository paths разрешаются
+    # через единый harness_config layer.
+    try:
+        load_manifest(root)
+        policy_path = repository_path(root, "harnessPolicy")
+    except ConfigError as exc:
+        print(f"ERROR: invalid Harness manifest/config: {exc}", file=sys.stderr)
+        return 2
+
+    if not policy_path.exists():
+        print(f"ERROR: missing configured harness policy: {policy_path}", file=sys.stderr)
+        return 2
+
+    try:
+        policy = load_toml(policy_path)
+    except Exception as exc:
+        print(f"ERROR: invalid harness policy TOML: {exc}", file=sys.stderr)
+        return 2
+
+    # Все filesystem-sensitive validation surfaces опираются только на Git index
+    # и явно configured paths. Ignored/vendor/generated TOML вне tracked state
+    # не должны становиться скрытой частью Harness contract.
+    files, git_blocker = tracked_files(root)
+    if git_blocker:
+        print("HARNESS VALIDATION: BLOCKED")
+        print(f"  - {git_blocker}")
+        return 2
+
+    validate_update_graph(root, errors)
+
+    # Semantics harness-policy должны быть валидны до того, как значения policy
+    # начнут использоваться в остальных проверках. Unknown/missing safety keys
+    # не могут молча отключить целый класс checks. Malformed policy не
+    # используется дальше даже ради накопления вторичных ошибок.
+    policy_errors: list[str] = []
+    validate_harness_policy_schema(policy, policy_errors)
+    if policy_errors:
+        print("HARNESS VALIDATION: FAIL")
+        for item in policy_errors:
+            print(f"  - {item}")
+        return 1
+    max_tracked_file_size_mb = policy["max_tracked_file_size_mb"]
+
+    # Always-on context — такой же deterministic repository invariant, как protocol files.
+    # Generated project marker blocks исключаются самим gate, поэтому PROJECT INIT
+    # не расходует core Harness budget и не создаёт ложный FAIL.
+    context_budget = evaluate_context_budget(root)
+    if context_budget["status"] != "PASS":
+        errors.extend(
+            f"context-budget: {item}" for item in context_budget["errors"]
+        )
+
+    validate_project_surface(root, policy, args.mode, errors, warnings)
+    validate_command_surface(root, policy, errors)
+    validate_runtime_surface(root, policy, files, errors)
+    validate_repository_surface(
+        root,
+        policy,
+        files,
+        max_tracked_file_size_mb,
+        args.mode,
+        errors,
+        warnings,
+    )
+
     # Финальный exit code — публичный contract CI/tooling:
     # 0 = PASS, 1 = deterministic validation failures, 2 = bootstrap BLOCKED.
     if errors:

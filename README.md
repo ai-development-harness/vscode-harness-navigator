@@ -13,6 +13,15 @@
 Текущая точка входа в разработку: `STEP PLAN STEP-001`.
 <!-- PROJECT:END -->
 
+## Зависимости
+
+- Python 3.11+ — обязателен для deterministic tools/validators.
+- Git — обязателен для repository workflow.
+- Codex **или** Claude Code — runtime выбирается пользователем; оба одновременно не требуются.
+- GitHub CLI `gh` — optional capability dependency: нужен только для `GIT PR` / `GIT PR FINISH` при текущей GitHub PR integration.
+
+Подробно: [`.harness/docs/DEPENDENCIES.md`](.harness/docs/DEPENDENCIES.md).
+
 ## Runtime adapters
 
 Harness protocol не привязан к одной модели или одному coding agent:

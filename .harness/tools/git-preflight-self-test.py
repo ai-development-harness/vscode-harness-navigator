@@ -7,10 +7,17 @@ import json
 import subprocess
 import tempfile
 
+from git_action import (
+    execute_commit,
+    execute_pr_finish,
+    execute_push,
+    execute_sync,
+)
 from git_preflight import (
     GitPreflightError,
     commit_preflight,
     pr_preflight,
+    pr_finish_preflight,
     push_preflight,
     sync_preflight,
 )
@@ -142,7 +149,8 @@ def main() -> int:
         assert initial_push["status"] == "PASS", initial_push
         assert initial_push["protected"] is True
         assert initial_push["initialRemotePush"] is True
-        run(project, *initial_push["mutationPlan"]["argv"])
+        initial_action = execute_push(project)
+        assert initial_action["status"] == "SUCCESS", initial_action
 
         # Subsequent commit on protected branch requires deterministic branch plan.
         write(project, "README.md", "base\nchange\n")
@@ -153,12 +161,24 @@ def main() -> int:
         )
         assert blocked.details["requiredBranch"] == "feature/user-search-api", blocked.details
 
-        # Agent creates exact planned branch, then final commit gate can pass.
-        run(project, "git", "switch", "-c", blocked.details["requiredBranch"])
-        commit_gate = commit_preflight(project, commit_type="feat", slug="User Search API")
-        assert commit_gate["status"] == "PASS", commit_gate
-        assert commit_gate["staged"] == ["README.md"], commit_gate
-        run(project, "git", "commit", "-qm", "feat: change")
+        # Executor создаёт ровно required branch, повторяет preflight и commit,
+        # используя semantic message как вход, но не оставляя mutation модели.
+        message_file = project / ".harness/local/git/commit-message.txt"
+        write(
+            project,
+            ".harness/local/git/commit-message.txt",
+            "feat: change\n\nContext:\n- deterministic executor regression\n",
+        )
+        commit_action = execute_commit(
+            project,
+            commit_type="feat",
+            slug="User Search API",
+            message_file=message_file,
+        )
+        assert commit_action["status"] == "SUCCESS", commit_action
+        assert commit_action["createdBranch"] == blocked.details["requiredBranch"], commit_action
+        assert run(project, "git", "branch", "--show-current") == "feature/user-search-api"
+        assert not message_file.exists()
 
         # Existing protected branch cannot be pushed after bootstrap.
         run(project, "git", "switch", "main")
@@ -170,7 +190,9 @@ def main() -> int:
         assert push_gate["status"] == "PASS", push_gate
         assert "--set-upstream" in push_gate["mutationPlan"]["argv"], push_gate
         assert "--force" not in push_gate["mutationPlan"]["argv"], push_gate
-        run(project, *push_gate["mutationPlan"]["argv"])
+        push_action = execute_push(project)
+        assert push_action["status"] == "SUCCESS", push_action
+        assert push_action["afterPush"] == "create-if-missing", push_action
 
         # PR gate requires exact published HEAD and configured base/tool/template.
         pr_gate = pr_preflight(project)
@@ -202,7 +224,8 @@ def main() -> int:
             "--ff-only",
             "origin/feature/user-search-api",
         ], sync_gate
-        run(project, *sync_gate["mutationPlan"]["argv"])
+        sync_action = execute_sync(project)
+        assert sync_action["status"] == "SUCCESS" and sync_action["mutated"] is True, sync_action
 
         # Exact published revision restored after ff-only sync.
         pr_after_sync = pr_preflight(project)
@@ -223,6 +246,124 @@ def main() -> int:
         run(project, "git", "add", "local.txt")
         run(project, "git", "commit", "-qm", "local")
         expect_blocked("HEAD_NOT_FULLY_PUBLISHED", lambda: pr_preflight(project))
+
+
+        # Independent merged-PR lifecycle regression. Provider metadata is injected
+        # directly so test remains network-free; Git ancestry/state stays real.
+        finish_remote = base / "finish-remote.git"
+        run(base, "git", "init", "--bare", "-q", str(finish_remote))
+        finish_project = base / "finish-project"
+        finish_project.mkdir()
+        run(finish_project, "git", "init", "-q", "-b", "main")
+        run(finish_project, "git", "config", "user.email", "finish@example.invalid")
+        run(finish_project, "git", "config", "user.name", "Finish Test")
+        run(finish_project, "git", "remote", "add", "origin", str(finish_remote))
+        write(finish_project, ".harness/manifest.yaml", manifest())
+        write(finish_project, ".harness/git-policy.toml", policy())
+        write(finish_project, ".harness/tools/validate.py", validator())
+        write(finish_project, ".github/pull_request_template.md", "# PR\n")
+        write(finish_project, ".gitignore", ".harness/local/\n")
+        write(finish_project, "README.md", "finish base\n")
+        run(finish_project, "git", "add", ".")
+        run(finish_project, "git", "commit", "-qm", "initial")
+        run(finish_project, "git", "push", "-q", "-u", "origin", "main")
+        run(finish_project, "git", "switch", "-c", "feature/finish")
+        write(finish_project, "finish.txt", "done\n")
+        run(finish_project, "git", "add", "finish.txt")
+        run(finish_project, "git", "commit", "-qm", "feat: finish")
+        run(finish_project, "git", "push", "-q", "-u", "origin", "feature/finish")
+        finish_head = run(finish_project, "git", "rev-parse", "HEAD")
+
+        merger = base / "finish-merger"
+        run(base, "git", "clone", "-q", str(finish_remote), str(merger))
+        run(merger, "git", "config", "user.email", "merge@example.invalid")
+        run(merger, "git", "config", "user.name", "Merge Test")
+        run(merger, "git", "switch", "-c", "main", "--track", "origin/main")
+        run(merger, "git", "merge", "--squash", "origin/feature/finish")
+        run(merger, "git", "commit", "-qm", "squash PR")
+        run(merger, "git", "push", "-q", "origin", "main")
+
+        pr_state = {
+            "version": 1,
+            "pr": 42,
+            "headBranch": "feature/finish",
+            "baseBranch": "main",
+            "returnBranch": "main",
+            "url": "https://example.invalid/pr/42",
+        }
+        write(
+            finish_project,
+            ".harness/local/git/pr-state.json",
+            json.dumps(pr_state, ensure_ascii=False, indent=2) + "\n",
+        )
+        merged_pr = {
+            "number": 42,
+            "state": "MERGED",
+            "mergedAt": "2026-09-22T00:00:00Z",
+            "headRefName": "feature/finish",
+            "headRefOid": finish_head,
+            "baseRefName": "main",
+            "url": "https://example.invalid/pr/42",
+        }
+
+        write(finish_project, "dirty.tmp", "dirty\n")
+        expect_blocked(
+            "PR_FINISH_DIRTY_WORKTREE",
+            lambda: pr_finish_preflight(finish_project, pr_data=merged_pr),
+        )
+        (finish_project / "dirty.tmp").unlink()
+
+        finish_gate = pr_finish_preflight(finish_project, pr_data=merged_pr)
+        assert finish_gate["status"] == "PASS", finish_gate
+        assert finish_gate["returnBranch"] == "main", finish_gate
+        assert finish_gate["resumed"] is False, finish_gate
+        assert finish_gate["gitAncestryMerged"] is False, finish_gate
+        assert finish_gate["mergedHeadOid"] == finish_head, finish_gate
+        assert finish_gate["mutationPlan"]["steps"][-1]["mode"] == "provider-verified-head", finish_gate
+        assert finish_gate["mutationPlan"]["steps"][-1]["argv"] == [
+            "git", "update-ref", "-d", "refs/heads/feature/finish", finish_head
+        ], finish_gate
+        assert finish_gate["mutationPlan"]["forceDeleteForbidden"] is True
+        assert finish_gate["mutationPlan"]["deleteRemoteBranch"] is False
+
+        # Crash-window regression: первый mutation step уже успел переключить
+        # return branch, но local PR state и feature ref ещё существуют.
+        run(finish_project, "git", "switch", "main")
+        resumed_gate = pr_finish_preflight(finish_project, pr_data=merged_pr)
+        assert resumed_gate["status"] == "PASS", resumed_gate
+        assert resumed_gate["resumed"] is True, resumed_gate
+        assert resumed_gate["currentBranch"] == "main", resumed_gate
+        assert all(
+            step["operation"] != "switch-return-branch"
+            for step in resumed_gate["mutationPlan"]["steps"]
+        ), resumed_gate
+
+        finish_action = execute_pr_finish(finish_project, pr_data=merged_pr)
+        assert finish_action["status"] == "SUCCESS", finish_action
+        assert finish_action["returnBranch"] == "main", finish_action
+        assert finish_action["stateFileDeleted"] is True, finish_action
+        assert run(finish_project, "git", "branch", "--show-current") == "main"
+        assert not (finish_project / ".harness/local/git/pr-state.json").exists()
+        missing = subprocess.run(
+            ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/finish"],
+            cwd=finish_project,
+        )
+        assert missing.returncode != 0
+
+        # Второе crash-window: branch cleanup завершён, но state file удалить
+        # не успели. Повторный FINISH должен стать безопасным no-op + state cleanup.
+        write(
+            finish_project,
+            ".harness/local/git/pr-state.json",
+            json.dumps(pr_state, ensure_ascii=False, indent=2) + "\n",
+        )
+        cleanup_gate = pr_finish_preflight(finish_project, pr_data=merged_pr)
+        assert cleanup_gate["status"] == "PASS", cleanup_gate
+        assert cleanup_gate["resumed"] is True, cleanup_gate
+        assert cleanup_gate["mutationPlan"]["steps"] == [], cleanup_gate
+        cleanup_action = execute_pr_finish(finish_project, pr_data=merged_pr)
+        assert cleanup_action["status"] == "SUCCESS", cleanup_action
+        assert not (finish_project / ".harness/local/git/pr-state.json").exists()
 
     print("GIT PREFLIGHT SELF-TEST: PASS")
     return 0

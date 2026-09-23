@@ -18,7 +18,7 @@ Fail-closed границы
 - unpublished/mismatching PR head -> BLOCKED;
 - diverged/dirty ff-only sync -> BLOCKED.
 
-Публичные actions CLI: check, commit, push, pr, sync.
+Публичные actions CLI: check, commit, push, pr, pr-finish, sync.
 """
 from __future__ import annotations
 
@@ -31,6 +31,8 @@ import subprocess
 from typing import Any
 
 from harness_config import ConfigError, load_git_policy
+
+PR_STATE_PATH = Path(".harness/local/git/pr-state.json")
 
 
 class GitPreflightError(RuntimeError):
@@ -682,6 +684,261 @@ def pr_preflight(root: Path) -> dict[str, Any]:
     )
 
 
+
+# ---------------------------------------------------------------------------
+# Action: PR FINISH.
+# Provider state доказывает merge, local state восстанавливает return branch.
+# Engine ничего не переключает/удаляет: он возвращает exact ordered plan.
+# ---------------------------------------------------------------------------
+def _load_pr_state(root: Path) -> dict[str, Any] | None:
+    path = root / PR_STATE_PATH
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise GitPreflightError("INVALID_PR_STATE", f"cannot read {PR_STATE_PATH}: {exc}") from exc
+    if not isinstance(data, dict) or data.get("version") != 1:
+        raise GitPreflightError("INVALID_PR_STATE", "PR state must be schema version 1")
+    for key in ("headBranch", "baseBranch", "returnBranch"):
+        value = data.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise GitPreflightError("INVALID_PR_STATE", f"PR state {key} must be non-empty string")
+    number = data.get("pr")
+    if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+        raise GitPreflightError("INVALID_PR_STATE", "PR state pr must be a positive integer")
+    return data
+
+
+def _github_pr_view(root: Path, config: dict[str, Any], selector: str | int) -> dict[str, Any]:
+    pr = config["pull_request"]
+    provider = _text(pr, "provider", section="pull_request")
+    tool = _text(pr, "preferred_tool", section="pull_request")
+    if provider != "github" or tool != "gh":
+        raise GitPreflightError(
+            "PR_FINISH_TOOL_UNSUPPORTED",
+            "GIT PR FINISH currently requires pull_request.provider=github and preferred_tool=gh",
+        )
+    if shutil.which(tool) is None:
+        raise GitPreflightError("PR_TOOL_UNAVAILABLE", f"configured PR tool is unavailable: {tool}")
+    proc = subprocess.run(
+        [tool, "pr", "view", str(selector), "--json", "number,state,mergedAt,headRefName,headRefOid,baseRefName,url"],
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if proc.returncode:
+        raise GitPreflightError(
+            "PR_NOT_FOUND",
+            proc.stderr.strip() or f"cannot resolve Pull Request for {selector}",
+        )
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise GitPreflightError("PR_QUERY_INVALID", "PR tool returned invalid JSON") from exc
+    if not isinstance(data, dict):
+        raise GitPreflightError("PR_QUERY_INVALID", "PR tool returned non-object JSON")
+    return data
+
+
+def pr_finish_preflight(root: Path, *, pr_data: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = policy(root)
+    repo = Repo(root)
+    current_branch = repo.branch()
+    worktree = repo.status()
+    if not worktree["clean"]:
+        raise GitPreflightError(
+            "PR_FINISH_DIRTY_WORKTREE",
+            "GIT PR FINISH requires a clean index/worktree",
+        )
+
+    local_state = _load_pr_state(root)
+    if local_state is not None:
+        allowed_branches = {
+            local_state["headBranch"],
+            local_state["returnBranch"],
+        }
+        if current_branch not in allowed_branches:
+            raise GitPreflightError(
+                "PR_STATE_HEAD_MISMATCH",
+                "current branch is neither PR head nor recorded return branch: "
+                f"{current_branch}",
+            )
+
+    remote = _text(config["push"], "remote", section="push")
+    _require_remote(repo, remote)
+    repo.fetch(remote)
+
+    selector: str | int = local_state["pr"] if local_state is not None else current_branch
+    data = pr_data if pr_data is not None else _github_pr_view(root, config, selector)
+
+    number = data.get("number")
+    state = data.get("state")
+    merged_at = data.get("mergedAt")
+    provider_head_branch = data.get("headRefName")
+    head_oid = data.get("headRefOid")
+    base_branch = data.get("baseRefName")
+    if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+        raise GitPreflightError("PR_QUERY_INVALID", "PR number is missing or invalid")
+    if state != "MERGED" or not isinstance(merged_at, str) or not merged_at.strip():
+        raise GitPreflightError("PR_NOT_MERGED", f"Pull Request #{number} is not merged")
+    if not isinstance(head_oid, str) or re.fullmatch(r"[0-9a-fA-F]{40}", head_oid) is None:
+        raise GitPreflightError("PR_QUERY_INVALID", "PR headRefOid is missing or invalid")
+    if not isinstance(base_branch, str) or not base_branch.strip():
+        raise GitPreflightError("PR_QUERY_INVALID", "PR base branch is missing")
+
+    if local_state is not None:
+        if local_state["pr"] != number:
+            raise GitPreflightError(
+                "PR_STATE_NUMBER_MISMATCH",
+                f"local PR state number {local_state['pr']} differs from provider PR #{number}",
+            )
+        if local_state["baseBranch"] != base_branch:
+            raise GitPreflightError(
+                "PR_STATE_BASE_MISMATCH",
+                f"local PR state base {local_state['baseBranch']} differs from provider base {base_branch}",
+            )
+        head_branch = local_state["headBranch"]
+        return_branch = local_state["returnBranch"]
+    else:
+        head_branch = current_branch
+        return_branch = base_branch
+
+    if not isinstance(provider_head_branch, str) or provider_head_branch != head_branch:
+        raise GitPreflightError(
+            "PR_HEAD_MISMATCH",
+            f"merged PR head {provider_head_branch!r} does not match expected branch {head_branch!r}",
+        )
+    if return_branch == head_branch:
+        raise GitPreflightError(
+            "PR_FINISH_INVALID_RETURN_BRANCH",
+            "return branch equals PR head branch",
+        )
+
+    # PR FINISH — многошаговая mutation. После crash текущая ветка уже может
+    # быть returnBranch. В этом случае local PR state + provider MERGED state
+    # позволяют безопасно продолжить оставшиеся sync/delete steps.
+    resumed = current_branch == return_branch
+    head_ref = f"refs/heads/{head_branch}"
+    head_proc = repo.git("rev-parse", "--verify", head_ref, check=False)
+    local_head_oid = head_proc.stdout.strip() if head_proc.returncode == 0 else None
+
+    if current_branch == head_branch:
+        current_head = repo.head()
+        if current_head != head_oid:
+            raise GitPreflightError(
+                "PR_HEAD_SHA_MISMATCH",
+                f"local HEAD {current_head!r} differs from merged PR head {head_oid!r}",
+            )
+    elif resumed:
+        if local_head_oid is not None and local_head_oid != head_oid:
+            raise GitPreflightError(
+                "PR_HEAD_SHA_MISMATCH",
+                f"local PR branch {head_branch} moved after merge: "
+                f"{local_head_oid!r} != {head_oid!r}",
+            )
+    else:
+        raise GitPreflightError(
+            "PR_STATE_HEAD_MISMATCH",
+            f"cannot finish PR from unrelated branch {current_branch}",
+        )
+
+    local_return = f"refs/heads/{return_branch}"
+    if repo.git("show-ref", "--verify", "--quiet", local_return, check=False).returncode:
+        raise GitPreflightError(
+            "RETURN_BRANCH_MISSING",
+            f"local return branch does not exist: {return_branch}",
+        )
+    remote_return = f"refs/remotes/{remote}/{return_branch}"
+    if repo.git("rev-parse", "--verify", remote_return, check=False).returncode:
+        raise GitPreflightError(
+            "RETURN_BRANCH_REMOTE_MISSING",
+            f"remote return branch does not exist: {remote}/{return_branch}",
+        )
+
+    relation = repo.git(
+        "rev-list", "--left-right", "--count", f"{local_return}...{remote_return}"
+    ).stdout.strip().split()
+    local_ahead, remote_ahead = int(relation[0]), int(relation[1])
+    if local_ahead > 0 and remote_ahead > 0:
+        raise GitPreflightError(
+            "RETURN_BRANCH_DIVERGED",
+            f"{return_branch} diverged from {remote}/{return_branch}",
+        )
+    if local_ahead > 0:
+        raise GitPreflightError(
+            "RETURN_BRANCH_LOCAL_AHEAD",
+            f"{return_branch} contains local commits not present on {remote}/{return_branch}",
+        )
+
+    ancestry_merged: bool | None = None
+    if local_head_oid is not None:
+        ancestry = repo.git(
+            "merge-base",
+            "--is-ancestor",
+            head_ref,
+            remote_return,
+            check=False,
+        )
+        ancestry_merged = ancestry.returncode == 0
+
+    steps: list[dict[str, Any]] = []
+    if current_branch != return_branch:
+        steps.append(
+            {"operation": "switch-return-branch", "argv": ["git", "switch", return_branch]}
+        )
+    if remote_ahead > 0:
+        steps.append(
+            {
+                "operation": "sync-return-branch",
+                "argv": ["git", "merge", "--ff-only", f"{remote}/{return_branch}"],
+            }
+        )
+
+    if local_head_oid is not None:
+        if ancestry_merged:
+            delete_step = {
+                "operation": "delete-local-pr-branch",
+                "mode": "git-merged",
+                "argv": ["git", "branch", "-d", head_branch],
+            }
+        else:
+            # Squash/rebase merge не сохраняет ancestry feature branch. Provider
+            # доказал MERGED exact headRefOid, а local ref выше сверена с этим
+            # OID. update-ref с old OID работает как compare-and-swap.
+            delete_step = {
+                "operation": "delete-local-pr-branch",
+                "mode": "provider-verified-head",
+                "argv": ["git", "update-ref", "-d", head_ref, head_oid],
+            }
+        steps.append(delete_step)
+
+    return _result(
+        "pr-finish",
+        pr=number,
+        url=data.get("url"),
+        branch=head_branch,
+        currentBranch=current_branch,
+        resumed=resumed,
+        base=base_branch,
+        returnBranch=return_branch,
+        remote=remote,
+        returnBranchAhead=local_ahead,
+        returnBranchBehind=remote_ahead,
+        mergedHeadOid=head_oid,
+        gitAncestryMerged=ancestry_merged,
+        worktree=worktree,
+        stateFile=str(PR_STATE_PATH) if local_state is not None else None,
+        deleteStateFileAfterSuccess=local_state is not None,
+        mutationPlan={
+            "steps": steps,
+            "deleteRemoteBranch": False,
+            "forceDeleteForbidden": True,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Action: SYNC.
 # В ff-only mode preflight не делает merge сам: он либо блокирует divergence/
@@ -762,7 +1019,7 @@ def _print(result: dict[str, Any], *, as_json: bool) -> None:
         return
     print(result["status"])
     print(f"action: {result.get('action')}")
-    for key in ("branch", "remote", "base", "ahead", "behind"):
+    for key in ("pr", "branch", "returnBranch", "remote", "base", "ahead", "behind"):
         if key in result:
             print(f"{key}: {result[key]}")
 
@@ -773,7 +1030,7 @@ def _print(result: dict[str, Any], *, as_json: bool) -> None:
 # ---------------------------------------------------------------------------
 def main() -> int:
     parser = argparse.ArgumentParser(description="Deterministic Git safety preflight")
-    parser.add_argument("action", choices=["check", "commit", "push", "pr", "sync"])
+    parser.add_argument("action", choices=["check", "commit", "push", "pr", "pr-finish", "sync"])
     parser.add_argument("--json", action="store_true", dest="as_json")
     parser.add_argument("--commit-type")
     parser.add_argument("--slug")
@@ -793,6 +1050,8 @@ def main() -> int:
             result = push_preflight(root)
         elif args.action == "pr":
             result = pr_preflight(root)
+        elif args.action == "pr-finish":
+            result = pr_finish_preflight(root)
         else:
             result = sync_preflight(root)
     except (GitPreflightError, ConfigError, OSError) as exc:

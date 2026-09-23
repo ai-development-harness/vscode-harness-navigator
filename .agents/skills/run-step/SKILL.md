@@ -4,7 +4,9 @@ description: Orchestrate one STEP through its existing type-specific flow with r
 ---
 # run-step
 
-Используй для `STEP RUN STEP-NNN`.
+Используй как semantic fallback для `STEP RUN STEP-NNN`, когда STEP имеет type-specific flow, который нельзя выразить обычной coding-цепочкой.
+
+Для `implementation | bugfix | refactor | hardening` root orchestration выполняет deterministic dispatcher: он выбирает exact `PLAN/IMPLEMENT/REVIEW/FIX` child и вызывает reasoning только внутри этой child-команды. Этот skill для обычного coding flow не должен вызываться в штатном случае.
 
 Global command wrapper уже зарегистрировал root execution:
 
@@ -15,7 +17,7 @@ rootCommand = STEP RUN STEP-NNN
 
 1. Resolve STEP, blockers и Type.
 2. Прочитай `.harness/manifest.yaml`: `execution.maxFixReviewCycles`, `review.security`, `review.tests` должны быть валидны, если применимы.
-3. Dispatch по существующему Type: coding flow, ADR, RESEARCH, AUDIT, REVIEW, DOCUMENTATION или RELEASE. Execution profiles не существуют.
+3. Dispatch по существующему type-specific flow: ADR, RESEARCH, AUDIT, REVIEW, DOCUMENTATION или RELEASE. Если сюда попал обычный coding STEP, не создавай альтернативную state machine: используй canonical resolver/CTS. Execution profiles не существуют.
 4. Перед продолжением root execution вызови:
    ```bash
    python3 .harness/tools/resolve-next-command.py --json \

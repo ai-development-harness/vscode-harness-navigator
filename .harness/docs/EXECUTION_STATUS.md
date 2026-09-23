@@ -2,6 +2,8 @@
 
 Execution Status — локальный crash-safe слой, который фиксирует фактическое выполнение **всех** canonical Harness-команд между session/runtime interruptions.
 
+Исключение: `HARNESS RESUME` — управляющая команда над уже существующим состоянием выполнения. Она не создаёт новое корневое выполнение и работает только тогда, когда существует ровно одна безопасная точка продолжения.
+
 Он не добавляет новых пользовательских команд и не создаёт вторую state machine.
 
 ```text
@@ -26,6 +28,8 @@ Execution Resolver
 Per-STEP файлы запрещены.
 
 Каталог `.harness/local/` исключён из Git. Execution Status является operational state, а не product evidence.
+
+Все read-modify-write операции сериализуются advisory lock-файлом `.harness/local/execution/execution-status.lock`. На Unix используется `flock`, на Windows — `msvcrt.locking`; lock освобождается ОС при завершении процесса. Atomic `os.replace` сохраняет целостность JSON, а lock отдельно предотвращает lost update между параллельными sessions/subagents.
 
 ## Execution record
 
@@ -378,7 +382,7 @@ planning-review.context_basis = current context_basis
 planning-review.plan_content_hash = current content_hash
 ```
 
-`context_basis` включает STEP contract, linked REQ/ADR, explicit architecture refs, relevant OQ и type-specific completion proofs direct dependencies.
+`context_basis` schema v4 включает semantic STEP/dependency contracts, semantic linked REQ/ADR, explicit architecture refs и relevant OQ. Dependency completion state, reverse traceability и scheduling metadata не входят в fingerprint; completion proof проверяется отдельным runtime precondition непосредственно перед IMPLEMENT.
 
 Изменение текста Implementation plan инвалидирует `content_hash` даже при неизменном context.
 
@@ -386,12 +390,14 @@ planning-review.plan_content_hash = current content_hash
 
 При старте REVIEW сохраняется baseline последнего report.
 
-Crash recovery использует только **новый schema-valid immutable report**, который:
+Crash recovery сначала ищет **новый schema-valid immutable report**, который:
 
 - относится к тому же STEP;
 - содержит допустимый verdict/finding structure;
 - удовлетворяет deterministic specialized-review requirements;
-- ссылается на ту же exact repository revision.
+- для FAIL/BLOCKED ссылается на ту же exact repository revision.
+
+Для PASS есть дополнительный строго ограниченный post-review case: structured writer уже мог выполнить lifecycle-only mutation `status → completed` после того, как exact revision была проверена. Тогда recovery требует одновременно новый PASS report относительно baseline, canonical `status: completed` и успешный type-specific completion proof. Без всех трёх условий semantic review повторно не пропускается.
 
 Exact revision:
 
@@ -400,7 +406,7 @@ clean tree → git_head
 dirty tree → git_head + worktree_hash
 ```
 
-Configured review directory и `.harness/local/**` не входят в worktree hash, потому что report/execution state создаются самим workflow. Product/config mutation после report меняет fingerprint и запрещает reuse старого verdict.
+Configured review directory и `.harness/local/**` не входят в worktree hash, потому что report/execution state создаются самим workflow. Для каждого changed path fingerprint учитывает Git status/path, stage-0 index `mode + object id`, normalized worktree mode, bytes/symlink target и current submodule HEAD для gitlink. Поэтому chmod executable bit и смена submodule commit инвалидируют старый review proof даже при одинаковых file bytes. Product/config mutation после report меняет fingerprint и запрещает reuse старого verdict.
 
 ### GIT COMMIT
 

@@ -26,13 +26,16 @@ CTS остаётся единственным источником разреш�
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from functools import wraps
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
+import threading
 from typing import Any
 from uuid import uuid4
 
@@ -44,11 +47,13 @@ from command_transitions import (
 from document_contract import render_document
 from harness_config import ConfigError, get, load_git_policy, update_lock_path
 from planning_contract import (
+    implementation_prerequisite_failures,
     latest_matching_planning_review,
     max_fix_review_cycles,
     plan_content_hash,
     planning_context_basis,
     read_task as read_planning_task,
+    step_completion_proof,
     task_contract_snapshot,
     task_path as configured_task_path,
 )
@@ -57,6 +62,10 @@ from review_contract import latest_review as latest_valid_review
 # Фиксированный project-level operational state. Один файл намеренно покрывает
 # STEP, Git, Harness update и остальные namespaces.
 STATUS_PATH = ".harness/local/execution/execution-status.json"
+LOCK_PATH = ".harness/local/execution/execution-status.lock"
+_PROCESS_LOCKS: dict[str, threading.RLock] = {}
+_PROCESS_LOCKS_GUARD = threading.Lock()
+_LOCK_LOCAL = threading.local()
 # mode описывает форму уже существующего пользовательского ввода и НЕ является
 # новой командой/профилем. Пользователь никогда не выбирает mode вручную.
 EXECUTION_MODES = {"single", "chain", "orchestration"}
@@ -97,6 +106,86 @@ def status_path(root: Path) -> Path:
 # Создать пустую schema v1 для проекта, где execution-status ещё ни разу не записывался.
 def empty_status() -> dict[str, Any]:
     return {"schemaVersion": 1, "executions": []}
+
+
+def _process_lock(key: str) -> threading.RLock:
+    """Вернуть process-local reentrant lock для одного project state path."""
+    with _PROCESS_LOCKS_GUARD:
+        lock = _PROCESS_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _PROCESS_LOCKS[key] = lock
+        return lock
+
+
+@contextmanager
+def execution_state_lock(root: Path):
+    """Сериализовать execution-state transaction между threads/processes.
+
+    OS advisory lock живёт на отдельном local-only файле и освобождается ядром
+    при завершении процесса. Reentrant слой нужен потому, что public mutation
+    helpers вызывают друг друга и resolver recovery может записать state внутри
+    уже открытой transaction.
+    """
+    lock_path = root / LOCK_PATH
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    key = str(lock_path.resolve())
+    process_lock = _process_lock(key)
+
+    with process_lock:
+        held = getattr(_LOCK_LOCAL, "held", None)
+        if held is None:
+            held = {}
+            _LOCK_LOCAL.held = held
+        depth = int(held.get(key, 0))
+        if depth > 0:
+            held[key] = depth + 1
+            try:
+                yield
+            finally:
+                held[key] -= 1
+            return
+
+        fh = lock_path.open("a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                if fh.seek(0, os.SEEK_END) == 0:
+                    fh.write(b"\0")
+                    fh.flush()
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            held[key] = 1
+            try:
+                yield
+            finally:
+                held.pop(key, None)
+                if os.name == "nt":
+                    import msvcrt
+
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            fh.close()
+
+
+def execution_state_mutation(func):
+    """Обернуть public read-modify-write operation общей transaction lock."""
+    @wraps(func)
+    def wrapped(root: Path, *args: Any, **kwargs: Any):
+        with execution_state_lock(root):
+            return func(root, *args, **kwargs)
+
+    return wrapped
 
 
 
@@ -207,8 +296,9 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
 
 
 # Любая запись local execution state проходит через тот же validator, что и
-# load_status(). Нельзя сохранить структуру, которую следующий процесс не сможет
-# корректно восстановить.
+# load_status(). Public read-modify-write операции дополнительно держат
+# execution_state_lock() на всю transaction; atomic replace один не защищает от
+# lost update между двумя параллельными sessions.
 def save_status(root: Path, value: dict[str, Any]) -> None:
     errors = validate_status(value)
     if errors:
@@ -301,6 +391,30 @@ def _git_head(root: Path) -> str | None:
     return value or None
 
 
+def git_commit_completion_proven(
+    root: Path,
+    execution: dict[str, Any],
+) -> bool:
+    """Prove that the current canonical COMMIT advanced repository HEAD."""
+
+    current = execution.get("current")
+    if not isinstance(current, dict) or current.get("status") != "running":
+        return False
+    try:
+        parsed = normalize_single_command(root, str(current.get("command") or ""))
+    except ValueError:
+        return False
+    if parsed.get("domain") != "GIT" or parsed.get("operation") != "COMMIT":
+        return False
+
+    context = current.get("context")
+    before = context.get("gitHeadBefore") if isinstance(context, dict) else None
+    now = _git_head(root)
+    # before=None is valid for the first commit in an unborn repository. A
+    # non-empty current HEAD still proves that the COMMIT created durable state.
+    return now is not None and now != before
+
+
 
 # Собрать минимальный context, нужный только для crash recovery конкретных commands; не превращать его в копию project state.
 def _command_context(root: Path, command: str) -> dict[str, Any]:
@@ -328,8 +442,22 @@ def _command_context(root: Path, command: str) -> dict[str, Any]:
 
 
 # Зарегистрировать новый root invocation либо resume уже running invocation с тем же normalized rootCommand.
+@execution_state_mutation
 def start_execution(root: Path, raw_command: str) -> dict[str, Any]:
     normalized = _normalize_root(root, raw_command)
+
+    # Первый executable segment не имеет incoming CTS edge, поэтому его
+    # command-specific preconditions проверяются отдельно до создания local
+    # execution record. Это делает direct STEP IMPLEMENT таким же fail-closed,
+    # как PLAN -> IMPLEMENT внутри chain/RUN.
+    if normalized["mode"] != "orchestration":
+        failures = _command_dispatch_precondition_failures(
+            root,
+            normalized["sequence"][0],
+        )
+        if failures:
+            raise ValueError("command precondition failed: " + "; ".join(failures))
+
     status = load_status(root)
 
     # Повтор той же root command после session interruption должен resume
@@ -518,6 +646,27 @@ def _update_runtime_precondition(
 
 # Выполнить runtimePreconditions CTS edge непосредственно перед dispatch. Возврат
 # списка причин делает неизвестный/недоказанный precondition fail-closed.
+def _command_dispatch_precondition_failures(
+    root: Path,
+    command: str,
+) -> list[str]:
+    """Проверить prerequisites команды, у которой нет incoming CTS edge."""
+    parsed = normalize_single_command(root, command)
+    if (
+        parsed.get("domain") == "STEP"
+        and parsed.get("operation") == "IMPLEMENT"
+        and parsed.get("target")
+    ):
+        return [
+            f"step-implement-ready: {issue}"
+            for issue in implementation_prerequisite_failures(
+                root,
+                str(parsed["target"]),
+            )
+        ]
+    return []
+
+
 def _runtime_precondition_failures(
     root: Path,
     execution: dict[str, Any],
@@ -531,6 +680,13 @@ def _runtime_precondition_failures(
             issue = _git_runtime_precondition(root, name)
         elif name == "matching-update-target-and-route":
             issue = _update_runtime_precondition(root, current, next_command)
+        elif name == "step-implement-ready":
+            command_failures = _command_dispatch_precondition_failures(
+                root,
+                next_command,
+            )
+            failures.extend(command_failures)
+            continue
         else:
             issue = f"unknown-runtime-precondition:{name}"
         if issue is not None:
@@ -573,6 +729,7 @@ def _mark_root_complete(execution: dict[str, Any], *, blocked: bool = False) -> 
 
 
 # Зафиксировать result текущей command и обновить состояние root execution согласно её mode.
+@execution_state_mutation
 def complete_command(
     root: Path,
     root_command: str,
@@ -664,6 +821,7 @@ def _orchestration_first_child_allowed(
 
 
 # Перевести chain/orchestration execution на следующую child command. Ожидаемая команда сверяется с resolver, чтобы не перескочить phase.
+@execution_state_mutation
 def begin_command(
     root: Path,
     root_command: str,
@@ -716,15 +874,19 @@ def begin_command(
             f"resolver expects {expected!r}, cannot begin {normalized_command!r}"
         )
 
-    preconditions = [] if allow_first_orchestration_child else list(
-        resolved.get("runtimePreconditions") or []
-    )
-    failures = _runtime_precondition_failures(
-        root,
-        execution,
-        normalized_command,
-        preconditions,
-    )
+    if allow_first_orchestration_child:
+        failures = _command_dispatch_precondition_failures(
+            root,
+            normalized_command,
+        )
+    else:
+        preconditions = list(resolved.get("runtimePreconditions") or [])
+        failures = _runtime_precondition_failures(
+            root,
+            execution,
+            normalized_command,
+            preconditions,
+        )
     if failures:
         # Предыдущая child command уже завершилась фактическим result. Не
         # перезаписываем её: blocker относится к переходу/корневой execution.
@@ -778,6 +940,7 @@ def begin_command(
 
 
 # Явно остановить root execution как blocked. Blocked state сохраняется между sessions и не продолжается автоматически.
+@execution_state_mutation
 def block_execution(
     root: Path,
     root_command: str,
@@ -978,7 +1141,11 @@ def _durable_recovery_result(
                 return None
 
     # REVIEW можно восстановить по новому immutable report, появившемуся после
-    # reviewReportBefore. Это экономит повторный дорогой review после crash.
+    # reviewReportBefore. FAIL/BLOCKED не меняют STEP lifecycle и потому требуют
+    # exact current revision. PASS writer после валидного report может выполнить
+    # единственную post-review mutation status->completed; тогда exact revision
+    # закономерно меняется, а recovery использует более сильный combined proof:
+    # новый PASS report + completed STEP + type-specific completion proof.
     if parsed.get("domain") == "STEP" and parsed.get("operation") == "REVIEW":
         target = parsed.get("target")
         baseline = current.get("context", {}).get("reviewReportBefore")
@@ -989,11 +1156,29 @@ def _durable_recovery_result(
                 if verdict in {"PASS", "FAIL", "BLOCKED"}:
                     return verdict
 
-    if parsed.get("domain") == "GIT" and parsed.get("operation") == "COMMIT":
-        before = current.get("context", {}).get("gitHeadBefore")
-        now = _git_head(root)
-        if before and now and before != now:
-            return "SUCCESS"
+            latest = latest_review(root, target, require_current_revision=False)
+            if (
+                latest is not None
+                and latest.get("path") != baseline
+                and latest.get("verdict") == "PASS"
+            ):
+                try:
+                    task = read_planning_task(root, target)
+                    proof = step_completion_proof(root, target)
+                except (OSError, ValueError, FileNotFoundError):
+                    return None
+                if (
+                    task["frontmatter"].get("status") == "completed"
+                    and proof.get("complete") is True
+                ):
+                    return "PASS"
+
+    if (
+        parsed.get("domain") == "GIT"
+        and parsed.get("operation") == "COMMIT"
+        and git_commit_completion_proven(root, execution)
+    ):
+        return "SUCCESS"
 
     return None
 
@@ -1034,6 +1219,7 @@ def _apply_recovered_completion(
 
 
 # Главный deterministic resolver одной root execution: RESUME running command либо NEXT/DONE/BLOCKED по mode и CTS.
+@execution_state_mutation
 def resolve_execution(
     root: Path,
     execution: dict[str, Any],
@@ -1206,6 +1392,7 @@ def resolve_execution(
 
 
 # Найти последнюю relevant execution для конкретного root command и разрешить её текущее состояние.
+@execution_state_mutation
 def resolve_root(root: Path, root_command: str) -> dict[str, Any]:
     normalized_root = _normalize_root(root, root_command)["rootCommand"]
     status = load_status(root)
@@ -1233,6 +1420,7 @@ def resolve_root(root: Path, root_command: str) -> dict[str, Any]:
 
 
 # Вернуть все running/blocked executions проекта. Это позволяет новой session увидеть несколько независимых незавершённых работ.
+@execution_state_mutation
 def unresolved_executions(root: Path) -> list[dict[str, Any]]:
     status = load_status(root)
     values: list[dict[str, Any]] = []

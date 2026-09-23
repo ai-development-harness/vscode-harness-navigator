@@ -76,7 +76,7 @@ Resolver не создаёт новые transitions: для chain/orchestration 
 
 SHA-256 fingerprint relevant planning context, сохранённый в `plan.context_basis`.
 
-В него входят STEP contract, linked canonical REQ/ADR, type-specific completion proofs прямых dependencies, explicit `architecture_refs` и relevant canonical OQ. Нерелевантные части architecture baseline не должны инвалидировать plan.
+Schema-v4 fingerprint включает semantic STEP/dependency contracts, semantic linked canonical REQ/ADR, explicit `architecture_refs` и relevant canonical OQ. Reverse traceability, scheduling metadata (`priority`/`phase`) и completion state dependency не должны инвалидировать plan; completion proof проверяется перед IMPLEMENT.
 
 ### Plan content hash
 
@@ -565,6 +565,10 @@ Harness дополняет его body с Context / Changes / Verification / Tra
 ### PR — Pull Request
 
 Запрос на интеграцию опубликованной ветки в base branch. Harness может создавать или переиспользовать PR согласно `.harness/git-policy.toml`.
+
+### GIT PR FINISH
+
+Standalone post-merge cleanup-команда. Подтверждает merged PR через provider, возвращается на сохранённую return/base branch, допускает только safe ff-only update и удаляет локальную PR-ветку без force.
 
 ### GIT SYNC
 

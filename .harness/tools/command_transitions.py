@@ -32,9 +32,44 @@ ALLOWED_INPUTS = {"none", "optional", "required"}
 ALLOWED_RESULTS = {"PASS", "SUCCESS", "FAIL", "BLOCKED"}
 KNOWN_RUNTIME_PRECONDITIONS = {
     "matching-update-target-and-route",
+    "step-implement-ready",
     "git-push-ready",
     "git-pr-ready",
 }
+
+DISPATCH_KINDS = {"deterministic", "semantic"}
+KNOWN_DISPATCH_HANDLERS = {
+    "harness-help",
+    "harness-status",
+    "harness-resume",
+    "harness-doctor",
+    "harness-config",
+    "harness-update-check",
+    "harness-update-apply",
+    "project-status",
+    "step-list",
+    "step-show",
+    "step-next",
+    "git-check",
+    "git-pr-finish",
+    "git-sync",
+}
+CONTEXT_PHASES = {"plan", "implement", "review"}
+REASONING_MODES = {"none", "required", "conditional"}
+REASONING_KEYS = {"mode", "modelWork", "deterministicWork", "fastPaths"}
+FAST_PATH_KEYS = {"id", "description", "implementation"}
+FAST_PATH_IMPLEMENTATION_RE = re.compile(
+    r"^\.harness/tools/[A-Za-z0-9_.-]+\.py::[A-Za-z_][A-Za-z0-9_]*$"
+)
+
+
+def _non_empty_text_list(value: Any) -> bool:
+    """Проверить массив непустых человекочитаемых строк."""
+
+    return (
+        isinstance(value, list)
+        and all(isinstance(item, str) and item.strip() for item in value)
+    )
 
 
 
@@ -146,6 +181,192 @@ def validate_transition_table(table: dict[str, Any]) -> list[str]:
                     f"command-transitions: {domain_name}.{operation}.input must be one of {sorted(ALLOWED_INPUTS)}"
                 )
 
+            for metadata_key in ("summary", "documentation"):
+                metadata_value = spec.get(metadata_key)
+                if not isinstance(metadata_value, str) or not metadata_value.strip():
+                    errors.append(
+                        f"command-transitions: {domain_name}.{operation}.{metadata_key} "
+                        "must be a non-empty string"
+                    )
+
+            dispatch = spec.get("dispatch")
+            if not isinstance(dispatch, dict):
+                errors.append(
+                    f"command-transitions: {domain_name}.{operation}.dispatch must be an object"
+                )
+            else:
+                kind = dispatch.get("kind")
+                if kind not in DISPATCH_KINDS:
+                    errors.append(
+                        f"command-transitions: {domain_name}.{operation}.dispatch.kind "
+                        f"must be one of {sorted(DISPATCH_KINDS)}"
+                    )
+                elif kind == "deterministic":
+                    handler = dispatch.get("handler")
+                    if handler not in KNOWN_DISPATCH_HANDLERS:
+                        errors.append(
+                            f"command-transitions: {domain_name}.{operation}.dispatch.handler "
+                            f"must be one of {sorted(KNOWN_DISPATCH_HANDLERS)}"
+                        )
+                    unexpected = sorted(set(dispatch) - {"kind", "handler"})
+                    if unexpected:
+                        errors.append(
+                            f"command-transitions: {domain_name}.{operation}.dispatch "
+                            "has unsupported keys: " + ", ".join(unexpected)
+                        )
+                elif kind == "semantic":
+                    skill = dispatch.get("skill")
+                    if not isinstance(skill, str) or not skill.strip():
+                        errors.append(
+                            f"command-transitions: {domain_name}.{operation}.dispatch.skill "
+                            "must be a non-empty string"
+                        )
+                    phase = dispatch.get("contextPhase")
+                    if phase is not None and phase not in CONTEXT_PHASES:
+                        errors.append(
+                            f"command-transitions: {domain_name}.{operation}.dispatch.contextPhase "
+                            f"must be one of {sorted(CONTEXT_PHASES)}"
+                        )
+                    unexpected = sorted(set(dispatch) - {"kind", "skill", "contextPhase"})
+                    if unexpected:
+                        errors.append(
+                            f"command-transitions: {domain_name}.{operation}.dispatch "
+                            "has unsupported keys: " + ", ".join(unexpected)
+                        )
+
+            # Граница между вычислениями модели и скриптами является частью
+            # канонического контракта команды. Документация и внешняя проекция
+            # строятся только из этих данных, поэтому пропуск поля — ошибка схемы.
+            reasoning = spec.get("reasoning")
+            if not isinstance(reasoning, dict):
+                errors.append(
+                    f"command-transitions: {domain_name}.{operation}.reasoning "
+                    "must be an object"
+                )
+            else:
+                unexpected = sorted(set(reasoning) - REASONING_KEYS)
+                if unexpected:
+                    errors.append(
+                        f"command-transitions: {domain_name}.{operation}.reasoning "
+                        "has unsupported keys: " + ", ".join(unexpected)
+                    )
+
+                mode = reasoning.get("mode")
+                if mode not in REASONING_MODES:
+                    errors.append(
+                        f"command-transitions: {domain_name}.{operation}.reasoning.mode "
+                        f"must be one of {sorted(REASONING_MODES)}"
+                    )
+
+                model_work = reasoning.get("modelWork")
+                deterministic_work = reasoning.get("deterministicWork")
+                fast_paths = reasoning.get("fastPaths")
+
+                if not _non_empty_text_list(model_work):
+                    errors.append(
+                        f"command-transitions: {domain_name}.{operation}.reasoning.modelWork "
+                        "must be a string array"
+                    )
+                if (
+                    not _non_empty_text_list(deterministic_work)
+                    or not deterministic_work
+                ):
+                    errors.append(
+                        f"command-transitions: {domain_name}.{operation}.reasoning.deterministicWork "
+                        "must be a non-empty string array"
+                    )
+                if not isinstance(fast_paths, list):
+                    errors.append(
+                        f"command-transitions: {domain_name}.{operation}.reasoning.fastPaths "
+                        "must be an array"
+                    )
+                    fast_paths = []
+
+                dispatch_kind = (
+                    dispatch.get("kind") if isinstance(dispatch, dict) else None
+                )
+                if dispatch_kind == "deterministic" and mode != "none":
+                    errors.append(
+                        f"command-transitions: {domain_name}.{operation} deterministic dispatch "
+                        "requires reasoning.mode=none"
+                    )
+                if dispatch_kind == "semantic" and mode == "none":
+                    errors.append(
+                        f"command-transitions: {domain_name}.{operation} semantic dispatch "
+                        "cannot use reasoning.mode=none"
+                    )
+
+                if mode == "none":
+                    if isinstance(model_work, list) and model_work:
+                        errors.append(
+                            f"command-transitions: {domain_name}.{operation} reasoning.mode=none "
+                            "requires empty modelWork"
+                        )
+                    if fast_paths:
+                        errors.append(
+                            f"command-transitions: {domain_name}.{operation} reasoning.mode=none "
+                            "requires empty fastPaths"
+                        )
+                elif mode == "required":
+                    if isinstance(model_work, list) and not model_work:
+                        errors.append(
+                            f"command-transitions: {domain_name}.{operation} reasoning.mode=required "
+                            "requires non-empty modelWork"
+                        )
+                    if fast_paths:
+                        errors.append(
+                            f"command-transitions: {domain_name}.{operation} reasoning.mode=required "
+                            "requires empty fastPaths"
+                        )
+                elif mode == "conditional":
+                    if isinstance(model_work, list) and not model_work:
+                        errors.append(
+                            f"command-transitions: {domain_name}.{operation} reasoning.mode=conditional "
+                            "requires non-empty modelWork"
+                        )
+                    if not fast_paths:
+                        errors.append(
+                            f"command-transitions: {domain_name}.{operation} reasoning.mode=conditional "
+                            "requires at least one fastPath"
+                        )
+
+                seen_fast_path_ids: set[str] = set()
+                for index, fast_path in enumerate(fast_paths):
+                    prefix = (
+                        f"command-transitions: {domain_name}.{operation}."
+                        f"reasoning.fastPaths[{index}]"
+                    )
+                    if not isinstance(fast_path, dict):
+                        errors.append(f"{prefix} must be an object")
+                        continue
+                    unexpected_fast = sorted(set(fast_path) - FAST_PATH_KEYS)
+                    if unexpected_fast:
+                        errors.append(
+                            f"{prefix} has unsupported keys: "
+                            + ", ".join(unexpected_fast)
+                        )
+                    fast_id = fast_path.get("id")
+                    description = fast_path.get("description")
+                    implementation = fast_path.get("implementation")
+                    if not isinstance(fast_id, str) or not fast_id.strip():
+                        errors.append(f"{prefix}.id must be a non-empty string")
+                    elif fast_id in seen_fast_path_ids:
+                        errors.append(f"{prefix}.id must be unique within command")
+                    else:
+                        seen_fast_path_ids.add(fast_id)
+                    if not isinstance(description, str) or not description.strip():
+                        errors.append(
+                            f"{prefix}.description must be a non-empty string"
+                        )
+                    if (
+                        not isinstance(implementation, str)
+                        or FAST_PATH_IMPLEMENTATION_RE.fullmatch(implementation) is None
+                    ):
+                        errors.append(
+                            f"{prefix}.implementation must be '<tool.py>::<function>' "
+                            "under .harness/tools"
+                        )
+
         for alias, operation in aliases.items():
             if operation not in commands:
                 errors.append(
@@ -214,6 +435,15 @@ def validate_transition_table(table: dict[str, Any]) -> list[str]:
 
     return errors
 
+
+
+def dispatch_spec(
+    table: dict[str, Any],
+    domain: str,
+    operation: str,
+) -> dict[str, Any]:
+    """Вернуть validated dispatch metadata одной canonical command."""
+    return dict(table["domains"][domain]["commands"][operation]["dispatch"])
 
 
 def canonical_commands(table: dict[str, Any]) -> list[str]:
@@ -327,6 +557,11 @@ def _parse_segment(
             if re.fullmatch(r"STEP-\d{3,}", token):
                 target = token
                 rest = tail.strip()
+            elif re.fullmatch(r"\d{3,}", token):
+                # Пользовательский shorthand нормализуется до canonical STEP-NNN
+                # до inheritance/mismatch checks, поэтому 024 и STEP-024 равны.
+                target = f"STEP-{token}"
+                rest = tail.strip()
         if target is None:
             if inherited_target is not None:
                 target = inherited_target
@@ -334,7 +569,7 @@ def _parse_segment(
                 return {
                     "valid": False,
                     "code": "MISSING_TARGET",
-                    "message": f"{domain_name} {operation} requires STEP-NNN target",
+                    "message": f"{domain_name} {operation} requires STEP-NNN or NNN target",
                 }
 
     elif target_kind == "release-optional":

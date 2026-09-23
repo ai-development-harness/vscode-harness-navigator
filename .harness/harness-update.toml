@@ -34,6 +34,7 @@ report_directory = "planning/harness-updates"
 harness_owned = [
   ".harness/harness-update-graph.json",
   ".harness/command-transitions.json",
+  ".harness/reasoning-boundaries.json",
   ".agents/skills/README.md",
   ".agents/skills/init-project/**",
   ".agents/skills/add-plan-step/**",
@@ -47,7 +48,6 @@ harness_owned = [
   ".agents/skills/run-step/**",
   ".agents/skills/audit-step/**",
   ".agents/skills/project-status/**",
-  ".agents/skills/next-step/**",
   ".agents/skills/reconcile-project/**",
   ".agents/skills/release-check/**",
   ".agents/skills/requirements-review/**",

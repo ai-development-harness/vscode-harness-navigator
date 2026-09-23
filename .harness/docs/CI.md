@@ -12,23 +12,23 @@ Bash не используется как реализация validator: тек
 
 В GitHub Actions версия Python задаётся явно через `actions/setup-python`, поэтому CI не зависит от случайной версии интерпретатора в `ubuntu-latest`.
 
-Workflow запускает baseline validator и dependency-free smoke/self-tests protocol tooling:
+Workflow запускает baseline validator, public CLI smoke checks и единый discoverable regression runner:
 
 ```bash
 python3 .harness/tools/validate.py --mode ci
 python3 .harness/tools/check-command-references.py --json
-python3 .harness/tools/command-references-self-test.py
 python3 .harness/tools/validate-command.py --json -- 'GIT CHECK > COMMIT > PUSH > PR'
-python3 .harness/tools/execution-self-test.py
-python3 .harness/tools/planning-contract-self-test.py
-python3 .harness/tools/repository-hardening-self-test.py
-python3 .harness/tools/git-policy-self-test.py
-python3 .harness/tools/git-preflight-self-test.py
-python3 .harness/tools/harness-update-self-test.py
-python3 .harness/tools/update-migration-self-test.py
+python3 .harness/tools/run-self-tests.py
 ```
 
+`run-self-tests.py` автоматически обнаруживает все `.harness/tools/*-self-test.py`, выполняет их в стабильном порядке и не требует ручного добавления нового regression-файла в workflow. `--list` показывает discovery surface, `--json` возвращает compact aggregate result.
+
+GitHub Actions official actions pinned по immutable commit SHA, соответствующим используемому major tag. Workflow concurrency группируется по head branch; новый push/PR event отменяет устаревший run той же ветки, но не смешивает разные branches.
 Для command transition gate workflow дополнительно проверяет отрицательный case (`GIT PR > COMMIT` обязан завершиться non-zero).
+
+Context budget gate фиксирует размер Harness-controlled always-on instructions до выбора skill. Generated project blocks в `AGENTS.md` учитываются отдельно и не входят в core limit. Текущий baseline: 7 224 chars для Codex и 8 029 chars для Claude Code (после сокращения always-on bootstrap на ~60%). Подробности — в [`TOKEN_ECONOMY.md`](TOKEN_ECONOMY.md).
+
+Отдельный gate границ вычислений модели проверяет, что `.harness/reasoning-boundaries.json` и generated-блок [`REASONING_BOUNDARIES.md`](REASONING_BOUNDARIES.md) совпадают с CTS, а каждый объявленный условный быстрый путь указывает на существующую функцию. Проверка входит в общий `validate.py`, а синтетическая регрессия автоматически обнаруживается `run-self-tests.py`.
 
 Repository hardening self-test проверяет validator boundaries на synthetic tracked checkout: фактическую Git ignore semantics через `git check-ignore`, отсутствие ignored/untracked TOML в config surface и containment Codex role configs внутри `.codex/agents`.
 
@@ -36,11 +36,15 @@ Git policy self-test проверяет fail-closed schema boundary через �
 
 Git preflight self-test создаёт synthetic repository + bare remote и прогоняет machine gates для protected branch, bootstrap push, feature publish, exact PR head, remote-ahead blocker и clean ff-only sync. Он не использует GitHub/network и не создаёт реальные PR.
 
-Deterministic updater self-test создаёт локальные synthetic source/project Git repositories и прогоняет реальный update engine: explicit legacy adoption, immutable tag pinning, CHECK/APPLY, shared 3-way merge, marker preservation, core-vs-project skill ownership и collision при попытке нового core slug захватить project skill.
+Детерминированная самопроверка обновлятора создаёт локальные синтетические source/project Git-репозитории и прогоняет реальный механизм обновления: явное принятие старого проекта, фиксацию неизменяемых тегов, CHECK/APPLY, трёхстороннее слияние, сохранение marker-блоков, владение core/project skills и конфликт при попытке нового core slug занять пользовательский skill. Отдельный сценарий закрепляет поддерживаемую нижнюю границу: `v0.6.0 → v0.7.0 → обязательная перезагрузка → v0.8.0`, включая продолжение с файлами Harness, созданными первым переходом и ещё не добавленными в индекс Git.
 
 Update migration self-test отдельно сохраняет historical compatibility coverage: legacy route/reload boundaries, control-plane relocation, project-owned schema migration/idempotency и release metadata. Оба теста dependency-free и не запускают LLM/agent; real-project dogfood остаётся дополнительным уровнем проверки.
 
-Baseline validator детерминированно проверяет schema-v1 planning contracts: configured task/REQ/ADR/OQ paths, strict refs/enums, dependency cycles, type-specific completion proofs, mutation-policy grammar, explicit architecture refs, Ready `context_basis` + отдельный `content_hash` и наличие matching immutable planning-review PASS. Stale context может быть warning на глобальной проверке, но resolver всё равно запрещает конкретный IMPLEMENT до fresh PLAN. `context_basis` fingerprint-ит STEP contract, linked REQ/ADR, direct dependency completion proofs, referenced architecture sections и relevant OQ; `content_hash` отдельно fingerprint-ит Implementation plan. Семантическую непротиворечивость static gate не угадывает — её доказывает обязательный independent planning-review.
+Execution self-test включает multi-process race на одном `execution-status.json`: все writers должны сериализоваться без lost update. Report contract self-test отдельно создаёт несколько immutable reports в один UTC second и доказывает exclusive `O_EXCL` reservation без overwrite.
+
+Execution self-test также проверяет `step-context` во всех трёх фазах: PLAN возвращает exact inputs без dependency-completion requirement, IMPLEMENT отражает BLOCKED→PASS prerequisite transition, REVIEW переиспользует exact specialized gate/repository revision.
+
+Baseline validator детерминированно проверяет schema-v1 planning contracts: configured task/REQ/ADR/OQ paths, strict refs/enums, dependency cycles, type-specific completion proofs, mutation-policy grammar, explicit architecture refs, Ready `context_basis` + отдельный `content_hash` и наличие matching immutable planning-review PASS. Stale context может быть warning на глобальной проверке, но resolver всё равно запрещает конкретный IMPLEMENT до fresh PLAN. `context_basis` schema v4 fingerprint-ит только semantic STEP/dependency contracts, semantic linked REQ/ADR, referenced architecture sections и relevant OQ; reverse traceability, priority/phase и dependency completion state исключены. `content_hash` отдельно fingerprint-ит Implementation plan, а completion proofs direct dependencies проверяются deterministic runtime gate непосредственно перед IMPLEMENT. Семантическую непротиворечивость static gate не угадывает — её доказывает обязательный independent planning-review.
 
 Baseline validator также детерминированно проверяет requirements document model: уникальность `REQ-NNN`, соответствие filename/H1 и обязательных standalone-секций, одинаковый набор REQ в `SPEC.md`/`STATUS.md`, прямые ссылки projections на canonical `REQ-NNN-*.md` и совпадение названий. Смысл requirement validator не интерпретирует.
 
@@ -54,6 +58,12 @@ Baseline validator также детерминированно проверяе�
 
 ```bash
 python3 .harness/tools/validate.py --mode manual
+```
+
+Отдельно посмотреть context budget:
+
+```bash
+python3 .harness/tools/context-budget.py
 ```
 
 `manual` остаётся строгим для обычного состояния, но может разрешить явно распознанное active project schema migration-pending состояние после Harness update как warning. Это нужно только для завершения control-plane hop; `commit` и `ci` такое состояние не принимают. Перед commit необходимо выполнить `PROJECT RECONCILE`.
