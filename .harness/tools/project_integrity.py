@@ -468,6 +468,7 @@ def validate_project_integrity(
     *,
     warnings: list[str] | None = None,
     allow_legacy: bool = False,
+    allow_preinit_release_alignment: bool = False,
     ci_mode: bool = False,
 ) -> list[str]:
     errors: list[str] = []
@@ -478,7 +479,12 @@ def validate_project_integrity(
         errors.extend(validate_all_review_reports(root, ci_mode=ci_mode))
         errors.extend(validate_all_operational_reports(root))
         errors.extend(validate_projections(root))
-        errors.extend(validate_project_templates(root))
+        errors.extend(
+            validate_project_templates(
+                root,
+                allow_preinit_release_alignment=allow_preinit_release_alignment,
+            )
+        )
         errors.extend(validate_initialized_project(root))
     try:
         errors.extend(validate_configured_artifacts(root))

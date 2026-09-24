@@ -17,10 +17,21 @@ from harness_config import (
     update_manifest_path,
     update_report_directory,
 )
+from harness_update import (
+    UpdateError,
+    WorkingTree,
+    _align_preinit_templates_after_reload,
+)
 from planning_contract import step_completion_proof
 from project_migration import legacy_manual_bypass_allowed, legacy_schema_pending, migrate_project
 from review_contract import legacy_review_pins, validate_all_review_reports
-from template_contract import validate_project_templates
+from template_contract import (
+    REVIEW_TEMPLATE,
+    align_preinit_project_templates,
+    preinit_template_alignment_state,
+    template_targets,
+    validate_project_templates,
+)
 
 
 def run(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -43,6 +54,16 @@ def require(value: bool, message: str) -> None:
 
 def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def snapshot_project_files(root: Path) -> dict[str, bytes]:
+    """Byte snapshot tracked/project fixture без internal .git storage."""
+    result: dict[str, bytes] = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or ".git" in path.relative_to(root).parts:
+            continue
+        result[path.relative_to(root).as_posix()] = path.read_bytes()
+    return result
 
 
 def matches_any(path: str, patterns: list[str]) -> bool:
@@ -399,6 +420,147 @@ None.
 """
 
 
+def test_preinit_release_template_alignment() -> None:
+    """Safe old-release drift aligns after reload; user drift never overwrites."""
+    with tempfile.TemporaryDirectory(prefix="harness-preinit-template-alignment-") as tmp:
+        root = Path(tmp)
+        source = repo_root()
+
+        manifest_path = root / ".harness/manifest.yaml"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(
+            (source / ".harness/manifest.yaml").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+        targets = template_targets(root)
+        for path, expected in targets.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(expected, encoding="utf-8")
+
+        review_path = root / "planning/reviews/TEMPLATE.md"
+        old_release_review = REVIEW_TEMPLATE
+        for line in (
+            "  implementation_baseline: null\n",
+            "  surface_mode: clean-tree-fallback\n",
+            "  changed_paths_hash: sha256:...\n",
+            "  baseline_status: missing\n",
+            "  baseline_reason: implementation baseline is missing\n",
+        ):
+            old_release_review = old_release_review.replace(line, "")
+        old_release_review = old_release_review.replace(
+            "\n## Verdict rationale\n\n"
+            "Кратко объяснить, почему verdict следует из findings и evidence.\n",
+            "",
+            1,
+        )
+        require(old_release_review != REVIEW_TEMPLATE, "old-release fixture did not drift")
+        review_path.write_text(old_release_review, encoding="utf-8")
+        old_bytes = review_path.read_bytes()
+
+        strict_errors = validate_project_templates(root)
+        require(
+            any("template baseline drift before PROJECT INIT" in item for item in strict_errors),
+            strict_errors,
+        )
+
+        pending, blockers = preinit_template_alignment_state(root)
+        require(not blockers, blockers)
+        require("planning/reviews/TEMPLATE.md" in pending, pending)
+        relaxed_errors = validate_project_templates(
+            root,
+            allow_preinit_release_alignment=True,
+        )
+        require(not relaxed_errors, relaxed_errors)
+
+        changed = align_preinit_project_templates(root)
+        require("planning/reviews/TEMPLATE.md" in changed, changed)
+        require(review_path.read_text(encoding="utf-8") == REVIEW_TEMPLATE, changed)
+        require(not validate_project_templates(root), validate_project_templates(root))
+
+        custom = (
+            old_release_review.rstrip()
+            + "\n\nПользовательская pre-init заметка: не перезаписывать.\n"
+        )
+        review_path.write_text(custom, encoding="utf-8")
+        custom_bytes = review_path.read_bytes()
+        pending, blockers = preinit_template_alignment_state(root)
+        require(blockers, "custom pre-init template drift was classified as safe")
+        require("planning/reviews/TEMPLATE.md" not in pending, pending)
+        allowed_errors = validate_project_templates(
+            root,
+            allow_preinit_release_alignment=True,
+        )
+        require(allowed_errors, "custom drift bypassed target validator")
+        try:
+            align_preinit_project_templates(root)
+        except ValueError as exc:
+            require("alignment blocked" in str(exc), str(exc))
+        else:
+            raise AssertionError("custom pre-init template drift was overwritten")
+        require(
+            review_path.read_bytes() == custom_bytes,
+            "blocked pre-init alignment changed custom template bytes",
+        )
+
+        manifest_text = manifest_path.read_text(encoding="utf-8").replace(
+            "  initialized: false",
+            "  initialized: true",
+            1,
+        )
+        manifest_path.write_text(manifest_text, encoding="utf-8")
+        review_path.write_bytes(old_bytes)
+        pending, blockers = preinit_template_alignment_state(root)
+        require(not pending and not blockers, (pending, blockers))
+        require(
+            align_preinit_project_templates(root) == [],
+            "initialized project template was aligned by updater",
+        )
+
+        # Updater-specific deferred alignment is transactional around target
+        # validator: successful postcondition keeps exact baseline, failure
+        # restores the old release template byte-for-byte.
+        manifest_path.write_text(
+            (source / ".harness/manifest.yaml").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        review_path.write_text(old_release_review, encoding="utf-8")
+        validator_path = root / ".harness/tools/validate.py"
+        validator_path.parent.mkdir(parents=True, exist_ok=True)
+        validator_path.write_text(
+            "#!/usr/bin/env python3\nraise SystemExit(0)\n",
+            encoding="utf-8",
+        )
+        aligned = _align_preinit_templates_after_reload(
+            root,
+            WorkingTree(root),
+        )
+        require("planning/reviews/TEMPLATE.md" in aligned, aligned)
+        require(review_path.read_text(encoding="utf-8") == REVIEW_TEMPLATE, aligned)
+
+        review_path.write_text(old_release_review, encoding="utf-8")
+        before_failed_postcondition = review_path.read_bytes()
+        validator_path.write_text(
+            "#!/usr/bin/env python3\n"
+            "print('synthetic target postcondition failure')\n"
+            "raise SystemExit(1)\n",
+            encoding="utf-8",
+        )
+        try:
+            _align_preinit_templates_after_reload(
+                root,
+                WorkingTree(root),
+            )
+        except UpdateError as exc:
+            require(exc.code == "POSTCONDITION_FAILED", (exc.code, exc))
+        else:
+            raise AssertionError("failed target validator did not rollback alignment")
+        require(
+            review_path.read_bytes() == before_failed_postcondition,
+            "failed deferred alignment did not restore old template bytes",
+        )
+
+
 def test_project_owned_migration() -> None:
     with tempfile.TemporaryDirectory(prefix="harness-schema-migration-") as tmp:
         root = Path(tmp)
@@ -452,6 +614,33 @@ def test_project_owned_migration() -> None:
         legacy_review_path.parent.mkdir(parents=True)
         legacy_review_path.write_text(legacy_review(), encoding="utf-8")
         legacy_review_before = legacy_review_path.read_text(encoding="utf-8")
+
+        # Regression #82: simulated old-but-valid project-owned REVIEW template.
+        # Current protocol adds surface proof keys + one required section. RECONCILE
+        # must migrate shape without overwriting project values/unknown keys/prose.
+        old_review_template = REVIEW_TEMPLATE
+        for line in (
+            "  implementation_baseline: null\n",
+            "  surface_mode: clean-tree-fallback\n",
+            "  changed_paths_hash: sha256:...\n",
+            "  baseline_status: missing\n",
+            "  baseline_reason: implementation baseline is missing\n",
+        ):
+            old_review_template = old_review_template.replace(line, "")
+        old_review_template = old_review_template.replace(
+            "verdict: pass\n",
+            "verdict: blocked\nproject_note: keep-me\n",
+            1,
+        )
+        old_review_template = old_review_template.replace(
+            "\n## Verdict rationale\n\nКратко объяснить, почему verdict следует из findings и evidence.\n",
+            "",
+            1,
+        )
+        old_review_template += "\n## Project notes\n\nПользовательский текст должен сохраниться.\n"
+        review_template_path = root / "planning/reviews/TEMPLATE.md"
+        review_template_path.parent.mkdir(parents=True, exist_ok=True)
+        review_template_path.write_text(old_review_template, encoding="utf-8")
         (root / "docs/adr").mkdir(parents=True)
         (root / "docs/adr/ADR-001-legacy.md").write_text(legacy_adr(), encoding="utf-8")
         (root / "docs/OPEN_QUESTIONS.md").write_text(
@@ -476,6 +665,80 @@ def test_project_owned_migration() -> None:
         run(root, "git", "add", ".")
         run(root, "git", "commit", "-qm", "legacy fixture")
 
+        # Regression #92: поздний hard conflict не имеет права оставлять
+        # partial migration ранних REQ/STEP/ADR/OQ/templates.
+        valid_review_template = review_template_path.read_text(encoding="utf-8")
+        review_template_path.write_text(
+            valid_review_template.replace(
+                "kind: step_review",
+                "kind: audit",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        before_template_block = snapshot_project_files(root)
+        try:
+            migrate_project(root)
+        except ValueError as exc:
+            require("project migration preflight blocked" in str(exc), str(exc))
+            require("frontmatter.kind must be step_review" in str(exc), str(exc))
+        else:
+            raise AssertionError("template hard conflict was migrated partially")
+        require(
+            snapshot_project_files(root) == before_template_block,
+            "failed template preflight mutated project tree",
+        )
+        review_template_path.write_text(valid_review_template, encoding="utf-8")
+
+        # Invalid later-family legacy identity также обнаруживается до первого
+        # write (в частности до split monolithic REQ).
+        adr_path = root / "docs/adr/ADR-001-legacy.md"
+        valid_adr = adr_path.read_text(encoding="utf-8")
+        adr_path.write_text(
+            valid_adr.replace(
+                "# ADR-001 — Legacy accepted decision",
+                "# ADR-999 — Legacy accepted decision",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        before_adr_block = snapshot_project_files(root)
+        try:
+            migrate_project(root)
+        except ValueError as exc:
+            require("project migration preflight blocked" in str(exc), str(exc))
+            require("does not match filename id ADR-001" in str(exc), str(exc))
+        else:
+            raise AssertionError("invalid legacy ADR identity was migrated partially")
+        require(
+            snapshot_project_files(root) == before_adr_block,
+            "failed ADR preflight mutated project tree",
+        )
+        adr_path.write_text(valid_adr, encoding="utf-8")
+
+        # Duplicate monolithic IDs would otherwise create ambiguous canonical
+        # artifacts; они тоже block до mutation.
+        spec_path = req / "SPEC.md"
+        valid_spec = spec_path.read_text(encoding="utf-8")
+        spec_path.write_text(
+            valid_spec
+            + "\n### REQ-001 — Duplicate legacy requirement\n\n"
+            + "#### Requirement\n\nDuplicate.\n",
+            encoding="utf-8",
+        )
+        before_spec_block = snapshot_project_files(root)
+        try:
+            migrate_project(root)
+        except ValueError as exc:
+            require("duplicate monolithic REQ id REQ-001" in str(exc), str(exc))
+        else:
+            raise AssertionError("duplicate monolithic REQ was migrated")
+        require(
+            snapshot_project_files(root) == before_spec_block,
+            "failed SPEC preflight mutated project tree",
+        )
+        spec_path.write_text(valid_spec, encoding="utf-8")
+
         require(legacy_schema_pending(root), "legacy schema not detected")
         require(
             not legacy_manual_bypass_allowed(root),
@@ -484,6 +747,30 @@ def test_project_owned_migration() -> None:
         first = migrate_project(root)
         require(first["status"] == "MIGRATED", first)
         require(not legacy_schema_pending(root), "migration left active legacy schema")
+
+        migrated_review_template = parse_document(review_template_path)
+        review_meta = migrated_review_template["frontmatter"]
+        specialized = review_meta["specialized_reviews"]
+        for key in (
+            "implementation_baseline",
+            "surface_mode",
+            "changed_paths_hash",
+            "baseline_status",
+            "baseline_reason",
+        ):
+            require(key in specialized, f"review template migration missed {key}")
+        require(review_meta["verdict"] == "blocked", "project-owned template value overwritten")
+        require(review_meta["project_note"] == "keep-me", "unknown project key was lost")
+        require(
+            "Project notes" in migrated_review_template["sections"]
+            and "Пользовательский текст" in migrated_review_template["sections"]["Project notes"],
+            "custom project template prose was lost",
+        )
+        require(
+            "Verdict rationale" in migrated_review_template["sections"],
+            "missing structural section was not added",
+        )
+        require(not validate_project_templates(root), validate_project_templates(root))
 
         step = parse_document(root / "planning/tasks/STEP-001.md")
         require(step["frontmatter"]["schema"] == 1, "STEP schema not migrated")
@@ -594,15 +881,58 @@ def test_project_owned_migration() -> None:
         require(reports_before == reports_after, "idempotent reconcile created an extra migration report")
         require(not validate_project_templates(root), validate_project_templates(root))
 
-        # Custom prose разрешён, но устаревшая structural schema — blocker.
+        # Additive structural drift теперь является migration pending, а не
+        # тупиком validator-а. Missing key восстанавливается protocol default-ом,
+        # но existing project prose остаётся нетронутым.
         stale_template = custom_template.replace("risk_flags:\n  - none\n", "")
         task_template.write_text(stale_template, encoding="utf-8")
-        template_errors = validate_project_templates(root)
         require(
-            any("missing structural key frontmatter.risk_flags" in item for item in template_errors),
-            template_errors,
+            legacy_schema_pending(root),
+            "missing template structural key was not detected as migration pending",
         )
-        task_template.write_text(custom_template, encoding="utf-8")
+        repaired = migrate_project(root)
+        require(repaired["status"] == "MIGRATED", repaired)
+        repaired_task_template = task_template.read_text(encoding="utf-8")
+        require("risk_flags:\n  - none\n" in repaired_task_template, repaired_task_template)
+        require(
+            "<!-- project customization -->" in repaired_task_template,
+            "additive template migration lost project prose",
+        )
+        require(not validate_project_templates(root), validate_project_templates(root))
+        require(not legacy_schema_pending(root), "additive template migration did not converge")
+
+        # Non-additive identity conflict не угадывается и не overwrite-ится.
+        review_template_before_conflict = review_template_path.read_text(encoding="utf-8")
+        review_template_path.write_text(
+            review_template_before_conflict.replace(
+                "kind: step_review",
+                "kind: audit",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        require(
+            not legacy_schema_pending(root),
+            "non-additive template conflict masqueraded as migratable legacy state",
+        )
+        require(
+            not legacy_manual_bypass_allowed(root),
+            "non-additive template conflict received manual migration bypass",
+        )
+        conflict_errors = validate_project_templates(root)
+        require(
+            any("frontmatter.kind must be step_review" in item for item in conflict_errors),
+            conflict_errors,
+        )
+        try:
+            migrate_project(root)
+        except ValueError as exc:
+            require("project migration preflight blocked" in str(exc), str(exc))
+            require("frontmatter.kind must be step_review" in str(exc), str(exc))
+        else:
+            raise AssertionError("non-additive project template conflict was overwritten")
+        review_template_path.write_text(review_template_before_conflict, encoding="utf-8")
+        require(not legacy_schema_pending(root), "restored template still marked pending")
 
         # После pinning historical report становится immutable contract:
         # mutation должна обнаруживаться, а RECONCILE не имеет права re-pin её.
@@ -641,14 +971,60 @@ def test_release_metadata(root: Path) -> None:
         )
 
 
+# Releases до v0.8.2 поставляют update engine без журнала и с defects
+# #98–#103: проект на таком release выполняет следующий hop своим старым
+# engine. Опубликованный v0.8.1 вышел из main без нового engine, поэтому
+# транзакционный engine устанавливает минимальный bridge v0.8.2 (#119).
+# Для каждого release из таблицы единственный допустимый выход — указанный
+# bridge (kind=bridge, reloadRequired=true, reason).
+REQUIRED_BRIDGES = {
+    "v0.8.0": "v0.8.1",
+    "v0.8.1": "v0.8.2",
+}
+
+
+def bridge_edge_errors(graph: dict) -> list[str]:
+    errors: list[str] = []
+    for edge in graph.get("transitions", []):
+        source = edge.get("from")
+        expected = REQUIRED_BRIDGES.get(source)
+        if expected is None:
+            continue
+        target = edge.get("to")
+        if target != expected:
+            errors.append(f"{source} may only route to bridge {expected}, got {target}")
+        if edge.get("kind") != "bridge" or edge.get("reloadRequired") is not True:
+            errors.append(f"{source} -> {target} must be kind=bridge with reloadRequired=true")
+        if not str(edge.get("reason") or "").strip():
+            errors.append(f"{source} -> {target} bridge requires reason")
+    return errors
+
+
+def test_bridge_release_gate(root: Path) -> None:
+    graph = load_json(update_manifest_path(root))
+    errors = bridge_edge_errors(graph)
+    require(not errors, "; ".join(errors))
+
+    def edge(source: str, target: str, *, kind: str = "bridge", reload: bool = True) -> dict:
+        return {"transitions": [{"from": source, "to": target, "kind": kind, "reloadRequired": reload, "reason": "journaled engine"}]}
+
+    # Negative cases: переход мимо bridge и non-reload/standard bridge.
+    require(bridge_edge_errors(edge("v0.8.1", "v0.9.0")), "gate accepted v0.8.1 edge that skips v0.8.2")
+    require(bridge_edge_errors(edge("v0.8.1", "v0.8.2", kind="standard", reload=False)), "gate accepted non-bridge v0.8.1 -> v0.8.2 edge")
+    require(bridge_edge_errors(edge("v0.8.0", "v0.9.0")), "gate accepted v0.8.0 edge that skips v0.8.1")
+    require(not bridge_edge_errors(edge("v0.8.1", "v0.8.2")), "gate rejected valid v0.8.2 bridge edge")
+
+
 def main() -> int:
     root = repo_root()
     tests = [
         ("policy-driven update paths", lambda: test_policy_driven_paths(root)),
         ("routing/reload", lambda: test_routing(root)),
         ("ownership boundary", lambda: test_ownership_contract(root)),
+        ("pre-init release template alignment", test_preinit_release_template_alignment),
         ("project-owned schema migration", test_project_owned_migration),
         ("release metadata", lambda: test_release_metadata(root)),
+        ("journaled-engine bridge release gate", lambda: test_bridge_release_gate(root)),
     ]
     for name, test in tests:
         test()

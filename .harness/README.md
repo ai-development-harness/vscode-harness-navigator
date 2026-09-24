@@ -28,6 +28,8 @@ Namespace/control plane AI Development Harness. Здесь собраны core d
 
 Точный source of truth ownership — `harness-update.toml`; filesystem namespace не заменяет эту policy.
 
+Local-only namespace тоже имеет lifecycle contract: persistent файл обязан иметь owner/tool, recovery semantics, safe deletion condition и migration/version strategy. Temporary semantic/Git input удаляется только deterministic consumer-ом после доказанного SUCCESS и только если exact lexical path/identity не изменились; symlink paths блокируются. Ошибка secondary cleanup не превращает уже успешный primary side effect в failure. Неизвестные local-файлы Harness автоматически не удаляет.
+
 ## Repository policies
 
 - `git-policy.toml` — поведение GIT COMMIT / GIT PUSH / GIT PR / GIT PR FINISH / GIT SYNC, ветки и commit messages.
@@ -36,7 +38,7 @@ Namespace/control plane AI Development Harness. Здесь собраны core d
 - `harness.lock.json` — машинный known BASE текущего Harness release; JSON намеренно не требует inline-комментариев.
 - `harness-update-graph.json` — machine-readable граф допустимых переходов между immutable Harness releases; локальная копия входит в protocol layer, а выбор маршрута делается по версии из canonical `default_branch`.
 - `command-transitions.json` — machine-readable source of truth для canonical command surface, краткие descriptions/docs links, chain eligibility, explicit transition edges, `onPreviousResult` и runtime preconditions. До skill routing canonical command проходит structural validation по этому graph.
-`.harness/local/execution/execution-status.json` — единый local operational state всех canonical Harness executions. Он игнорируется Git, не является product evidence и может хранить несколько независимых running/completed records. Canonical repository artifacts имеют приоритет над local state.
+`.harness/local/execution/execution-status.json` — bounded local operational state canonical executions. Schema v2 хранит full active records, отдельный STEP recovery proof и не более 100 compact terminal tombstones; schema v1 мигрирует автоматически execution layer-ом. Canonical repository artifacts имеют приоритет над local state.
 
 `harness.lock.json` не содержит secrets. Его нужно хранить в Git вместе с проектом; удаление lock переводит updater в legacy-adoption mode.
 

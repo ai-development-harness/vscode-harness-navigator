@@ -151,12 +151,14 @@ python3 .harness/tools/harness-ux.py step-show --step STEP-024 --json
 <a id="command-step-implement"></a>
 ## `STEP IMPLEMENT STEP-NNN`
 
-Реализует только current Ready plan в пределах task contract. До dispatch execution layer детерминированно применяет `step-implement-ready`: проверяет freshness plan/review и type-specific completion proofs direct dependencies. При первой product mutation ставит canonical `status: in_progress` и добавляет/обновляет tests. При попытке завершить IMPLEMENT как `SUCCESS` dispatcher сам запускает machine-executable `## Verification` через `verification.py`, пишет generated Evidence и разрешает completion только после PASS; manual checks остаются явной semantic boundary. `status: completed` недопустим до schema-valid independent review PASS и type-specific completion proof.
+Реализует только current Ready plan в пределах task contract. До semantic handoff execution layer детерминированно применяет `step-implement-ready` и фиксирует durable `implementationBaseline` — текущий Git HEAD до первой product mutation. Baseline хранится в `execution-status.json`, переживает restart и не сдвигается при повторном IMPLEMENT активной `in_progress` lifecycle. При первой product mutation ставит canonical `status: in_progress` и добавляет/обновляет tests. При попытке завершить IMPLEMENT как `SUCCESS` dispatcher сам запускает machine-executable `## Verification` через `verification.py`, пишет generated Evidence и разрешает completion только после PASS; manual checks остаются явной semantic boundary. `status: completed` недопустим до schema-valid independent review PASS и type-specific completion proof.
 
 <a id="command-step-review"></a>
 ## `STEP REVIEW STEP-NNN`
 
-Независимая проверка exact repository revision. Перед reasoning deterministic preselector вычисляет обязательные security/test reviewers. Reviewer возвращает structured verdict/findings/observations; `semantic-writer.py` сам фиксирует exact revision/gate basis и создаёт immutable report. При PASS writer дополнительно переводит STEP в `completed` только если type-specific completion proof полностью доказан, затем синхронизирует projections; иначе report остаётся PASS, но execution получает BLOCKED и STEP не закрывается. Crash recovery принимает либо exact current-revision report, либо строгий post-review proof `new PASS report + completed STEP + completion proof`.
+Независимая проверка exact repository revision. Перед reasoning dispatcher штампует в active execution exact `repositoryRevision` и `gateBasis`, а deterministic preselector вычисляет обязательные security/test reviewers. Reviewer возвращает structured verdict/findings/observations; `semantic-writer.py` принимает verdict только пока текущие revision/gate совпадают со stamped expectation, после чего создаёт immutable report. При PASS writer дополнительно переводит STEP в `completed` только если type-specific completion proof полностью доказан, затем синхронизирует projections; иначе report остаётся PASS, но execution получает BLOCKED и STEP не закрывается. Crash recovery принимает либо exact current-revision report, либо строгий post-review proof `new PASS report + completed STEP + completion proof`.
+
+`STEP REVIEW` поддерживает post-commit и multi-commit сценарии. При валидном durable baseline preselector строит exact surface как `baseline..HEAD + staged/unstaged/untracked product paths` и возвращает `surfaceMode=implementation-baseline`; поэтому security/test classification видит весь STEP diff, а не только последний commit. `.harness/local/**` и новый `REVIEW-*.md` исключаются из surface. Если baseline отсутствует, недоступен или не является ancestor текущего HEAD, Harness не угадывает diff: переключается в `clean-tree-fallback`, сохраняет diagnostic paths и fail-closed требует `security + tests`.
 
 <a id="command-step-fix"></a>
 ## `STEP FIX STEP-NNN`
@@ -204,7 +206,7 @@ Read-only deterministic рекомендация. Сначала продолж�
 
 Если проект ещё не инициализирован, команда ничего не меняет, не создаёт audit report/REQ/ADR/STEP и возвращает `PROJECT RECONCILE: NOT_APPLICABLE` с handoff → `PROJECT INIT`.
 
-В инициализированном проекте сначала выполняет idempotent active-schema migration, если она требуется: legacy STEP/REQ/ADR/OQ и project-owned templates переводятся на current schema, старые Ready plans без durable semantic proof становятся draft, immutable historical reports не переписываются. Затем пересобирает projections, сравнивает code/tests/config с REQ/ADR/architecture/STEP/evidence, запускает command-reference check и создаёт audit/corrective work. Не исправляет production code молча.
+В инициализированном проекте migration начинается с **read-only preflight всех deterministic hard blockers до первой записи**: immutable review pins, STEP/REQ/ADR parse+identity, duplicate monolithic REQ/OQ IDs и project-owned template conflicts. Только после PASS выполняется idempotent active-schema migration: legacy STEP/REQ/ADR/OQ переводятся на current schema, а project-owned templates получают только missing structural keys/sections с сохранением existing values/prose; non-additive schema/kind/type conflict блокирует RECONCILE без partial mutation. Старые Ready plans без durable semantic proof становятся draft, immutable historical reports не переписываются. Затем пересобирает projections, сравнивает code/tests/config с REQ/ADR/architecture/STEP/evidence, запускает command-reference check и создаёт audit/corrective work. Не исправляет production code молча.
 
 <a id="command-release-check"></a>
 ## `RELEASE CHECK`
@@ -229,7 +231,7 @@ Maintenance mutation protocol layer без STEP и без model call. Dispatcher
 
 Команда применяет заранее проверенную цепочку строго hop-by-hop. Каждый hop использует immutable release tags и обычные ownership/3-way rules. Lock обновляется только после postcondition соответствующего hop. Если edge помечен `reloadRequired`, текущий запуск останавливается на достигнутом bridge с `UPDATER_RELOAD_REQUIRED`; после reload повторяется та же команда до исходного конечного target.
 
-Команда разрешена до `PROJECT INIT`. Pre-init update обновляет только protocol layer/lock, не выполняет bootstrap проекта и не переводит `project.initialized` в `true`.
+Команда разрешена до `PROJECT INIT`. Pre-init update не выполняет bootstrap проекта и не переводит `project.initialized` в `true`. При reload-required изменении template contract первый APPLY обновляет protocol layer/lock и останавливается; после reload повтор exact APPLY может детерминированно выровнять только доказанный old-release pre-INIT template baseline. Пользовательская prose/value/schema drift блокирует alignment и не перезаписывается.
 
 Пример конечного target:
 
@@ -237,7 +239,7 @@ Maintenance mutation protocol layer без STEP и без model call. Dispatcher
 HARNESS UPDATE APPLY TO vX.X.X
 ```
 
-Updater не выполняет executable migration/install/bootstrap actions из configured update graph или target release, не делает commit/push/PR. Deterministic result содержит `nextAction`: `UPDATED → GIT CHECK`, `UPDATER_RELOAD_REQUIRED → reload-and-repeat exact APPLY`, `NO_UPDATE → null`. Если GIT gate показывает pending project schema migration, её выполняет `PROJECT RECONCILE` до commit.
+Updater не выполняет executable migration/install/bootstrap actions из configured update graph или target release, не делает commit/push/PR. Deterministic result содержит `nextAction`: `UPDATED → GIT CHECK`, `UPDATER_RELOAD_REQUIRED → reload-and-repeat exact APPLY`. Stable `NO_UPDATE → null`; если `NO_UPDATE` завершил deferred pre-INIT template alignment и вернул `repositoryMutated=true`, dispatcher направляет в `GIT CHECK`. Если GIT gate показывает pending schema migration уже инициализированного проекта, её выполняет `PROJECT RECONCILE` до commit.
 
 <a id="command-git-check"></a>
 ## `GIT CHECK`

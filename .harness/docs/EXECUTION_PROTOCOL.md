@@ -279,7 +279,7 @@ Single PLAN после SUCCESS останавливается; продолже�
 
 ## 9. `STEP IMPLEMENT STEP-NNN`
 
-Execution tracking уже ведётся root execution wrapper.
+Execution tracking уже ведётся root execution wrapper. До semantic handoff wrapper фиксирует durable `implementationBaseline`: exact Git HEAD до первой product mutation. Proof хранится в execution state, переживает restart и переносится в последующие REVIEW/FIX; повторный IMPLEMENT для уже `in_progress` lifecycle не имеет права молча сдвигать baseline.
 
 1. До dispatch execution layer применяет deterministic `step-implement-ready`: требует актуальный Ready plan/matching review и completion proofs всех direct dependencies. Agent не повторяет эту проверку reasoning-ом.
 2. Explicit user override не обходит runtime prerequisite safety gate; изменение contract оформляется через PLAN/reconciliation.
@@ -299,7 +299,7 @@ Single IMPLEMENT после SUCCESS останавливается; внутри
 
 ## 10. `STEP REVIEW STEP-NNN`
 
-Reviewer независим и read-only относительно product code.
+Reviewer независим и read-only относительно product code. Deterministic context получает baseline exact execution. При валидном proof specialized-review gate использует `surfaceMode=implementation-baseline` и строит surface как `git diff baseline..HEAD` плюс текущие staged/unstaged/untracked product paths. Missing/unavailable/non-ancestor baseline не угадывается: `clean-tree-fallback` остаётся conservative recovery/legacy режимом и требует `security + tests`.
 
 1. Прочитать task contract, implementation plan, REQ, ADR, diff/current implementation и tests.
 2. Прочитать `.harness/manifest.yaml → review.security` и `review.tests`.

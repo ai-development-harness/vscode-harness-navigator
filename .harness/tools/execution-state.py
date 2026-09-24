@@ -12,6 +12,7 @@ from execution_status import (
     complete_command,
     find_completed,
     load_status,
+    normalize_single_command,
     stamp_plan,
     start_execution,
 )
@@ -85,6 +86,30 @@ def main() -> int:
     elif args.action == "begin":
         emit(begin_command(root, args.root, args.command))
     elif args.action == "complete":
+        # IMPLEMENT/FIX SUCCESS (и PASS, который resolver тоже считает
+        # завершением) обязан пройти deterministic `## Verification`,
+        # которую выполняет только harness-dispatch.py complete. Низкоуровневый
+        # CLI не должен быть обходным путём мимо этого gate (#113).
+        try:
+            parsed = normalize_single_command(root, args.command)
+        except ValueError:
+            parsed = {}
+        if (
+            args.result in {"SUCCESS", "PASS"}
+            and parsed.get("domain") == "STEP"
+            and parsed.get("operation") in {"IMPLEMENT", "FIX"}
+        ):
+            emit(
+                {
+                    "status": "BLOCKED",
+                    "reasonCode": "VERIFICATION_REQUIRES_DISPATCH",
+                    "message": (
+                        "STEP IMPLEMENT/FIX SUCCESS requires Verification; use "
+                        "python3 .harness/tools/harness-dispatch.py complete"
+                    ),
+                }
+            )
+            return 2
         # details — редкая command-specific metadata внутри той же execution
         # (например resolved update target/route). Это не отдельный state file.
         details = json.loads(args.details_json) if args.details_json else None

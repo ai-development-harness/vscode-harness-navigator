@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -37,11 +38,18 @@ class GitActionError(RuntimeError):
         self.details = details
 
 
-def _run(root: Path, argv: list[str]) -> subprocess.CompletedProcess[str]:
+def _run(
+    root: Path,
+    argv: list[str],
+    *,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Выполнить deterministic mutation, передавая captured semantic input по stdin."""
     proc = subprocess.run(
         argv,
         cwd=root,
         text=True,
+        input=input_text,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -56,20 +64,97 @@ def _run(root: Path, argv: list[str]) -> subprocess.CompletedProcess[str]:
     return proc
 
 
-def _message_path(root: Path, value: Path) -> Path:
-    path = value if value.is_absolute() else root / value
-    path = path.resolve()
-    allowed = (root / ".harness/local/git").resolve()
+def _safe_local_git_input(
+    root: Path,
+    value: Path,
+    *,
+    label: str,
+    blocked_code: str,
+    missing_code: str,
+) -> Path:
+    """Вернуть exact lexical input path и запретить symlink traversal."""
+    base = root.resolve()
+    allowed = base / ".harness" / "local" / "git"
+    if ".." in value.parts:
+        raise GitActionError(
+            blocked_code,
+            f"{label} file must stay under .harness/local/git/ without '..'",
+        )
+    candidate = value if value.is_absolute() else base / value
+    candidate = Path(os.path.abspath(str(candidate)))
+
     try:
-        path.relative_to(allowed)
+        rel_root = candidate.relative_to(base)
+        rel_allowed = candidate.relative_to(allowed)
     except ValueError as exc:
         raise GitActionError(
-            "COMMIT_MESSAGE_PATH_BLOCKED",
-            "commit message file must stay under .harness/local/git/",
+            blocked_code,
+            f"{label} file must stay under .harness/local/git/",
         ) from exc
-    if not path.is_file():
-        raise GitActionError("COMMIT_MESSAGE_MISSING", f"commit message file not found: {path}")
-    return path
+    if not rel_allowed.parts:
+        raise GitActionError(
+            missing_code,
+            f"{label} file must be a regular file: {candidate}",
+        )
+
+    cursor = base
+    for part in rel_root.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise GitActionError(
+                blocked_code,
+                f"{label} file path must not contain symlinks",
+            )
+
+    if not candidate.is_file():
+        raise GitActionError(
+            missing_code,
+            f"{label} file must be a regular file: {candidate}",
+        )
+    resolved = candidate.resolve(strict=True)
+    try:
+        resolved.relative_to(allowed)
+    except ValueError as exc:
+        raise GitActionError(
+            blocked_code,
+            f"{label} file escapes .harness/local/git/",
+        ) from exc
+    return candidate
+
+
+def _message_path(root: Path, value: Path) -> Path:
+    return _safe_local_git_input(
+        root,
+        value,
+        label="commit message",
+        blocked_code="COMMIT_MESSAGE_PATH_BLOCKED",
+        missing_code="COMMIT_MESSAGE_MISSING",
+    )
+
+
+def _input_identity(path: Path) -> tuple[int, int, int, int]:
+    stat = path.stat(follow_symlinks=False)
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+def _cleanup_consumed_input(
+    path: Path | None,
+    identity: tuple[int, int, int, int] | None,
+) -> str | None:
+    """Best-effort unlink exact consumed file; primary side effect уже SUCCESS."""
+    if path is None or identity is None:
+        return None
+    try:
+        if path.is_symlink():
+            return f"cleanup skipped for {path}: path became a symlink"
+        if not path.exists():
+            return None
+        if _input_identity(path) != identity:
+            return f"cleanup skipped for {path}: input changed after consumption"
+        path.unlink()
+    except OSError as exc:
+        return f"cleanup failed for {path}: {exc}"
+    return None
 
 
 def _validate_commit_message(
@@ -140,7 +225,13 @@ def execute_commit(
         gate = commit_preflight(root, commit_type=commit_type, slug=slug)
 
     path = _message_path(root, message_file)
+    message_identity = _input_identity(path)
     message = path.read_text(encoding="utf-8")
+    if _input_identity(path) != message_identity:
+        raise GitActionError(
+            "COMMIT_MESSAGE_CHANGED",
+            "commit message file changed while being read",
+        )
     _validate_commit_message(message, commit_type=commit_type, gate=gate)
 
     before = Repo(root).head()
@@ -149,14 +240,17 @@ def execute_commit(
         argv.append("-S")
     if gate.get("allowEmpty") and not gate.get("staged"):
         argv.append("--allow-empty")
-    argv.extend(["-F", str(path)])
-    _run(root, argv)
+    # Git должен потребить ровно ту строку, которую Harness уже прочитал и
+    # провалидировал. Повторное чтение mutable path через "-F <file>" создаёт
+    # TOCTOU между validation и primary side effect при concurrent sessions.
+    argv.extend(["-F", "-"])
+    _run(root, argv, input_text=message)
     after = Repo(root).head()
     if not after or after == before:
         raise GitActionError("COMMIT_POSTCONDITION_FAILED", "Git HEAD did not advance")
 
-    path.unlink(missing_ok=True)
-    return {
+    cleanup_warning = _cleanup_consumed_input(path, message_identity)
+    result = {
         "status": "SUCCESS",
         "action": "commit",
         "branch": Repo(root).branch(),
@@ -164,6 +258,9 @@ def execute_commit(
         "head": after,
         "mutation": {"argv": argv},
     }
+    if cleanup_warning is not None:
+        result["cleanupWarnings"] = [cleanup_warning]
+    return result
 
 
 def execute_push(root: Path) -> dict[str, Any]:
@@ -197,23 +294,14 @@ def execute_push(root: Path) -> dict[str, Any]:
 
 
 def _pr_input_path(root: Path, value: Path, *, label: str) -> Path:
-    """Resolve semantic PR input only from ignored local Git state."""
-    path = value if value.is_absolute() else root / value
-    path = path.resolve()
-    allowed = (root / ".harness/local/git").resolve()
-    try:
-        path.relative_to(allowed)
-    except ValueError as exc:
-        raise GitActionError(
-            "PR_INPUT_PATH_BLOCKED",
-            f"{label} file must stay under .harness/local/git/",
-        ) from exc
-    if not path.is_file() or path.is_symlink():
-        raise GitActionError(
-            "PR_INPUT_MISSING",
-            f"{label} file must be a regular file: {path}",
-        )
-    return path
+    """Разрешить semantic PR input без symlink traversal."""
+    return _safe_local_git_input(
+        root,
+        value,
+        label=label,
+        blocked_code="PR_INPUT_PATH_BLOCKED",
+        missing_code="PR_INPUT_MISSING",
+    )
 
 
 def _provider_json(root: Path, argv: list[str]) -> Any:
@@ -396,6 +484,18 @@ def execute_pr(
 ) -> dict[str, Any]:
     """Find/reuse/create GitHub PR and persist deterministic local lifecycle state."""
     gate = pr_preflight(root)
+    body_path = (
+        _pr_input_path(root, body_file, label="PR body")
+        if body_file is not None
+        else None
+    )
+    title_path = (
+        _pr_input_path(root, title_file, label="PR title")
+        if title_file is not None
+        else None
+    )
+    body_identity = _input_identity(body_path) if body_path is not None else None
+    title_identity = _input_identity(title_path) if title_path is not None else None
     existing = _open_prs(root, gate)
     if len(existing) > 1:
         raise GitActionError(
@@ -419,8 +519,14 @@ def execute_pr(
                 "PR_BODY_REQUIRED",
                 "creating a PR requires --body-file",
             )
-        body_path = _pr_input_path(root, body_file, label="PR body")
-        if not body_path.read_text(encoding="utf-8").strip():
+        assert body_path is not None
+        body = body_path.read_text(encoding="utf-8")
+        if _input_identity(body_path) != body_identity:
+            raise GitActionError(
+                "PR_BODY_CHANGED",
+                "PR body file changed while being read",
+            )
+        if not body.strip():
             raise GitActionError("PR_BODY_INVALID", "PR body must not be empty")
 
         if gate.get("titleFromCommit"):
@@ -431,8 +537,13 @@ def execute_pr(
                     "PR_TITLE_REQUIRED",
                     "policy requires semantic --title-file",
                 )
-            title_path = _pr_input_path(root, title_file, label="PR title")
+            assert title_path is not None
             title = title_path.read_text(encoding="utf-8").strip()
+            if _input_identity(title_path) != title_identity:
+                raise GitActionError(
+                    "PR_TITLE_CHANGED",
+                    "PR title file changed while being read",
+                )
         if not title or "\n" in title or "\r" in title:
             raise GitActionError("PR_TITLE_INVALID", "PR title must be one non-empty line")
 
@@ -447,11 +558,13 @@ def execute_pr(
             "--title",
             title,
             "--body-file",
-            str(body_path),
+            "-",
         ]
         if gate.get("draft"):
             argv.append("--draft")
-        _run(root, argv)
+        # GitHub CLI поддерживает --body-file -; provider получает captured
+        # body через stdin и больше не переоткрывает mutable semantic input.
+        _run(root, argv, input_text=body)
 
         existing = _open_prs(root, gate)
         if len(existing) != 1:
@@ -464,7 +577,20 @@ def execute_pr(
 
     _validate_provider_pr(gate, item)
     state_file = _persist_pr_state(root, gate=gate, item=item)
-    return {
+
+    # Semantic title/body — одноразовый transport. Удаляем только после
+    # provider postcondition + durable pr-state; на любом предыдущем exception
+    # inputs остаются для диагностики/retry.
+    cleanup_warnings = [
+        warning
+        for warning in (
+            _cleanup_consumed_input(body_path, body_identity),
+            _cleanup_consumed_input(title_path, title_identity),
+        )
+        if warning is not None
+    ]
+
+    result = {
         "status": "SUCCESS",
         "action": "pr",
         "pr": item["number"],
@@ -476,6 +602,9 @@ def execute_pr(
         "draft": bool(item.get("isDraft")),
         "stateFile": state_file,
     }
+    if cleanup_warnings:
+        result["cleanupWarnings"] = cleanup_warnings
+    return result
 
 
 def execute_sync(root: Path) -> dict[str, Any]:

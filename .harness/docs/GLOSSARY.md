@@ -50,7 +50,7 @@ Structural validation CTS выполняется до command-specific interpret
 .harness/local/execution/execution-status.json
 ```
 
-Файл содержит независимые execution records. Новая пользовательская команда не затирает interrupted execution другой команды.
+Schema v2 хранит full records только для active/recoverable executions, отдельный `stepRecovery` для STEP proof и bounded `recentTerminals` для короткой terminal history. Новая пользовательская команда не затирает interrupted execution другой команды.
 
 Execution Status не является product evidence и не задаёт допустимые переходы — это делает CTS.
 

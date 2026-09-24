@@ -19,6 +19,7 @@ from document_contract import (
     atomic_write_text,
     content_hash,
     create_durable_report,
+    parse_document,
     render_document,
     split_frontmatter,
 )
@@ -32,7 +33,11 @@ from harness_config import (
 )
 from projection_contract import write_projections
 from review_contract import current_legacy_review_snapshots, legacy_review_pins
-from template_contract import refresh_project_templates
+from template_contract import (
+    migrate_project_templates,
+    project_template_migration_blockers,
+    project_template_migration_pending,
+)
 
 
 STATUS_MAP = {
@@ -386,11 +391,16 @@ def _document_family_state(paths: list[Path]) -> str:
 
 
 def legacy_manual_bypass_allowed(root: Path) -> bool:
-    """Разрешить post-update manual bypass только для цельного legacy layout.
+    """Разрешить post-update manual bypass только для цельного migratable state.
 
-    PROJECT RECONCILE умеет чинить mixed state, но validator не должен считать
-    частично мигрированный repository безопасным Harness postcondition.
+    Non-additive template conflicts никогда не попадают под migration warning:
+    validator обязан оставить их hard blocker-ом до явного решения.
     """
+    try:
+        if project_template_migration_blockers(root):
+            return False
+    except (OSError, UnicodeDecodeError, ValueError):
+        return False
     if not legacy_schema_pending(root):
         return False
 
@@ -494,11 +504,187 @@ def legacy_schema_pending(root: Path) -> bool:
             return True
     except ValueError:
         return True
+    try:
+        if project_template_migration_pending(root):
+            return True
+    except (OSError, UnicodeDecodeError, ValueError):
+        return True
     return False
 
 
+def _filename_artifact_id(
+    path: Path,
+    pattern: re.Pattern[str],
+) -> str | None:
+    match = re.match(rf"^({pattern.pattern})(?:-|\.md$)", path.name)
+    return match.group(1) if match else None
+
+
+def _preflight_document_family(
+    paths: list[Path],
+    *,
+    pattern: re.Pattern[str],
+    label: str,
+) -> list[str]:
+    """Проверить migration identity/parse blockers без repository mutation."""
+    blockers: list[str] = []
+    seen_ids: dict[str, str] = {}
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+            frontmatter, _body = split_frontmatter(text)
+        except (OSError, UnicodeDecodeError, DocumentError, ValueError) as exc:
+            blockers.append(f"{path}: cannot parse {label}: {exc}")
+            continue
+
+        filename_id = _filename_artifact_id(path, pattern)
+        if filename_id is None:
+            blockers.append(f"{path}: filename does not contain canonical {label} id")
+            continue
+
+        if frontmatter is None:
+            try:
+                document_id, _title = _h1(text, pattern)
+            except ValueError as exc:
+                blockers.append(f"{path}: {exc}")
+                continue
+        else:
+            # Current document migration не переписывает. Поэтому unsupported
+            # current schema/identity — blocker, а не повод мутировать соседние
+            # legacy artifacts до будущего validation failure.
+            try:
+                parsed = parse_document(path)
+            except (OSError, UnicodeDecodeError, DocumentError, ValueError) as exc:
+                blockers.append(f"{path}: cannot parse current {label}: {exc}")
+                continue
+            meta = parsed.get("frontmatter")
+            document_id = meta.get("id") if isinstance(meta, dict) else None
+            if not isinstance(meta, dict) or meta.get("schema") != 1:
+                blockers.append(f"{path}: current {label} schema must be 1")
+                continue
+            if not isinstance(document_id, str):
+                blockers.append(f"{path}: current {label} id must be a string")
+                continue
+
+        if document_id != filename_id:
+            blockers.append(
+                f"{path}: {label} id {document_id!r} does not match filename id {filename_id}"
+            )
+            continue
+        previous = seen_ids.get(document_id)
+        if previous is not None:
+            blockers.append(
+                f"{path}: duplicate {label} id {document_id} also used by {previous}"
+            )
+        else:
+            seen_ids[document_id] = str(path)
+    return blockers
+
+
+def _preflight_monolithic_ids(
+    path: Path,
+    *,
+    heading_pattern: re.Pattern[str],
+    label: str,
+) -> list[str]:
+    if not path.is_file():
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return [f"{path}: cannot read monolithic {label}: {exc}"]
+
+    ids = heading_pattern.findall(text)
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for item in ids:
+        document_id = item[0] if isinstance(item, tuple) else item
+        if document_id in seen:
+            duplicates.add(document_id)
+        seen.add(document_id)
+    return [
+        f"{path}: duplicate monolithic {label} id {document_id}"
+        for document_id in sorted(duplicates)
+    ]
+
+
+def migration_preflight(root: Path) -> dict[str, Any]:
+    """Fail before first migration write when deterministic blocker is knowable."""
+    blockers: list[str] = []
+
+    # Immutable-history corruption и template hard conflicts уже имеют
+    # read-only detectors. Вызываем их до любых active document migrations.
+    try:
+        pending_legacy_reviews = _pending_legacy_review_pins(root)
+    except ValueError as exc:
+        blockers.append(str(exc))
+        pending_legacy_reviews = {}
+
+    try:
+        blockers.extend(project_template_migration_blockers(root))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        blockers.append(f"project template preflight failed: {exc}")
+
+    step_paths = sorted(task_directory(root).glob("STEP-*.md"))
+    req_paths = sorted(
+        path
+        for path in requirements_directory(root).glob("REQ-*.md")
+        if path.name != "TEMPLATE.md"
+    )
+    adr_paths = sorted(
+        path
+        for path in adr_directory(root).glob("ADR-*.md")
+        if path.name != "TEMPLATE.md"
+    )
+    blockers.extend(
+        _preflight_document_family(
+            step_paths,
+            pattern=STEP_ID_RE,
+            label="STEP",
+        )
+    )
+    blockers.extend(
+        _preflight_document_family(
+            req_paths,
+            pattern=REQ_ID_RE,
+            label="REQ",
+        )
+    )
+    blockers.extend(
+        _preflight_document_family(
+            adr_paths,
+            pattern=ADR_ID_RE,
+            label="ADR",
+        )
+    )
+
+    blockers.extend(
+        _preflight_monolithic_ids(
+            requirements_directory(root) / "SPEC.md",
+            heading_pattern=re.compile(r"(?m)^#{2,}\s+(REQ-\d{3,})\s+—\s+.+$"),
+            label="REQ",
+        )
+    )
+    blockers.extend(
+        _preflight_monolithic_ids(
+            open_questions_index_path(root),
+            heading_pattern=re.compile(
+                r"(?m)^(?:#{1,6}\s+)?(OQ-\d{3,})\s+—\s+.+$"
+            ),
+            label="OQ",
+        )
+    )
+
+    if blockers:
+        raise ValueError(
+            "project migration preflight blocked: " + "; ".join(blockers)
+        )
+    return {"pendingLegacyReviews": pending_legacy_reviews}
+
+
 def migrate_project(root: Path) -> dict[str, Any]:
-    pending_legacy_reviews = _pending_legacy_review_pins(root)
+    preflight = migration_preflight(root)
+    pending_legacy_reviews = preflight["pendingLegacyReviews"]
     changed: list[str] = []
     changed.extend(migrate_monolithic_requirements(root))
     for path in sorted(task_directory(root).glob("STEP-*.md")):
@@ -520,8 +706,10 @@ def migrate_project(root: Path) -> dict[str, Any]:
     )
 
     # Project-owned templates не обновляются HARNESS UPDATE. RECONCILE
-    # синхронизирует их из protocol-owned definitions и затем projections.
-    changed.extend(refresh_project_templates(root))
+    # применяет только additive structural migration: missing keys/sections
+    # добавляются из current protocol defaults, project values/prose сохраняются.
+    # Non-additive conflicts остаются blocker и не перезаписываются.
+    changed.extend(migrate_project_templates(root))
     # Pending legacy review pins участвуют в final projection calculation
     # в этом же migration run. После этого тот же exact pin set публикуется
     # в immutable migration report, поэтому второй RECONCILE — настоящий no-op.

@@ -32,7 +32,9 @@ from execution_status import (
     complete_command,
     git_commit_completion_proven,
     load_status,
+    resolve_execution,
     resolve_root,
+    stamp_review_expectation,
     start_execution,
 )
 from git_action import GitActionError, execute_pr_finish, execute_push, execute_sync
@@ -132,7 +134,9 @@ def _verification_before_completion(
     Первый элемент tuple — early dispatcher response. None означает, что
     completion разрешён. Второй — compact details для durable execution state.
     """
-    if result != "SUCCESS":
+    # PASS для IMPLEMENT/FIX не имеет CTS edge, но всё равно завершает команду;
+    # он не должен становиться обходом Verification (#113).
+    if result not in {"SUCCESS", "PASS"}:
         return None, details
 
     route = route_command(root, command)
@@ -251,12 +255,48 @@ def _semantic_handoff(
                 "CONTEXT_TARGET_MISSING",
                 f"{command}: contextPhase requires STEP target",
             )
-        context = build_step_context(root, target, str(context_phase))
+        baseline = execution.get("implementationBaseline")
+        context = build_step_context(
+            root,
+            target,
+            str(context_phase),
+            implementation_baseline=(
+                baseline if isinstance(baseline, dict) else None
+            ),
+        )
         if context.get("status") != "PASS":
             raise DispatchError(
                 "STEP_CONTEXT_BLOCKED",
                 f"{command}: deterministic STEP context is not PASS",
             )
+
+        # STEP REVIEW semantic reasoning must be bound to the exact deterministic
+        # revision/gate that was handed to the reviewer. Persist this proof in
+        # execution state before returning the handoff; the model never supplies
+        # or rewrites it in semantic payload.
+        if str(context_phase) == "review":
+            deterministic = context.get("deterministic")
+            if not isinstance(deterministic, dict):
+                raise DispatchError(
+                    "REVIEW_EXPECTATION_INVALID",
+                    f"{command}: deterministic review context is missing",
+                )
+            revision = deterministic.get("repositoryRevision")
+            gate = deterministic.get("specializedReviewGate")
+            gate_basis = gate.get("basis") if isinstance(gate, dict) else None
+            try:
+                stamp_review_expectation(
+                    root,
+                    str(execution.get("executionId") or ""),
+                    target,
+                    revision if isinstance(revision, dict) else {},
+                    str(gate_basis or ""),
+                )
+            except ValueError as exc:
+                raise DispatchError(
+                    "REVIEW_EXPECTATION_INVALID",
+                    f"{command}: {exc}",
+                ) from exc
 
     result: dict[str, Any] = {
         "schemaVersion": SCHEMA_VERSION,
@@ -328,7 +368,7 @@ def _finish_machine_result(
         str(status),
         details=_machine_completion_details(handler=handler, result=result),
     )
-    resolved = resolve_root(root, str(execution["rootCommand"]))
+    resolved = resolve_execution(root, completed)
 
     if resolved.get("status") == "NEXT" and resolved.get("command"):
         next_command = str(resolved["command"])
@@ -545,7 +585,10 @@ def _deterministic_handler(
                 "kind": "reload-and-repeat",
                 "command": route["command"],
             }
-        elif engine_status == "UPDATED":
+        elif engine_status == "UPDATED" or bool(raw.get("repositoryMutated")):
+            # NO_UPDATE может всё же завершить deferred pre-INIT project-owned
+            # template alignment после обязательного reload. Release ref при
+            # этом уже current, но repository diff требует обычный Git gate.
             result["nextAction"] = {
                 "kind": "command",
                 "command": "GIT CHECK",
@@ -778,7 +821,7 @@ def complete_dispatch(
             result,
             details=completion_details,
         )
-        resolved = resolve_root(root, root_command)
+        resolved = resolve_execution(root, execution)
     except (OSError, ValueError) as exc:
         return {
             "schemaVersion": SCHEMA_VERSION,

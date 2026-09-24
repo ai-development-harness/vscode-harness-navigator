@@ -51,10 +51,11 @@ python3 .harness/tools/harness-update.py adopt --from vX.Y.Z --json
 
 Pre-INIT update:
 
-- меняет только Harness protocol layer/lock;
-- не выполняет INIT;
-- не создаёт product knowledge;
-- сохраняет `project.initialized=false`.
+- меняет Harness protocol layer/lock и сохраняет `project.initialized=false`;
+- не выполняет INIT и не создаёт product knowledge;
+- colocated project templates не становятся обычными updater-owned paths;
+- если target release меняет template contract через `reloadRequired=true`, первый hop может оставить доказанный old-release template baseline до обязательного reload;
+- после reload повтор exact APPLY выравнивает **только** безопасный pre-INIT release drift до exact current baseline; custom prose/value/schema drift блокируется и не перезаписывается.
 
 ## Immutable source model
 
@@ -97,7 +98,23 @@ Mutation выполняется deterministic engine:
 python3 .harness/tools/harness-update.py apply [--to vX.Y.Z] --json
 ```
 
-Engine перед первой записью сам повторно проверяет validator, exact current-release integrity и делает read-only preflight. `NO_UPDATE` допустим только после этих проверок. Route применяется hop-by-hop; каждый hop имеет rollback boundary, а lock обновляется внутри транзакции и считается продвинутым только после PASS target validator. Предыдущий chat/CHECK не является заменой fresh machine preflight.
+Engine перед первой записью сам повторно проверяет validator, exact current-release integrity и делает read-only preflight. `NO_UPDATE` допустим только после этих проверок. Предыдущий chat/CHECK не является заменой fresh machine preflight.
+
+Route применяется hop-by-hop, и каждый hop — отдельная транзакция с журналом `.harness/local/update-journal/`:
+
+1. backup всех затрагиваемых managed paths, lock и local runtime state (`.harness/local/execution/execution-status.json`) сохраняется до первой записи;
+2. files пишутся атомарно (temp + fsync + rename); код engine (`harness_update.py`, `harness-update.py`, `update_recovery.py`) пишется последним;
+3. lock и durable report этого hop создаются внутри транзакции;
+4. target validator запускается отдельным процессом;
+5. только после его PASS журнал удаляется — это commit point hop.
+
+Любой failure, включая `KeyboardInterrupt`, откатывает hop byte-for-byte: восстанавливаются files и modes, удаляются введённые paths и report, local state восстанавливается, если target code изменил его `schemaVersion`. Если процесс был убит, журнал остаётся на диске: `HARNESS UPDATE CHECK` возвращает `UPDATE_JOURNAL_PENDING`, а следующий `HARNESS UPDATE APPLY` сначала откатывает прерванный hop (`recoveredInterruptedUpdate` в результате) и затем выполняет update заново. Ручной recovery без остальных Harness-модулей:
+
+```bash
+python3 .harness/tools/harness-update.py recover --json
+```
+
+Он использует только stdlib-модуль `update_recovery.py`, поэтому работает даже если прерванный hop успел записать часть `.harness/tools/**` из target release. Журнал живого процесса не откатывается (`UPDATE_IN_PROGRESS`); на платформах без проверки процесса (Windows) владелец считается живым, поэтому после сбоя там нужен явный `recover --force`.
 
 `reloadRequired=true`:
 
@@ -106,7 +123,9 @@ Engine перед первой записью сам повторно прове
 3. current updater прекращает route с `UPDATER_RELOAD_REQUIRED`;
 4. после reload повторяется та же APPLY-команда к исходному final target.
 
-APPLY не запускает target scripts/install/bootstrap actions и не делает commit/push/PR. Dispatcher добавляет к factual engine result deterministic `nextAction`: после `UPDATED` — `GIT CHECK`; при `UPDATER_RELOAD_REQUIRED` — reload и повтор exact APPLY; при `NO_UPDATE` — `null`. Если последующий Git gate обнаруживает project schema migration pending, до commit выполняется `PROJECT RECONCILE`.
+Hop требует reload не только по `reloadRequired=true` графа, но и автоматически, если он меняет любой `.harness/tools/*.py`, уже загруженный в текущий процесс updater/dispatcher (включая сам engine). Иначе остаток route выполнялся бы старым кодом поверх новых данных. Изменение незагруженного модуля reload не требует: он будет импортирован уже в target-версии.
+
+APPLY не запускает target scripts/install/bootstrap actions (единственный target code — postcondition validator внутри журналированной транзакции, см. [`THREAT_MODEL.md`](THREAT_MODEL.md)) и не делает commit/push/PR. Dispatcher добавляет к factual engine result deterministic `nextAction`: после `UPDATED` — `GIT CHECK`; при `UPDATER_RELOAD_REQUIRED` — reload и повтор exact APPLY. Обычно `NO_UPDATE → null`, но после reload pre-INIT template alignment может вернуть `NO_UPDATE` вместе с `repositoryMutated=true`; тогда `nextAction = GIT CHECK`, потому что release уже current, а project baseline только что детерминированно изменился. Если последующий Git gate обнаруживает migration pending уже **инициализированного** project schema, до commit выполняется `PROJECT RECONCILE`.
 
 После update:
 
@@ -138,13 +157,13 @@ Conflict блокирует hop.
 
 ### marker_merge
 
-Shared files с project-owned generated blocks, например README/AGENTS. После 3-way merge local marked blocks восстанавливаются.
+Shared files с project-owned generated blocks, например README/AGENTS. После 3-way merge local marked blocks восстанавливаются. Block, который target release вводит впервые (его нет ни в BASE, ни в OURS), получает default body из target; block, удалённый проектом из BASE, остаётся `MARKER_DRIFT`.
 
 ### project-owned / unknown
 
 Updater не меняет их.
 
-В частности active REQ/ADR/STEP/OQ, project architecture/code/tests и colocated project templates не становятся updater-owned только из-за schema release.
+В частности active REQ/ADR/STEP/OQ, project architecture/code/tests и colocated project templates не становятся updater-owned только из-за schema release. Узкое исключение существует только **до PROJECT INIT** после reload-required update: exact old-release template baseline может быть выровнен до current baseline, если semantic subset proof доказывает отсутствие project customization. Это bootstrap convergence, а не передача template path в обычный updater ownership.
 
 `.agents/skills/` — общий runtime-neutral каталог, **не blanket Harness-owned namespace**. Update policy перечисляет core skills конкретными paths. Project-native/third-party `.agents/skills/<slug>/` остаются project-owned. Если новый release впервые объявляет core path, уже занятый project skill, update блокируется как `NEW_MANAGED_PATH_COLLISION`.
 
@@ -163,7 +182,8 @@ Bootstrap update topology (`source.repository`, `source.default_branch`, `source
 5. target-only path можно создать автоматически, если он не существовал в BASE/OURS;
 6. existing unknown path, который THEIRS пытается впервые захватить, => `NEW_MANAGED_PATH_COLLISION`;
 7. ownership-class change при modified OURS => `OWNERSHIP_CLASS_CHANGE`;
-8. unknown paths вне transition scope не меняются.
+8. `harness_owned` path, который target убирает из policy, но оставляет в своём tree, **передаётся проекту**: он получает последнее target-содержимое и дальше не управляется updater-ом (`handedOver`); path, отсутствующий в target tree, удаляется как retired;
+9. unknown paths вне transition scope не меняются.
 
 ## Git scope и untracked artifacts
 
@@ -182,6 +202,40 @@ OURS scope строится из:
 - неизвестные ignored-файлы, которые не входят в конкретный набор управляемых путей BASE/THEIRS, не затрагиваются.
 
 Проверка binary/non-UTF-8 применяется только к реально управляемому Git-пути.
+
+## Local runtime state migration
+
+Project-owned schema migration и local operational state migration — разные boundaries.
+
+`.harness/local/**` не обновляется HARNESS UPDATE и не мигрируется PROJECT RECONCILE. Persistent local format обязан мигрировать deterministic owner-ом при чтении/записи под собственным concurrency lock.
+
+Для `execution-status.json` current execution layer поддерживает `schemaVersion: 1 → 2`:
+
+- legacy bytes сначала полностью валидируются;
+- v2 строится in-memory;
+- active recovery и STEP baseline сохраняются;
+- terminal history компактируется;
+- v2 повторно валидируется;
+- только затем выполняется fsync + atomic replace;
+- migration failure не уничтожает исходный v1.
+
+Будущее изменение persistent local format без backward reader/migration + old-state regression не считается готовым к release.
+
+## PROJECT RECONCILE migration preflight
+
+Active project schema migration использует two-phase safety boundary:
+
+```text
+read-only preflight
+→ deterministic blockers = none
+→ mutations
+→ projections
+→ immutable migration report
+```
+
+Preflight выполняется до первой repository write и проверяет как минимум immutable legacy review pins, parse/identity active STEP/REQ/ADR, duplicate IDs monolithic SPEC/OQ и non-additive project-owned template conflicts. Если blocker заранее обнаружим, RECONCILE завершается без partial migration: уже существующие project bytes остаются прежними, новые canonical artifacts/reports не создаются.
+
+Filesystem I/O failure, возникший уже во время mutation и не предсказуемый read-only preflight, по-прежнему fail-closed; preflight не выдаётся за filesystem transaction/rollback.
 
 ## Project document schema migration
 
@@ -208,7 +262,7 @@ Updater **не переписывает project-owned active documents**.
 - ADR → schema v1 с сохранением Accepted decision/status;
 - monolithic Open Questions → canonical OQ files;
 - legacy Ready plan без durable semantic review → draft;
-- project-owned templates → current protocol definitions;
+- project-owned templates → additive structural migration к current protocol definitions с сохранением existing project values/prose; non-additive conflict остаётся blocker;
 - projections → regenerate;
 - historical immutable reports → не переписываются; legacy implementation review reports hash-pin-ятся в migration report как immutable compatibility proof.
 
@@ -222,11 +276,20 @@ Colocated templates намеренно не входят в updater ownership.
 
 Canonical current definitions поставляются Harness control plane, а синхронизацию project copy выполняет PROJECT RECONCILE.
 
+Для initialized project действует общий migration invariant:
+
+- missing template создаётся из current protocol default;
+- missing frontmatter mapping keys и missing structural sections добавляются additive способом;
+- существующие project values, unknown keys и prose не заменяются protocol defaults;
+- изменение `schema`, `kind` или mapping/non-mapping shape считается non-additive и блокирует автоматическую миграцию;
+- `legacy_schema_pending()` обязан обнаруживать structural drift до commit/CI;
+- любое будущее изменение обязательной template shape должно иметь regression `old valid project → update/reconcile → current validation PASS`.
+
 Так existing project не получает silent overwrite во время update, но schema действительно мигрирует после явного reconciliation.
 
 ## Update reports
 
-После успешного hop/final route report создаётся в configured `state.report_directory` с machine-readable YAML frontmatter `schema: 1`.
+Каждый применённый hop создаёт собственный report в configured `state.report_directory` с machine-readable YAML frontmatter `schema: 1` — внутри транзакции hop, поэтому откат hop удаляет и его report. `initial_release`/`final_target` описывают сам hop, requested target указан в body.
 
 Canonical имя — строго `UPDATE-<UTC timestamp>.md`; `created_at` обязан обозначать тот же whole-second UTC instant. UPDATE reports входят в immutable durable history: существующий report нельзя переписать/удалить/rename. Если текущая UTC-секунда уже занята, writer выбирает следующий свободный whole-second timestamp; альтернативных suffix-форматов нет.
 
@@ -235,7 +298,7 @@ Report фиксирует:
 - initial release;
 - final/requested target;
 - фактический route;
-- introduced/retired/reclassified paths;
+- introduced/retired/handed over/reclassified paths;
 - verification;
 - reload/follow-up state.
 
@@ -251,7 +314,7 @@ Report фиксирует:
 python3 .harness/tools/harness-update.py adopt --from vX.Y.Z --json
 ```
 
-Baseline должен совпадать с current manifest release. Новый lock pin-ит не только tag ref, но и exact commit OID.
+Baseline должен совпадать с current manifest release. Новый lock pin-ит не только tag ref, но и exact commit OID. Если `harness_owned` files расходятся с baseline, adoption возвращает `ADOPTION_BASELINE_DRIFT` и lock не создаётся: lock не имеет права утверждать baseline, которого в проекте нет.
 
 Текущий deterministic updater поддерживает baseline **не старее `v0.6.0`**. Для current lock, target или adoption baseline ниже этого floor операция завершается с `UNSUPPORTED_HARNESS_RELEASE`. Historical transitions до `v0.6.0` остаются в update graph как immutable release history и regression boundary для старых bridge, но больше не являются поддерживаемой точкой входа runtime.
 
@@ -335,11 +398,17 @@ Remote routing/policy/content рассматриваются как **данны
 
 - валидирует current Harness;
 - моделирует весь допустимый route либо ближайшую reload boundary;
-- не запускает target code;
+- исполняет target code только как postcondition validator внутри журналированной транзакции;
 - не расширяет ownership через неизвестный local path;
 - не принимает moving branch как release baseline.
 
-После APPLY пользователь/агент сначала инспектирует diff и проходит обычный Git/Harness validation flow.
+Source repository и его release tags — доверенный поставщик Harness-кода; target validator исполняется внутри журналированной транзакции hop (см. [`THREAT_MODEL.md`](THREAT_MODEL.md)).
+
+## Bridge v0.8.2 для проектов на v0.8.0 и v0.8.1
+
+Releases до v0.8.2 поставляют engine без журнала. Проект выполняет следующий hop **своим** engine, поэтому транзакционный engine должен прийти минимальным bridge-релизом, который старый engine применяет безопасно.
+
+Опубликованный `v0.8.1` вышел из `main` без нового engine. Поэтому bridge — `v0.8.2` (`v0.8.1` + только update engine, tests и docs; `kind: bridge`, `reloadRequired: true`): он не меняет template definitions, marker blocks, ownership policy и формат local state. Маршрут проекта на v0.8.0 — `v0.8.0 → v0.8.1 → v0.8.2`; все последующие hops выполняет уже транзакционный engine. `update-migration-self-test.py` (`REQUIRED_BRIDGES`) блокирует любое другое ребро из `v0.8.0` и `v0.8.1`.
 
 ## Regression check
 

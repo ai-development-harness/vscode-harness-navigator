@@ -172,13 +172,14 @@ Report обязан содержать:
 - `step_id`;
 - `verdict: pass | fail | blocked`;
 - exact reviewed revision;
-- specialized review metadata: persisted `gate_basis`, exact список `required`, результаты security/tests и concrete `*_evidence` summary/reference для реально выполненного specialized review. Preselector включает factual changed paths и режим поверхности; если review запускается уже на clean tree без exact implementation baseline, он fail-closed требует security + tests, а не считает последний commit полным STEP diff;
+- specialized review metadata: persisted `gate_basis`, exact список `required`, результаты security/tests и concrete `*_evidence` summary/reference, а также surface proof (`implementation_baseline`, `surface_mode`, `changed_paths_hash`, baseline status/reason). При валидном baseline preselector классифицирует полный `baseline..HEAD + worktree` diff; missing/invalid baseline переключает gate в fail-closed `clean-tree-fallback` и требует security + tests;
 - structured findings.
 
 Reviewed revision:
 
 - clean tree — `git_head`;
-- dirty tree — `git_head + worktree_hash`.
+- dirty tree — `git_head + worktree_hash`;
+- implementation surface отдельно доказывается baseline SHA + `changed_paths_hash` в specialized gate metadata. Эти поля не заменяют repository revision: baseline отвечает за границы STEP diff, а `git_head/worktree_hash` — за exact bytes/state, которые видел reviewer.
 
 Из worktree fingerprint исключаются `.harness/local/**` и только **новый report-shaped implementation review**, который STEP REVIEW создаёт после snapshot. Весь configured review directory не является trust/ignore boundary: изменение, удаление или rename уже существующего immutable report остаётся частью exact revision и отдельно блокируется immutability gate. Git path классифицируется лексически, без разыменования symlink target; durable review/report artifacts сами не могут быть symlink. Product/config changes после review fingerprint изменяют и делают crash-recovery proof неприменимым.
 

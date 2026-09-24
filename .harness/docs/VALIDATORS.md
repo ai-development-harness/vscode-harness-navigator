@@ -101,7 +101,10 @@ python3 .harness/tools/validate.py [--mode manual|commit|ci]
 
 Ручная проверка repository.
 
-Особенность: целостное legacy migration-pending состояние после Harness update может быть выдано warning, чтобы пользователь смог выполнить `PROJECT RECONCILE`.
+Особенности manual mode после Harness update:
+
+- целостное legacy migration-pending состояние инициализированного проекта может быть выдано warning, чтобы пользователь смог выполнить `PROJECT RECONCILE`;
+- до `PROJECT INIT` target validator на reload boundary может временно принять только доказанный old-release template drift: existing frontmatter values, preamble и sections должны совпадать с current target, отсутствовать могут только новые target keys/sections. Это warning до обязательного reload/repeat APPLY; custom drift остаётся failure.
 
 #### `--mode commit`
 
@@ -702,7 +705,7 @@ python3 .harness/tools/git-action.py sync --json
 python3 .harness/tools/git-action.py pr-finish --json
 ```
 
-Executor повторяет canonical preflight непосредственно перед mutation.
+Executor повторяет canonical preflight непосредственно перед mutation. Semantic commit/PR inputs сначала читаются и проверяются Harness-ом как exact snapshot; primary `git`/`gh` consumer получает captured text через stdin (`git commit -F -`, `gh pr create --body-file -`) и не переоткрывает mutable source path. Original local input после postcondition очищается отдельно по identity-safe lifecycle.
 
 - COMMIT создаёт только exact `requiredBranch`, если protected-branch preflight потребовал его; message file разрешён только под `.harness/local/git/`; postcondition — новый HEAD.
 - PUSH исполняет только returned non-force argv; postcondition — configured remote branch совпадает с local HEAD.
@@ -907,6 +910,8 @@ python3 .harness/tools/verify-step.py STEP-NNN --manual-json '[{"check":"...","s
 
 Writer принимает payload через stdin (`--payload-file -`) либо regular JSON file только под `.harness/local/**`. Неожиданные keys, multiline structural fields и inconsistent verdict/findings блокируются fail-closed.
 
+Для одноразового semantic transport предпочтителен stdin. Если используется local payload-файл, `semantic-writer.py` принимает только regular lexical path под `.harness/local/**` без symlink-компонентов. После нормального завершения writer удаляется только тот же неизменённый file identity; parsing/validation/write failure сохраняет payload для retry. Если secondary cleanup невозможен или path успел измениться, primary PASS/FAIL не откатывается — writer возвращает cleanup warning и оставляет файл.
+
 ## Trust chain
 
 - timestamp/name резервируются через `O_CREAT|O_EXCL`;
@@ -1076,7 +1081,7 @@ PASS review является доказательством только для 
 
 Validator следит, чтобы STEP/REQ/ADR/OQ/review/report templates соответствовали текущей document schema и не создавали заведомо невалидные artifacts.
 
-Project templates принадлежат проекту после INIT, поэтому их mutation выполняет explicit reconciliation flow, а не silent self-update.
+Project templates принадлежат проекту после INIT, поэтому их mutation выполняет explicit reconciliation flow, а не silent self-update. До INIT действует bootstrap baseline: strict validation требует exact current template, кроме узкого manual update postcondition на reload boundary. Там допускается только semantic-subset proof старого release; после reload updater выполняет exact alignment и повторная strict validation обязана пройти.
 
 ---
 
@@ -1093,6 +1098,9 @@ Project templates принадлежат проекту после INIT, поэ�
 Прямого validator CLI нет.
 
 ## Что проверяет `validate_status()`
+
+Current execution state использует schema v2. Validator проверяет active execution records, monotonic ordinals, bounded `recentTerminals`, optional `current.details` как JSON object с hard limit **16 KiB compact UTF-8 JSON**, `stepRecovery` baseline shape **и совпадение recovery key с `implementationBaseline.stepId`**, а также `nextOrdinal`. Legacy schema v1 остаётся только входом deterministic migration: сначала валидируется v1, затем строится/валидируется v2 и только после этого выполняется atomic replace. Повреждённый legacy state не превращается в empty state.
+
 
 - `schemaVersion`;
 - массив executions;
