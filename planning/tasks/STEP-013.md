@@ -223,6 +223,10 @@ plan:
   - Observed: "PR #13, run https://github.com/ai-development-harness/vscode-harness-navigator/actions/runs/35967618056 (head f58d81f): Quality pass (49s), Package pass (1m31s), Validate Harness pass. Все 6 uses: в ci.yml — @<40 hex> # vN, тегов нет; SHA сверены с git ls-remote (lightweight-теги checkout v7 3d3c42e5, setup-node v7 82076278, cache v6 55cc8345, upload-artifact v7 043fb46d), SHA checkout совпадает с harness-integrity.yml; diff ci.yml — только uses: и комментарии Пример; harness-integrity.yml не изменён. dependabot.yml: yaml.safe_load даёт version 2, одна запись github-actions / / weekly, у всех 6 параметров комментарий с Пример. Наблюдение GitHub по Dependabot доступно только после merge — будет записано в Evidence после GIT PR FINISH."
 <!-- VERIFICATION-EVIDENCE:END -->
 
+### Наблюдение GitHub после merge
+
+- Insights → Dependency graph → Dependabot после merge PR #13: вкладка открывается без ошибок парсинга `.github/dependabot.yml`, в списке отслеживаемых файлов виден `.github/workflows/ci.yml`. `harness-integrity.yml` в списке не показан (причина не установлена; на Acceptance не влияет). Наблюдение получено владельцем по скриншоту UI.
+
 Заполняется по факту реализации и verification. Для каждой значимой проверки указывай Command, Exit code и Observed.
 
 
