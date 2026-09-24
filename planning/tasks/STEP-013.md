@@ -1,7 +1,7 @@
 ---
 schema: 1
 id: STEP-013
-status: in_progress
+status: completed
 type: implementation
 priority: low
 phase: release-preparation
@@ -150,17 +150,20 @@ plan:
 
 ## Evidence
 
+
+
+
 <!-- VERIFICATION-EVIDENCE:START -->
-- Verification run: 2026-09-24T07:03:29Z
-- Status: MANUAL_REQUIRED
-- Git head: 35bb195e0f4af1e62f29eeccd6477a1d9978f117
-- Worktree hash: sha256:83905f07a229f8d53cf4eb602d28a2ae3990e8e05995358c772e50f53e7e5580
+- Verification run: 2026-09-24T07:06:57Z
+- Status: PASS
+- Git head: f58d81f9783d59e57a2b5d656bf04a3a353bf604
+- Worktree hash: sha256:ed349bf5f95e41186ec2286cc82059f044331768b017ace2ddc2d68ec160aa20
 
 ### Automated verification
 - Command: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/ci.yml
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 4958
+  - Duration ms: 3896
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -168,7 +171,7 @@ plan:
 - Command: yarn typecheck
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 3420
+  - Duration ms: 3604
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -176,7 +179,7 @@ plan:
 - Command: yarn lint
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 4378
+  - Duration ms: 4588
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -184,7 +187,7 @@ plan:
 - Command: yarn format
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 1354
+  - Duration ms: 1445
   - stdout sha256: 17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 66
@@ -200,7 +203,7 @@ plan:
 - Command: git diff --check
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 4
+  - Duration ms: 3
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -208,18 +211,22 @@ plan:
 - Command: python3 .harness/tools/validate.py --mode manual
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 1165
-  - stdout sha256: 2ef04ccaf1308a37a9808d376b75afb693b3436079ccd189d10f1c10fe49ed7a
+  - Duration ms: 1208
+  - stdout sha256: ab1199f147db306b8457c6b85c6ada99138a6755eb293f0d75267807a751c16e
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 424
   - stderr bytes: 0
 
 ### Manual verification
 - Check: Workflow CI на PR зелёный (Quality, Package); у каждого параметра .github/dependabot.yml (version, updates, package-ecosystem, directory, schedule, interval) есть комментарий с «Пример:»; файл парсится как YAML и содержит ровно одну запись github-actions / / / weekly; все uses: в ci.yml — 40-символьные SHA с # vN, соответствуют тегам major. Наблюдение GitHub (Insights → Dependency graph → Dependabot) доступно только после merge и не гейтит REVIEW: записывается в Evidence отдельной пометкой после GIT PR FINISH.
-  - Status: PENDING
+  - Status: PASS
+  - Observed: "PR #13, run https://github.com/ai-development-harness/vscode-harness-navigator/actions/runs/35967618056 (head f58d81f): Quality pass (49s), Package pass (1m31s), Validate Harness pass. Все 6 uses: в ci.yml — @<40 hex> # vN, тегов нет; SHA сверены с git ls-remote (lightweight-теги checkout v7 3d3c42e5, setup-node v7 82076278, cache v6 55cc8345, upload-artifact v7 043fb46d), SHA checkout совпадает с harness-integrity.yml; diff ci.yml — только uses: и комментарии Пример; harness-integrity.yml не изменён. dependabot.yml: yaml.safe_load даёт version 2, одна запись github-actions / / weekly, у всех 6 параметров комментарий с Пример. Наблюдение GitHub по Dependabot доступно только после merge — будет записано в Evidence после GIT PR FINISH."
 <!-- VERIFICATION-EVIDENCE:END -->
 
 Заполняется по факту реализации и verification. Для каждой значимой проверки указывай Command, Exit code и Observed.
+
+
+
 
 ## Blocker / Failure reason
 

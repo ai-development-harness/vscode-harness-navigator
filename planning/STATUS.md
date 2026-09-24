@@ -5,12 +5,11 @@
 ## Summary
 
 - total: 13
-- completed: 12
-- in_progress: 1
+- completed: 13
 
 ## In progress
 
-STEP-013
+—
 
 ## Blocked
 
@@ -22,4 +21,4 @@ STEP-013
 
 ## Recent completed
 
-STEP-001, STEP-002, STEP-003, STEP-004, STEP-005, STEP-006, STEP-007, STEP-008, STEP-009, STEP-010, STEP-011, STEP-012
+STEP-001, STEP-002, STEP-003, STEP-004, STEP-005, STEP-006, STEP-007, STEP-008, STEP-009, STEP-010, STEP-011, STEP-012, STEP-013
