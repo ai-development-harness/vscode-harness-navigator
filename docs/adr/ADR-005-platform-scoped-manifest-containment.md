@@ -11,6 +11,7 @@ requirements:
   - REQ-002
 steps:
   - STEP-008
+  - STEP-015
 ---
 
 # ADR-005 — Platform-scoped гарантия containment при чтении manifest

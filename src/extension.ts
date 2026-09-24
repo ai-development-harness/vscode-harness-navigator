@@ -30,6 +30,7 @@ import { UnknownIdDiagnostics } from './navigation/unknownIdDiagnostics';
 import { CommandCatalogService } from './commandCatalog/commandCatalogService';
 import { CommandsTreeDataProvider, type CommandsTreeNode } from './commandCatalog/commandsView';
 import { registerCopyCommand } from './commandCatalog/copyCommand';
+import { registerOpenCommandDocumentation } from './commandCatalog/openCommandDocumentation';
 import { registerFindCommand } from './commandCatalog/findCommand';
 import type { CatalogState } from './commandCatalog/commandGraph';
 
@@ -160,6 +161,7 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
   const statusBar = registry.register(new HarnessStatusBar(projectStates));
   registry.register(registerFindCommand(catalogs));
   registry.register(registerCopyCommand(catalogs));
+  registry.register(registerOpenCommandDocumentation());
 
   registry.register(registerGoToArtifactCommand(projectStates));
   registry.register(

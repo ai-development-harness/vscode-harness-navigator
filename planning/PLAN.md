@@ -18,3 +18,4 @@
 | STEP-012 | Согласование engines.node с минимумом Node 22 | implementation | low | completed | STEP-011 | REQ-010 |
 | STEP-013 | Закрепление GitHub Actions по commit SHA и Dependabot | implementation | low | completed | STEP-011 | REQ-010 |
 | STEP-014 | Префикс «Harness:» только в Command Palette (category вместо title) | implementation | low | completed | STEP-013 | REQ-008 |
+| STEP-015 | Пункт «Открыть документацию» в меню команд Harness | implementation | low | completed | STEP-014 | REQ-007 |

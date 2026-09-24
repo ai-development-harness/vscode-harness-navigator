@@ -24,6 +24,7 @@
   "view.commands.name": "Команды Harness",
   "command.findCommand.title": "Найти команду",
   "command.copyCommand.title": "Скопировать команду",
+  "command.openCommandDocumentation.title": "Открыть документацию",
   "view.summary.name": "Сводка Harness",
   "category.harness": "Harness",
   "command.editor.findAllReferences.title": "Harness: Найти все ссылки",
