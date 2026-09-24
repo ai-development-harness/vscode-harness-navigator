@@ -173,17 +173,19 @@ plan:
 ## Evidence
 
 
+
+
 <!-- VERIFICATION-EVIDENCE:START -->
-- Verification run: 2026-09-24T06:23:25Z
-- Status: MANUAL_REQUIRED
-- Git head: 5aabc7ad07e5d1a7f524833706b2d86aa5db430e
-- Worktree hash: sha256:d45ecf38283e8858a85216b445b87231ebea565e48329c230299750c8c1a6198
+- Verification run: 2026-09-24T06:35:20Z
+- Status: PASS
+- Git head: 8c3fbb695a41b9e810d216e55e14f71e1b92add3
+- Worktree hash: sha256:345b05e8f0692f7ad4f27819b2bc7c3730c29b5fbb75bf7d99ad69aa7a1a587b
 
 ### Automated verification
 - Command: yarn typecheck
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 3417
+  - Duration ms: 3351
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -191,7 +193,7 @@ plan:
 - Command: yarn lint
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 4305
+  - Duration ms: 4236
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -199,7 +201,7 @@ plan:
 - Command: yarn format
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 1362
+  - Duration ms: 1310
   - stdout sha256: 17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 66
@@ -207,15 +209,15 @@ plan:
 - Command: yarn test:unit
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 7713
-  - stdout sha256: 4087d9781a9f41aa2d7061d6571531a600bec561e63b6658acae19149848ceef
+  - Duration ms: 7659
+  - stdout sha256: 64a35bd5fe3a4948187571344d90e75c075f9b5a9c582c9f941d37c849fc7360
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-  - stdout bytes: 19191
+  - stdout bytes: 19197
   - stderr bytes: 0
 - Command: yarn build
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 540
+  - Duration ms: 518
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -223,7 +225,7 @@ plan:
 - Command: yarn package
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 3556
+  - Duration ms: 3504
   - stdout sha256: 8816faca546a524e46f023740d47959afbbfa5f0667721986f960c2114b8cfe1
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 856
@@ -231,7 +233,7 @@ plan:
 - Command: yarn inspect:package
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 325
+  - Duration ms: 320
   - stdout sha256: 39294efb9644380d39a33672a61cb50f77f30617b98fb12029a4c524846ef0b0
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 1305
@@ -239,15 +241,15 @@ plan:
 - Command: yarn test:packaged
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 30327
-  - stdout sha256: bed3cc4b0ac9800c4f81298866abb3a849b004ac5f9478ba566f01be92e31e01
-  - stderr sha256: fa550d243d87594bf2325643351ce51a52ee9b69f29bd5c9ebc9e3042fff6396
-  - stdout bytes: 24123
+  - Duration ms: 29972
+  - stdout sha256: 7c14edf2b64f969c13454cafd02db6100b387b315e0073032bcb72011c4bb86c
+  - stderr sha256: 6360e00f44a388bc74da9a46b0e5bd418e6f5f421f5ae0836f0000cf8a5a0394
+  - stdout bytes: 24674
   - stderr bytes: 15128
 - Command: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/ci.yml
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 4467
+  - Duration ms: 4601
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -255,7 +257,7 @@ plan:
 - Command: git diff --check
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 4
+  - Duration ms: 3
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -263,18 +265,21 @@ plan:
 - Command: python3 .harness/tools/validate.py --mode manual
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 1125
-  - stdout sha256: 3b147ff45890ff3f8d69cf4c479ce8c0ba86ca522a33c29fa896a6ddf6083f56
+  - Duration ms: 1121
+  - stdout sha256: 80052e60b743a18f8d1da5feb4887b100ec5c4baa0a9f34180d4ba58ea2d6d3b
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 424
   - stderr bytes: 0
 
 ### Manual verification
 - Check: Workflow CI успешен на PR, оба job (quality, package) зелёные, artifact VSIX загружен.
-  - Status: PENDING
+  - Status: PASS
+  - Observed: "PR #11, run https://github.com/ai-development-harness/vscode-harness-navigator/actions/runs/35964920311: job Quality pass (49s), job Package pass (1m14s), artifact vsix (50947 bytes) загружен; Validate Harness pass. Первый запуск (run 35964621430) упал в Quality: node --test glob не поддержан на Node 20; исправлено переходом на Node 22."
 <!-- VERIFICATION-EVIDENCE:END -->
 
 Заполняется по факту реализации и verification. Для каждой значимой проверки указывай Command, Exit code и Observed.
+
+
 
 
 ## Blocker / Failure reason
