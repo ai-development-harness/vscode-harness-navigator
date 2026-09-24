@@ -1,0 +1,19 @@
+# Версия схемы конфигурации Dependabot.
+# Пример: 2 — единственная актуальная версия схемы.
+version: 2
+
+# Список экосистем, для которых Dependabot открывает PR с обновлениями.
+# Пример: github-actions обновляет пины actions в .github/workflows.
+updates:
+  # Экосистема пакетов; SHA-пины actions из ci.yml и harness-integrity.yml обновляет github-actions.
+  # Пример: github-actions.
+  - package-ecosystem: github-actions
+    # Каталог, из которого Dependabot находит workflows (для github-actions это корень репозитория).
+    # Пример: / — сканирует .github/workflows.
+    directory: /
+    # Расписание проверки обновлений.
+    # Пример: weekly — проверка раз в неделю.
+    schedule:
+      # Периодичность проверки.
+      # Пример: weekly.
+      interval: weekly
