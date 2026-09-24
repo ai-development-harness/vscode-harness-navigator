@@ -975,6 +975,7 @@ Writer принимает payload через stdin (`--payload-file -`) либо
 
 - migration reports;
 - legacy review hash pins;
+- legacy completion baseline (`legacy_completed_steps`: только STEP id, без дублей, с разделом `## Legacy completion baseline`);
 - implementation review schema;
 - reviewed repository revision: dirty fingerprint включает Git path/status, index mode+object id, worktree mode/content/symlink и submodule HEAD;
 - reviewer role/verdict/findings;

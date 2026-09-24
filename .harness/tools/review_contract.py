@@ -16,6 +16,8 @@ pins из валидного migration report.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 from pathlib import Path
 import re
@@ -107,6 +109,16 @@ def validate_migration_report(root: Path, path: Path) -> list[str]:
         if not isinstance(value, str) or not value.strip():
             errors.append(f"missing or empty section '## {section}'")
 
+    completions = meta.get("legacy_completed_steps", [])
+    if not isinstance(completions, list) or any(
+        not isinstance(item, str) or STEP_ID_RE.fullmatch(item) is None for item in completions
+    ):
+        errors.append("legacy_completed_steps must be a list of STEP ids")
+    elif len(set(completions)) != len(completions):
+        errors.append("legacy_completed_steps must not contain duplicates")
+    elif completions and not str(document["sections"].get("Legacy completion baseline", "")).strip():
+        errors.append("missing or empty section '## Legacy completion baseline'")
+
     values = meta.get("legacy_review_reports", [])
     if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
         errors.append("legacy_review_reports must be a string list")
@@ -160,6 +172,42 @@ def legacy_review_pins(root: Path) -> dict[str, str]:
                 raise ValueError(f"conflicting legacy review pins for {rel}")
             pins[rel] = digest
     return pins
+
+
+# Legacy completion baseline: STEP, завершённые до контракта immutable review
+# (Harness < schema v1), фиксируются migration report-ом один раз. Это не PASS
+# review и не подделка отчёта: proof помечается как legacy completion.
+_PENDING_LEGACY_COMPLETIONS: ContextVar[frozenset[str]] = ContextVar(
+    "pending_legacy_completions",
+    default=frozenset(),
+)
+
+
+@contextmanager
+def pending_legacy_completions(step_ids: set[str] | frozenset[str]):
+    """Учесть baseline текущей migration транзакции до публикации её report-а."""
+    token = _PENDING_LEGACY_COMPLETIONS.set(frozenset(step_ids))
+    try:
+        yield
+    finally:
+        _PENDING_LEGACY_COMPLETIONS.reset(token)
+
+
+def legacy_completed_steps(root: Path) -> dict[str, str]:
+    """{STEP id: migration report} из валидных migration reports (+ pending)."""
+    result: dict[str, str] = {}
+    directory = audit_directory(root)
+    if directory.is_dir():
+        for report in sorted(directory.glob("MIGRATION-*.md")):
+            issues = validate_migration_report(root, report)
+            if issues:
+                raise ValueError(f"{report.relative_to(root)}: " + "; ".join(issues))
+            values = parse_document(report)["frontmatter"].get("legacy_completed_steps", [])
+            for step_id in values:
+                result.setdefault(step_id, report.relative_to(root).as_posix())
+    for step_id in _PENDING_LEGACY_COMPLETIONS.get():
+        result.setdefault(step_id, "pending migration report")
+    return result
 
 
 def current_legacy_review_snapshots(root: Path) -> dict[str, str]:

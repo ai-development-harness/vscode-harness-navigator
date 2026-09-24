@@ -33,7 +33,9 @@ from harness_config import ConfigError, parse_yaml_subset
 
 
 STEP_ID_RE = re.compile(r"STEP-\d{3,}")
-REQ_ID_RE = re.compile(r"REQ-\d{3,}")
+# Единый паттерн REQ ID для regex-ов в заголовках/именах файлов.
+REQ_ID_PATTERN = r"REQ-\d{3,}"
+REQ_ID_RE = re.compile(REQ_ID_PATTERN)
 ADR_ID_RE = re.compile(r"ADR-\d{3,}")
 OQ_ID_RE = re.compile(r"OQ-\d{3,}")
 

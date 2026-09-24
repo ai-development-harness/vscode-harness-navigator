@@ -959,6 +959,141 @@ def test_project_owned_migration() -> None:
             raise AssertionError("tampered pinned legacy review was silently re-migrated")
 
 
+def test_legacy_migration_lossless() -> None:
+    """v0.4.1-style project: миграция без потерь + legacy completion baseline."""
+    from planning_contract import step_completion_proof
+    from review_contract import legacy_completed_steps, validate_migration_report
+
+    with tempfile.TemporaryDirectory(prefix="harness-legacy-lossless-") as tmp:
+        root = Path(tmp)
+        (root / ".harness").mkdir(parents=True)
+        (root / ".harness/manifest.yaml").write_text(synthetic_manifest(), encoding="utf-8")
+        (root / ".harness/harness-update.toml").write_text(
+            '[state]\nreport_directory = "planning/harness-updates"\n', encoding="utf-8"
+        )
+        (root / "docs/adr").mkdir(parents=True)
+        (root / "docs/PROJECT.md").write_text("# Project\n", encoding="utf-8")
+        (root / "docs/architecture.md").write_text("# Architecture\n", encoding="utf-8")
+        req = root / "docs/requirements"
+        req.mkdir(parents=True)
+        # Монолит со свободным текстом требований и заголовками глав между ними.
+        (req / "SPEC.md").write_text(
+            "# Legacy spec\n\n## 1. Назначение\n\nПреамбула проекта.\n\n"
+            "## 2. Core\n\n### REQ-001 — Free text requirement\n\n"
+            "Требование свободным текстом.\n\n- пункт требования\n\n"
+            "## 3. Next chapter\n\nТекст главы.\n",
+            encoding="utf-8",
+        )
+        (req / "STATUS.md").write_text("# Hand-written status\n\n| REQ-001 | done |\n", encoding="utf-8")
+        (root / "planning/tasks").mkdir(parents=True)
+        (root / "planning/PLAN.md").write_text("# Hand-written roadmap\n\nPhase notes.\n", encoding="utf-8")
+        (root / "planning/tasks/STEP-002.md").write_text(
+            legacy_step().replace("STEP-001 — Legacy step", "STEP-002 — Dependency")
+            .replace("**Depends on:** —", "**Depends on:** —"),
+            encoding="utf-8",
+        )
+        step = (
+            legacy_step()
+            .replace("**Depends on:** —", "**Depends on:** STEP-002,\nSTEP-003")
+            .replace("## Scope\n", "## Scope реализации\n")
+            .replace(
+                "## Mutation policy\n\n### Allowed\n\n- fixture\n\n### Conditional\n\n- none\n\n### Forbidden\n\n- unrelated\n",
+                "## Mutation policy\n\nРазрешены изменения fixture; остальное не трогать.\n",
+            )
+            .replace("## Blocker / Failure reason", "## Prompt for model\n\nИсторический prompt.\n\n## Blocker / Failure reason")
+        )
+        (root / "planning/tasks/STEP-001.md").write_text(step, encoding="utf-8")
+        (root / "planning/tasks/STEP-003.md").write_text(
+            legacy_step().replace("STEP-001 — Legacy step", "STEP-003 — Other dependency"),
+            encoding="utf-8",
+        )
+        # Русский legacy ADR: `- Label:` metadata, `#: ` H1, частичная замена.
+        (root / "docs/adr/ADR-001-legacy.md").write_text(
+            "# ADR-001: Русское решение\n\n- Статус: Принято\n- Дата: 2026-09-09\n"
+            "- Заменяет: ADR-002, только часть про DDL\n\n"
+            "## Контекст\n\nКонтекст решения.\n\n## Решение\n\nСуть решения.\n\n"
+            "## Рассмотренные альтернативы\n\nДругое.\n\n## Последствия\n\nИтоги.\n\n"
+            "## Риски\n\nПроектный раздел.\n",
+            encoding="utf-8",
+        )
+        (root / "docs/adr/ADR-002-other.md").write_text(
+            legacy_adr().replace("ADR-001 — Legacy accepted decision", "ADR-002 — Other decision"),
+            encoding="utf-8",
+        )
+        run(root, "git", "init", "-q")
+        run(root, "git", "config", "user.email", "harness-test@example.invalid")
+        run(root, "git", "config", "user.name", "Harness Test")
+        run(root, "git", "add", ".")
+        run(root, "git", "commit", "-qm", "legacy fixture")
+
+        result = migrate_project(root)
+        require(result["status"] == "MIGRATED", result)
+
+        # Монолит: свободный текст в REQ, глава не прилипла, исходники заархивированы.
+        req_doc = parse_document(next(req.glob("REQ-001-*.md")))
+        require("Требование свободным текстом." in req_doc["body"], req_doc["body"])
+        require("Next chapter" not in req_doc["body"], "chapter heading leaked into REQ")
+        for section in ("Rationale", "Acceptance"):
+            require(section in req_doc["sections"], req_doc["sections"])
+        require("Преамбула проекта." in (req / "SPEC.legacy.md").read_text(encoding="utf-8"), "SPEC not archived")
+        require((req / "STATUS.legacy.md").is_file(), "hand-written STATUS not archived")
+        require((root / "planning/PLAN.legacy.md").is_file(), "hand-written PLAN not archived")
+
+        # STEP: многострочный Depends on, неизвестные разделы, Scope, Mutation policy.
+        step_doc = parse_document(root / "planning/tasks/STEP-001.md")
+        meta = step_doc["frontmatter"]
+        require(meta["depends_on"] == ["STEP-002", "STEP-003"], meta["depends_on"])
+        require("Prompt for model" in step_doc["sections"], "unknown section dropped")
+        require("Review status" in step_doc["sections"], "Review status dropped")
+        require("Legacy metadata" in step_doc["sections"], "legacy metadata dropped")
+        require("Scope" in step_doc["sections"], "Scope variant not normalized")
+        policy = step_doc["sections"]["Mutation policy"]
+        require("Разрешены изменения fixture" in policy, policy)
+        for sub in ("### Allowed", "### Conditional", "### Forbidden"):
+            require(sub in policy, policy)
+
+        # ADR: RU metadata, разделы, частичная замена не стала supersedes, back-links.
+        adr = parse_document(root / "docs/adr/ADR-001-legacy.md")
+        require(adr["frontmatter"]["status"] == "accepted", adr["frontmatter"])
+        require(adr["frontmatter"]["supersedes"] == [], adr["frontmatter"])
+        require("STEP-001" in adr["frontmatter"]["steps"], adr["frontmatter"])
+        for section in ("Context", "Decision", "Alternatives considered", "Consequences", "Problem", "Security implications"):
+            require(section in adr["sections"], adr["sections"])
+        require("Риски" in adr["sections"], "project ADR section dropped")
+        require("Контекст решения." in adr["sections"]["Context"], adr["sections"])
+        req_meta = parse_document(next(req.glob("REQ-001-*.md")))["frontmatter"]
+        require("STEP-001" in req_meta["steps"], req_meta)
+
+        # Legacy completion baseline: без подделки PASS review.
+        report = root / result["report"]
+        require(not validate_migration_report(root, report), validate_migration_report(root, report))
+        baseline = parse_document(report)["frontmatter"].get("legacy_completed_steps")
+        require(baseline == ["STEP-001", "STEP-002", "STEP-003"], baseline)
+        require("STEP-001" in legacy_completed_steps(root), "baseline not readable")
+        proof = step_completion_proof(root, "STEP-001")
+        require(proof["complete"], proof)
+        require(proof["snapshot"]["review"]["legacy_completion"] is True, proof["snapshot"])
+        require(not list((root / "planning/reviews").glob("**/REVIEW-*.md")), "review reports were fabricated")
+
+        second = migrate_project(root)
+        require(second["status"] == "NO_CHANGES", second)
+
+        # Невалидный baseline не даёт partial allowlist: весь список отвергается.
+        forged = report.with_name("MIGRATION-20990101T000000Z.md")
+        forged.write_text(
+            report.read_text(encoding="utf-8").replace("- STEP-001", "- not-a-step", 1)
+            .replace("  - STEP-001", "  - not-a-step", 1),
+            encoding="utf-8",
+        )
+        try:
+            legacy_completed_steps(root)
+        except ValueError as exc:
+            require("legacy_completed_steps must be a list of STEP ids" in str(exc), str(exc))
+        else:
+            raise AssertionError("invalid legacy completion baseline accepted")
+        forged.unlink()
+
+
 def test_template_schema_bump() -> None:
     """#105: schema bump project-owned template мигрирует по объявленным шагам."""
     import template_contract as tc
@@ -1089,6 +1224,7 @@ def main() -> int:
         ("pre-init release template alignment", test_preinit_release_template_alignment),
         ("project-owned schema migration", test_project_owned_migration),
         ("template schema bump migration", test_template_schema_bump),
+        ("legacy migration is lossless", test_legacy_migration_lossless),
         ("release metadata", lambda: test_release_metadata(root)),
         ("journaled-engine bridge release gate", lambda: test_bridge_release_gate(root)),
     ]
