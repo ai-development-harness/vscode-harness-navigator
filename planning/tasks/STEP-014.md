@@ -1,7 +1,7 @@
 ---
 schema: 1
 id: STEP-014
-status: in_progress
+status: completed
 type: implementation
 priority: low
 phase: release-preparation
@@ -186,17 +186,18 @@ plan:
 
 
 
+
 <!-- VERIFICATION-EVIDENCE:START -->
-- Verification run: 2026-09-24T08:11:06Z
+- Verification run: 2026-09-24T08:23:54Z
 - Status: PASS
-- Git head: 49c4ff3fcd964d2947831e8c1529b81e3b4530bf
+- Git head: cf15a5c8fa2f94c22b0db71b0874f213b7b00931
 - Worktree hash: clean
 
 ### Automated verification
 - Command: yarn typecheck
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 3554
+  - Duration ms: 3441
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -204,7 +205,7 @@ plan:
 - Command: yarn lint
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 4460
+  - Duration ms: 4303
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -212,7 +213,7 @@ plan:
 - Command: yarn format
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 1359
+  - Duration ms: 1362
   - stdout sha256: 17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 66
@@ -220,15 +221,15 @@ plan:
 - Command: yarn test:unit
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 7719
-  - stdout sha256: 22dd462735ac843370ffdc6b8937bdf9053dc78a1454b7b4b45fd2b6a7a5888c
+  - Duration ms: 7613
+  - stdout sha256: c252585337adab83a800a1e4ae35fedd2aa065ebe1150ed017e776137c2508c0
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-  - stdout bytes: 19466
+  - stdout bytes: 19457
   - stderr bytes: 0
 - Command: yarn build
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 520
+  - Duration ms: 511
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -236,7 +237,7 @@ plan:
 - Command: yarn package
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 3673
+  - Duration ms: 3600
   - stdout sha256: 92249da31d583049f33fe2ea73aab4932b10d008868e481a179743d2f83064f6
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 856
@@ -244,7 +245,7 @@ plan:
 - Command: yarn inspect:package
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 331
+  - Duration ms: 321
   - stdout sha256: bb20c57626e15400248c73d52a1f65dfcee56f56cf37b71cb7b36822053e8746
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 1305
@@ -252,10 +253,10 @@ plan:
 - Command: yarn test:integration
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 44417
-  - stdout sha256: 036281dc220281d438e8188985ae8ebe2a3399a16a0eca11e2ea5791669311cf
-  - stderr sha256: 53a17f4db0c4fbf1acac5a78632cc506b37d7a904cc10ee469940ad88a9eec67
-  - stdout bytes: 36257
+  - Duration ms: 44012
+  - stdout sha256: a7ccc28ba5d54cc0c06c7646e25abc5041a3146dc3e28cae9e505c6067a0e0c2
+  - stderr sha256: 2ab36dda8bb4a12d06d6ffefdf1a167adb9df1a8d43e0315862edbbd750091a5
+  - stdout bytes: 36518
   - stderr bytes: 30256
 - Command: git diff --check
   - Status: PASS
@@ -268,8 +269,8 @@ plan:
 - Command: python3 .harness/tools/validate.py --mode manual
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 1200
-  - stdout sha256: 776e98bb84a7dfaed278440e3eaf6623db0ccdafd2706e6c00dd834a0182ab4b
+  - Duration ms: 1201
+  - stdout sha256: f07b9ae7403641bfca39f57f1d558d6a07bf6bee5023e7e281a59631a08fe670
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 424
   - stderr bytes: 0
@@ -277,10 +278,11 @@ plan:
 ### Manual verification
 - Check: Command Palette показывает «Harness: <действие>»; контекстные меню view и кнопки view/title — без префикса; editor-меню Markdown — с префиксом «Harness:» и отличается от встроенного «Find All References» (RU и EN); Workflow CI на PR зелёный (Quality, Package).
   - Status: PASS
-  - Observed: "UI: пользователь вручную проверил собранный VSIX и сообщил «Ручная проверка успешна»; после этого менялись только тесты (integration-тест делегирования алиасов, unit-проверки записей меню), продукт не менялся. CI: PR #15 https://github.com/ai-development-harness/vscode-harness-navigator/pull/15, коммит 49c4ff3, run https://github.com/ai-development-harness/vscode-harness-navigator/actions/runs/35973474367 — Quality pass (49s), Package pass (1m23s); Validate Harness pass (run 35973474309). Для предыдущего коммита 3d46031: run 35972072670 — Quality и Package pass."
+  - Observed: "UI: пользователь вручную проверил собранный VSIX и сообщил «Ручная проверка успешна»; после этого менялись только тесты, продукт не менялся. CI: PR #15 https://github.com/ai-development-harness/vscode-harness-navigator/pull/15, коммит cf15a5c, run https://github.com/ai-development-harness/vscode-harness-navigator/actions/runs/35974718875 — Quality pass (45s), Package pass (1m27s); Harness Integrity pass (run 35974718877). Для 3d46031 — run 35972072670, для 49c4ff3 — run 35973474367: Quality и Package pass."
 <!-- VERIFICATION-EVIDENCE:END -->
 
 Заполняется по факту реализации и verification. Для каждой значимой проверки указывай Command, Exit code и Observed.
+
 
 
 
