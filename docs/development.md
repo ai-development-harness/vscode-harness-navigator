@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Node.js >= 20 (проект разрабатывается на Node 24).
+- Node.js >= 20 (CI и `yarn test:unit` требуют Node >= 21: glob в `node --test` на Node 20 не поддержан; CI использует Node 22, проект разрабатывается на Node 24).
 - Corepack-managed Yarn 4 (Berry) с `node-modules` linker. Один раз выполните `corepack enable`,
   после чего `yarn` внутри репозитория автоматически использует версию, зафиксированную в
   `package.json#packageManager`.
@@ -130,5 +130,14 @@ Harness artifacts) доказывают boundary suite и static bundle scan `ya
 ## Git и CI
 
 Repository Git workflow задаётся `.harness/docs/GIT_WORKFLOW.md` и `.harness/git-policy.toml`.
-Harness Integrity CI является baseline; project-specific CI (запуск quality gates и Extension Host
-suites) добавляется отдельным, явно ограниченным по scope шагом.
+Harness Integrity CI (`.github/workflows/harness-integrity.yml`) является baseline. Project CI —
+`.github/workflows/ci.yml` — запускается на `pull_request` и push в `main` (Node 22, Yarn из
+`packageManager` через corepack, `yarn install --immutable`) и состоит из двух jobs:
+
+- `quality`: `yarn typecheck`, `yarn lint`, `yarn format`, `yarn test:unit`, `yarn build`;
+- `package`: `yarn package`, `yarn inspect:package`, `yarn test:packaged` (EN/RU) под `xvfb-run`;
+  собранный VSIX загружается как artifact `vsix`. Скачанный VS Code кэшируется в `.vscode-test`
+  с ключом по версии stable.
+
+Локальной проверкой остаётся `yarn test:integration` (в CI не запускается). Workflow не публикует
+расширение и не использует secrets.
