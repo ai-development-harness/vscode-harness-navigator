@@ -1,7 +1,7 @@
 ---
 schema: 1
 id: STEP-011
-status: in_progress
+status: completed
 type: implementation
 priority: medium
 phase: release-preparation
@@ -276,6 +276,12 @@ plan:
   - Status: PASS
   - Observed: "PR #11, run https://github.com/ai-development-harness/vscode-harness-navigator/actions/runs/35964920311: job Quality pass (49s), job Package pass (1m14s), artifact vsix (50947 bytes) загружен; Validate Harness pass. Первый запуск (run 35964621430) упал в Quality: node --test glob не поддержан на Node 20; исправлено переходом на Node 22."
 <!-- VERIFICATION-EVIDENCE:END -->
+
+### Привязка CI-проверки к ревизии
+
+- Run: https://github.com/ai-development-harness/vscode-harness-navigator/actions/runs/35964920311 (PR #11, событие pull_request, head `8c3fbb6`): Quality success, Package success, artifact `vsix` 50947 байт.
+- Последующий коммит `29518e6` меняет только `planning/tasks/STEP-011.md` (Evidence); `.github/workflows/ci.yml` идентичен проверенному в CI.
+- Первый запуск (run 35964621430, Node 20) упал в Quality: glob в `node --test` не поддержан до Node 21; исправлено переходом на Node 22 (`8c3fbb6`).
 
 Заполняется по факту реализации и verification. Для каждой значимой проверки указывай Command, Exit code и Observed.
 

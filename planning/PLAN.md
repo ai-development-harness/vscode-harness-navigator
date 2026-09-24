@@ -14,4 +14,4 @@
 | STEP-008 | Кросс-платформенное no-follow containment чтение manifest и полнота localization regression | bugfix | high | completed | STEP-001 | REQ-002, REQ-008 |
 | STEP-009 | Bridge ADR для traceability STEP-002 и platform containment | adr | high | completed | STEP-008 | REQ-002 |
 | STEP-010 | Подготовка расширения к публикации: иконка, README и метаданные VSIX | implementation | medium | completed | STEP-007 | REQ-010 |
-| STEP-011 | CI workflow GitHub Actions для quality gates и packaging | implementation | medium | in_progress | STEP-010 | REQ-010 |
+| STEP-011 | CI workflow GitHub Actions для quality gates и packaging | implementation | medium | completed | STEP-010 | REQ-010 |
