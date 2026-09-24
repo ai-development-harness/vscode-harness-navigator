@@ -4,8 +4,8 @@
 
 ## Summary
 
-- total: 11
-- completed: 11
+- total: 12
+- completed: 12
 
 ## In progress
 
@@ -21,4 +21,4 @@
 
 ## Recent completed
 
-STEP-001, STEP-002, STEP-003, STEP-004, STEP-005, STEP-006, STEP-007, STEP-008, STEP-009, STEP-010, STEP-011
+STEP-001, STEP-002, STEP-003, STEP-004, STEP-005, STEP-006, STEP-007, STEP-008, STEP-009, STEP-010, STEP-011, STEP-012

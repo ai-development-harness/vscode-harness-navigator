@@ -15,3 +15,4 @@
 | STEP-009 | Bridge ADR для traceability STEP-002 и platform containment | adr | high | completed | STEP-008 | REQ-002 |
 | STEP-010 | Подготовка расширения к публикации: иконка, README и метаданные VSIX | implementation | medium | completed | STEP-007 | REQ-010 |
 | STEP-011 | CI workflow GitHub Actions для quality gates и packaging | implementation | medium | completed | STEP-010 | REQ-010 |
+| STEP-012 | Согласование engines.node с минимумом Node 22 | implementation | low | completed | STEP-011 | REQ-010 |
