@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression self-test crash-safe Execution Status on schema-v1 contracts."""
+"""Regression self-test crash-safe bounded Execution Status + v1 migration."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -12,9 +12,12 @@ import subprocess
 import tempfile
 
 from execution_status import (
+    MAX_DETAILS_BYTES,
     begin_command,
     block_execution,
     complete_command,
+    find_completed,
+    implementation_baseline_for_step,
     load_status,
     resolve_root,
     stamp_plan,
@@ -22,7 +25,7 @@ from execution_status import (
     unresolved_executions,
 )
 from document_contract import content_hash
-from planning_contract import plan_content_hash, planning_context_basis
+from planning_contract import plan_content_hash, planning_context_basis, step_completion_proof
 from review_contract import (
     latest_trusted_review,
     repository_revision,
@@ -468,6 +471,21 @@ def main() -> int:
         # существующий Ready basis остаётся свежим и IMPLEMENT сразу разрешается.
         dependency_path = root / "planning/tasks/STEP-002.md"
         dependency_text = dependency_path.read_text(encoding="utf-8")
+
+        # Regression #113: generated Verification block со Status FAIL не
+        # является доказательством completion, даже если Evidence не пуст.
+        write(
+            dependency_path,
+            dependency_text.replace("status: planned", "status: completed").replace(
+                "## Evidence\n\n—",
+                "## Evidence\n\n<!-- VERIFICATION-EVIDENCE:START -->\n"
+                "- Verification run: 2026-09-21T00:00:00+00:00\n- Status: FAIL\n"
+                "<!-- VERIFICATION-EVIDENCE:END -->",
+            ),
+        )
+        failed_proof = step_completion_proof(root, "STEP-002")
+        assert failed_proof["complete"] is False, failed_proof
+        assert any("status is FAIL" in item for item in failed_proof["reasons"]), failed_proof
         write(
             dependency_path,
             dependency_text.replace("status: planned", "status: completed").replace(
@@ -481,12 +499,81 @@ def main() -> int:
             implement_context_pass["deterministic"]["implementPrerequisites"]["status"]
             == "PASS"
         ), implement_context_pass
+        baseline_head_before = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout.strip()
         direct_implement = start_execution(root, "STEP IMPLEMENT STEP-001")
+        direct_baseline = direct_implement.get("implementationBaseline")
+        assert direct_baseline, direct_implement
+        assert direct_baseline["stepId"] == "STEP-001", direct_baseline
+        assert direct_baseline["gitHead"] == baseline_head_before, direct_baseline
+        assert (
+            direct_baseline["sourceExecutionId"]
+            == direct_implement["executionId"]
+        ), direct_baseline
+
+        # Disk reload имитирует новую session: baseline обязан пережить restart.
+        persisted_direct = next(
+            item
+            for item in load_status(root)["executions"]
+            if item["executionId"] == direct_implement["executionId"]
+        )
+        assert persisted_direct["implementationBaseline"] == direct_baseline, (
+            persisted_direct
+        )
+
         complete_command(
             root,
             direct_implement["rootCommand"],
             "STEP IMPLEMENT STEP-001",
             "SUCCESS",
+        )
+
+        # Planned/new lifecycle не имеет права случайно унаследовать historical
+        # baseline уже завершённого IMPLEMENT. Active REVIEW без proof подавляет
+        # fallback к старой записи.
+        planned_review = start_execution(root, "STEP REVIEW STEP-001")
+        assert "implementationBaseline" not in planned_review, planned_review
+        assert implementation_baseline_for_step(root, "STEP-001") is None
+        complete_command(
+            root,
+            planned_review["rootCommand"],
+            "STEP REVIEW STEP-001",
+            "PASS",
+        )
+
+        # После фактического перехода STEP в in_progress отдельный REVIEW
+        # наследует baseline активной implementation lifecycle и не захватывает
+        # текущий HEAD заново.
+        direct_task_path = root / "planning/tasks/STEP-001.md"
+        direct_task_text = direct_task_path.read_text(encoding="utf-8")
+        write(
+            direct_task_path,
+            direct_task_text.replace("status: planned", "status: in_progress", 1),
+        )
+        direct_review = start_execution(root, "STEP REVIEW STEP-001")
+        assert direct_review["implementationBaseline"] == direct_baseline, direct_review
+        assert (
+            implementation_baseline_for_step(root, "STEP-001")
+            == direct_baseline
+        )
+        complete_command(
+            root,
+            direct_review["rootCommand"],
+            "STEP REVIEW STEP-001",
+            "PASS",
+        )
+        write(
+            direct_task_path,
+            direct_task_path.read_text(encoding="utf-8").replace(
+                "status: in_progress",
+                "status: planned",
+                1,
+            ),
         )
 
         # Independent commands coexist and invalid reverse chains never create state.
@@ -601,7 +688,14 @@ def main() -> int:
             "ORCHESTRATION_CTS_TRANSITION",
         )
 
-        begin_command(root, run_root, "STEP IMPLEMENT STEP-001")
+        run_implement = begin_command(
+            root,
+            run_root,
+            "STEP IMPLEMENT STEP-001",
+        )
+        run_baseline = run_implement.get("implementationBaseline")
+        assert run_baseline, run_implement
+        assert run_baseline["stepId"] == "STEP-001", run_baseline
         assert_resolved(
             resolve_root(root, run_root),
             "RESUME",
@@ -616,7 +710,8 @@ def main() -> int:
 
         # REVIEW crash recovery trusts only valid report for exact revision.
         complete_command(root, run_root, "STEP IMPLEMENT STEP-001", "SUCCESS")
-        begin_command(root, run_root, "STEP REVIEW STEP-001")
+        run_review = begin_command(root, run_root, "STEP REVIEW STEP-001")
+        assert run_review["implementationBaseline"] == run_baseline, run_review
         review_report(root, "FAIL", "REVIEW-20260921T010000Z.md")
         invalid_role = root / "planning/reviews/STEP-001/REVIEW-20260921T005000Z.md"
         valid_text = (root / "planning/reviews/STEP-001/REVIEW-20260921T010000Z.md").read_text(encoding="utf-8")
@@ -671,9 +766,13 @@ def main() -> int:
         recovered = resolve_root(root, run_root)
         assert_resolved(recovered, "NEXT", "STEP FIX STEP-001", "ORCHESTRATION_CTS_TRANSITION")
 
-        begin_command(root, run_root, "STEP FIX STEP-001")
+        run_fix = begin_command(root, run_root, "STEP FIX STEP-001")
+        assert run_fix["implementationBaseline"] == run_baseline, run_fix
         complete_command(root, run_root, "STEP FIX STEP-001", "SUCCESS")
-        begin_command(root, run_root, "STEP REVIEW STEP-001")
+        run_review_after_fix = begin_command(root, run_root, "STEP REVIEW STEP-001")
+        assert (
+            run_review_after_fix["implementationBaseline"] == run_baseline
+        ), run_review_after_fix
         review_report(root, "PASS", "REVIEW-20260921T020000Z.md")
         assert_resolved(
             resolve_root(root, run_root),
@@ -716,6 +815,36 @@ def main() -> int:
         exhausted = resolve_root(root, run_root)
         assert_resolved(exhausted, "BLOCKED", None, "FIX_REVIEW_LIMIT_REACHED")
         assert exhausted["fixReviewCycles"] == 1
+
+        # Regression #116: chain с повторяющейся командой продвигает позицию,
+        # а не возвращается к первому вхождению. Второй REVIEW FAIL завершает
+        # chain, а не открывает FIX заново.
+        repeat_chain = "STEP REVIEW STEP-001 > STEP FIX STEP-001 > STEP REVIEW STEP-001"
+        start_execution(root, repeat_chain)
+        complete_command(root, repeat_chain, "STEP REVIEW STEP-001", "FAIL")
+        assert_resolved(resolve_root(root, repeat_chain), "NEXT", "STEP FIX STEP-001", "CHAIN_NEXT_SEGMENT")
+        begin_command(root, repeat_chain, "STEP FIX STEP-001")
+        complete_command(root, repeat_chain, "STEP FIX STEP-001", "SUCCESS")
+        second_review = begin_command(root, repeat_chain, "STEP REVIEW STEP-001")
+        assert second_review["currentIndex"] == 2, second_review
+        assert second_review["fixReviewCycles"] == 1, second_review
+        complete_command(root, repeat_chain, "STEP REVIEW STEP-001", "FAIL")
+        chain_done = resolve_root(root, repeat_chain)
+        assert chain_done["status"] == "DONE" and chain_done["command"] is None, chain_done
+
+        # Chain подчиняется тому же FIX↔REVIEW budget, что и STEP RUN.
+        long_chain = (
+            "STEP REVIEW STEP-001 > STEP FIX STEP-001 > STEP REVIEW STEP-001"
+            " > STEP FIX STEP-001 > STEP REVIEW STEP-001"
+        )
+        start_execution(root, long_chain)
+        complete_command(root, long_chain, "STEP REVIEW STEP-001", "FAIL")
+        begin_command(root, long_chain, "STEP FIX STEP-001")
+        complete_command(root, long_chain, "STEP FIX STEP-001", "SUCCESS")
+        begin_command(root, long_chain, "STEP REVIEW STEP-001")
+        complete_command(root, long_chain, "STEP REVIEW STEP-001", "FAIL")
+        chain_limited = resolve_root(root, long_chain)
+        assert_resolved(chain_limited, "BLOCKED", None, "FIX_REVIEW_LIMIT_REACHED")
 
         # Specialized result без конкретного evidence summary/reference невалиден.
         evidence_probe = root / "planning/reviews/STEP-001/REVIEW-20260921T040000Z.md"
@@ -1047,6 +1176,495 @@ def main() -> int:
             concurrent_command,
             "SUCCESS",
         )
+
+        # Regression #85: реальный legacy schema-v1 state мигрируется локально,
+        # атомарно и без PROJECT RECONCILE. Full completed history исчезает из
+        # active executions, baseline переносится в stepRecovery, а recent
+        # terminals остаются bounded.
+        migration_root = root / ".local-state-v2-fixture"
+        migration_root.mkdir(parents=True, exist_ok=True)
+        write(migration_root / ".harness/manifest.yaml", manifest())
+        source_transitions = root / ".harness/command-transitions.json"
+        target_transitions = migration_root / ".harness/command-transitions.json"
+        target_transitions.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_transitions, target_transitions)
+        write(
+            migration_root / "planning/tasks/STEP-001.md",
+            task().replace("status: planned", "status: in_progress", 1),
+        )
+
+        timestamp = "2026-09-24T00:00:00+00:00"
+        baseline = {
+            "stepId": "STEP-001",
+            "gitHead": "a" * 40,
+            "capturedAt": timestamp,
+            "sourceExecutionId": "exec-v1-implement",
+        }
+
+        def legacy_record(
+            execution_id: str,
+            root_command: str,
+            *,
+            status: str,
+            command_status: str,
+            result: str | None,
+            implementation_baseline: dict | None = None,
+            details: dict | None = None,
+        ) -> dict:
+            item = {
+                "executionId": execution_id,
+                "mode": "single",
+                "requestedCommand": root_command,
+                "rootCommand": root_command,
+                "sequence": [root_command],
+                "currentIndex": 0,
+                "status": status,
+                "current": {
+                    "command": root_command,
+                    "status": command_status,
+                    "result": result,
+                    "attempt": 1,
+                    "startedAt": timestamp,
+                    "completedAt": (
+                        None if command_status == "running" else timestamp
+                    ),
+                    "context": {},
+                },
+                "notExecuted": [],
+                "fixReviewCycles": 0,
+                "startedAt": timestamp,
+                "completedAt": (
+                    None if status == "running" else timestamp
+                ),
+                "updatedAt": timestamp,
+            }
+            if implementation_baseline is not None:
+                item["implementationBaseline"] = implementation_baseline
+            if details is not None:
+                item["current"]["details"] = details
+            return item
+
+        legacy_state = {
+            "schemaVersion": 1,
+            "executions": [
+                legacy_record(
+                    "exec-v1-implement",
+                    "STEP IMPLEMENT STEP-001",
+                    status="complete",
+                    command_status="complete",
+                    result="SUCCESS",
+                    implementation_baseline=baseline,
+                ),
+                legacy_record(
+                    "exec-v1-blocked",
+                    "PROJECT STATUS",
+                    status="blocked",
+                    command_status="blocked",
+                    result="BLOCKED",
+                ),
+                legacy_record(
+                    "exec-v1-successor",
+                    "PROJECT STATUS",
+                    status="complete",
+                    command_status="complete",
+                    result="SUCCESS",
+                ),
+                legacy_record(
+                    "exec-v1-update-check",
+                    "HARNESS UPDATE CHECK",
+                    status="complete",
+                    command_status="complete",
+                    result="PASS",
+                    details={
+                        "resolvedTarget": "v9.9.9",
+                        "route": ["v9.9.8", "v9.9.9"],
+                        "lockRef": "v9.9.8",
+                    },
+                ),
+                legacy_record(
+                    "exec-v1-running",
+                    "HARNESS CONFIG",
+                    status="running",
+                    command_status="running",
+                    result=None,
+                ),
+                legacy_record(
+                    "exec-v1-current-blocked",
+                    "HARNESS HELP",
+                    status="blocked",
+                    command_status="blocked",
+                    result="BLOCKED",
+                ),
+            ],
+        }
+        migration_state_path = (
+            migration_root
+            / ".harness/local/execution/execution-status.json"
+        )
+        write(
+            migration_state_path,
+            json.dumps(legacy_state, ensure_ascii=False, indent=2) + "\n",
+        )
+
+        migrated = load_status(migration_root)
+        assert migrated["schemaVersion"] == 2, migrated
+        assert migrated["nextOrdinal"] == 7, migrated
+        assert {
+            item["executionId"] for item in migrated["executions"]
+        } == {"exec-v1-running", "exec-v1-current-blocked"}, migrated
+        assert len(migrated["recentTerminals"]) == 4, migrated
+        assert (
+            migrated["stepRecovery"]["STEP-001"]["implementationBaseline"]
+            == baseline
+        ), migrated
+        assert implementation_baseline_for_step(
+            migration_root,
+            "STEP-001",
+        ) == baseline
+
+        migrated_handoff = find_completed(
+            migration_root,
+            "HARNESS UPDATE CHECK",
+            result="PASS",
+        )
+        assert migrated_handoff is not None, migrated
+        assert migrated_handoff["current"]["details"] == {
+            "resolvedTarget": "v9.9.9",
+            "route": ["v9.9.8", "v9.9.9"],
+            "lockRef": "v9.9.8",
+        }, migrated_handoff
+
+        assert resolve_root(migration_root, "PROJECT STATUS")["status"] == "DONE"
+        unresolved_roots = {
+            item["rootCommand"]: item["status"]
+            for item in unresolved_executions(migration_root)
+        }
+        assert unresolved_roots == {
+            "HARNESS CONFIG": "RESUME",
+            "HARNESS HELP": "BLOCKED",
+        }, unresolved_roots
+
+        initial_migrated_bytes = migration_state_path.read_bytes()
+        assert load_status(migration_root) == migrated
+        assert migration_state_path.read_bytes() == initial_migrated_bytes
+
+        # Normal schema-v2 completion тоже сохраняет command-specific durable
+        # handoff metadata после compaction full execution -> tombstone.
+        v2_handoff_execution = start_execution(migration_root, "PROJECT STATUS")
+        complete_command(
+            migration_root,
+            v2_handoff_execution["rootCommand"],
+            "PROJECT STATUS",
+            "SUCCESS",
+            details={"handoff": {"token": "exact-v2"}},
+        )
+        v2_handoff = find_completed(
+            migration_root,
+            "PROJECT STATUS",
+            result="SUCCESS",
+            latest_only=True,
+        )
+        assert v2_handoff is not None, load_status(migration_root)
+        assert v2_handoff["current"]["details"] == {
+            "handoff": {"token": "exact-v2"}
+        }, v2_handoff
+
+        # REVIEW/FIX отдельными invocations получают тот же recovery baseline
+        # после migration, не завися от compact completed IMPLEMENT tombstone.
+        review_after_migration = start_execution(
+            migration_root,
+            "STEP REVIEW STEP-001",
+        )
+        assert (
+            review_after_migration["implementationBaseline"] == baseline
+        ), review_after_migration
+        complete_command(
+            migration_root,
+            review_after_migration["rootCommand"],
+            "STEP REVIEW STEP-001",
+            "PASS",
+        )
+
+        fix_after_migration = start_execution(
+            migration_root,
+            "STEP FIX STEP-001",
+        )
+        assert (
+            fix_after_migration["implementationBaseline"] == baseline
+        ), fix_after_migration
+        complete_command(
+            migration_root,
+            fix_after_migration["rootCommand"],
+            "STEP FIX STEP-001",
+            "SUCCESS",
+        )
+
+        # Repeated complete после migration по-прежнему видит latest terminal,
+        # а не resurrect-ит stale blocked (#76).
+        try:
+            complete_command(
+                migration_root,
+                "PROJECT STATUS",
+                "PROJECT STATUS",
+                "SUCCESS",
+            )
+        except ValueError as exc:
+            assert "already complete" in str(exc), exc
+        else:
+            raise AssertionError("v2 terminal tombstone lost repeated-complete proof")
+
+        # Unknown local artifacts и lock infrastructure не являются cleanup
+        # targets execution compactor-а.
+        unknown_local = migration_root / ".harness/local/unknown-owner.json"
+        unknown_local.write_text('{"keep":true}\n', encoding="utf-8")
+
+        # Regression #91: oversized durable details блокируются ДО mutation.
+        # Running execution должна остаться running и затем корректно завершиться
+        # с допустимым handoff.
+        oversized_execution = start_execution(migration_root, "PROJECT STATUS")
+        state_before_oversized = migration_state_path.read_bytes()
+        oversized_details = {"blob": "я" * MAX_DETAILS_BYTES}
+        try:
+            complete_command(
+                migration_root,
+                oversized_execution["rootCommand"],
+                "PROJECT STATUS",
+                "SUCCESS",
+                details=oversized_details,
+            )
+        except ValueError as exc:
+            assert "exceeds" in str(exc) and "UTF-8 JSON bytes" in str(exc), exc
+        else:
+            raise AssertionError("oversized execution details were accepted")
+        assert migration_state_path.read_bytes() == state_before_oversized
+        still_running = resolve_root(migration_root, "PROJECT STATUS")
+        assert still_running["status"] == "RESUME", still_running
+        complete_command(
+            migration_root,
+            oversized_execution["rootCommand"],
+            "PROJECT STATUS",
+            "SUCCESS",
+        )
+
+        # Сформировать details максимально близко к byte-budget, не используя
+        # character-count approximation: Unicode/JSON escaping не должны менять
+        # contract.
+        payload_len = MAX_DETAILS_BYTES
+        while payload_len > 0:
+            near_limit_details = {"blob": "x" * payload_len}
+            encoded_size = len(
+                json.dumps(
+                    near_limit_details,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            if encoded_size <= MAX_DETAILS_BYTES:
+                break
+            payload_len -= 1
+        assert encoded_size <= MAX_DETAILS_BYTES
+        assert encoded_size > MAX_DETAILS_BYTES - 64, encoded_size
+
+        # Stress: terminal history bounded одновременно по count и per-record
+        # bytes. 120 near-limit completions оставляют ровно 100 tombstones и
+        # serialized state порядка <= 100 * budget + structural overhead.
+        for _index in range(120):
+            stress = start_execution(migration_root, "PROJECT STATUS")
+            complete_command(
+                migration_root,
+                stress["rootCommand"],
+                "PROJECT STATUS",
+                "SUCCESS",
+                details=near_limit_details,
+            )
+        stressed = load_status(migration_root)
+        assert len(stressed["recentTerminals"]) == 100, len(
+            stressed["recentTerminals"]
+        )
+        assert all(
+            item["status"] in {"running", "blocked"}
+            for item in stressed["executions"]
+        ), stressed["executions"]
+        # 100 * 16KiB details плюс tombstone/active/recovery overhead.
+        assert migration_state_path.stat().st_size < 1_900_000, (
+            migration_state_path.stat().st_size
+        )
+        assert implementation_baseline_for_step(
+            migration_root,
+            "STEP-001",
+        ) == baseline
+        assert unknown_local.read_text(encoding="utf-8") == '{"keep":true}\n'
+        assert (
+            migration_root
+            / ".harness/local/execution/execution-status.lock"
+        ).is_file()
+
+        # Доказанный terminal lifecycle STEP позволяет удалить recovery proof.
+        migration_task = migration_root / "planning/tasks/STEP-001.md"
+        write(
+            migration_task,
+            migration_task.read_text(encoding="utf-8").replace(
+                "status: in_progress",
+                "status: completed",
+                1,
+            ),
+        )
+        trigger = start_execution(migration_root, "PROJECT STATUS")
+        complete_command(
+            migration_root,
+            trigger["rootCommand"],
+            "PROJECT STATUS",
+            "SUCCESS",
+        )
+        after_terminal_step = load_status(migration_root)
+        assert "STEP-001" not in after_terminal_step["stepRecovery"], (
+            after_terminal_step
+        )
+
+        # Corrupted legacy input fail-closed: migration не заменяет исходный
+        # файл пустым/частичным v2.
+        corrupted = {
+            "schemaVersion": 1,
+            "executions": [{"changed": True}],
+        }
+        corrupted_bytes = (
+            json.dumps(corrupted, ensure_ascii=False, indent=2) + "\n"
+        ).encode("utf-8")
+        migration_state_path.write_bytes(corrupted_bytes)
+        try:
+            load_status(migration_root)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("corrupt v1 execution state was migrated")
+        assert migration_state_path.read_bytes() == corrupted_bytes
+
+        mismatched_recovery = {
+            "schemaVersion": 2,
+            "executions": [],
+            "stepRecovery": {
+                "STEP-001": {
+                    "implementationBaseline": {
+                        "stepId": "STEP-002",
+                        "gitHead": "b" * 40,
+                        "capturedAt": timestamp,
+                        "sourceExecutionId": "exec-mismatched",
+                    },
+                    "updatedAt": timestamp,
+                }
+            },
+            "recentTerminals": [],
+            "nextOrdinal": 1,
+        }
+        mismatched_bytes = (
+            json.dumps(mismatched_recovery, ensure_ascii=False, indent=2) + "\n"
+        ).encode("utf-8")
+        migration_state_path.write_bytes(mismatched_bytes)
+        try:
+            load_status(migration_root)
+        except ValueError as exc:
+            assert "must match recovery key STEP-001" in str(exc), exc
+        else:
+            raise AssertionError("mismatched stepRecovery identity was accepted")
+        assert migration_state_path.read_bytes() == mismatched_bytes
+
+        # Legacy v1 может содержать historical details, появившиеся до
+        # byte-budget. Migration не имеет права молча truncate-ить proof:
+        # oversized v1 fail-closed и сохраняет исходные bytes.
+        oversized_v1 = {
+            "schemaVersion": 1,
+            "executions": [
+                legacy_record(
+                    "exec-v1-oversized",
+                    "PROJECT STATUS",
+                    status="complete",
+                    command_status="complete",
+                    result="SUCCESS",
+                    details={"blob": "x" * (MAX_DETAILS_BYTES + 1024)},
+                )
+            ],
+        }
+        oversized_v1_bytes = (
+            json.dumps(oversized_v1, ensure_ascii=False, indent=2) + "\n"
+        ).encode("utf-8")
+        migration_state_path.write_bytes(oversized_v1_bytes)
+        try:
+            load_status(migration_root)
+        except ValueError as exc:
+            assert "exceeds" in str(exc), exc
+        else:
+            raise AssertionError("oversized v1 details were migrated")
+        assert migration_state_path.read_bytes() == oversized_v1_bytes
+
+        # Current v2 oversized details также invalid и не переписываются.
+        oversized_v2 = {
+            "schemaVersion": 2,
+            "executions": [],
+            "stepRecovery": {},
+            "recentTerminals": [
+                {
+                    "executionId": "exec-v2-oversized",
+                    "ordinal": 1,
+                    "rootCommand": "PROJECT STATUS",
+                    "mode": "single",
+                    "status": "complete",
+                    "current": {
+                        "command": "PROJECT STATUS",
+                        "status": "complete",
+                        "result": "SUCCESS",
+                        "completedAt": timestamp,
+                        "details": {"blob": "x" * (MAX_DETAILS_BYTES + 1024)},
+                    },
+                    "completedAt": timestamp,
+                    "updatedAt": timestamp,
+                }
+            ],
+            "nextOrdinal": 2,
+        }
+        oversized_v2_bytes = (
+            json.dumps(oversized_v2, ensure_ascii=False, indent=2) + "\n"
+        ).encode("utf-8")
+        migration_state_path.write_bytes(oversized_v2_bytes)
+        try:
+            load_status(migration_root)
+        except ValueError as exc:
+            assert "exceeds" in str(exc), exc
+        else:
+            raise AssertionError("oversized v2 details were accepted")
+        assert migration_state_path.read_bytes() == oversized_v2_bytes
+
+        unsupported = {
+            "schemaVersion": 999,
+            "executions": [],
+        }
+        unsupported_bytes = (
+            json.dumps(unsupported, ensure_ascii=False, indent=2) + "\n"
+        ).encode("utf-8")
+        migration_state_path.write_bytes(unsupported_bytes)
+        try:
+            load_status(migration_root)
+        except ValueError as exc:
+            assert "schemaVersion" in str(exc), exc
+        else:
+            raise AssertionError("unsupported execution schema was accepted")
+        assert migration_state_path.read_bytes() == unsupported_bytes
+
+    # Regression #117: повреждённый state (не-object JSON или мусор) — это
+    # ValueError для BLOCKED, а не AttributeError/traceback.
+    with tempfile.TemporaryDirectory(prefix="harness-execution-corrupt-") as tmp:
+        corrupt_root = Path(tmp)
+        state_file = corrupt_root / ".harness/local/execution/execution-status.json"
+        state_file.parent.mkdir(parents=True)
+        for payload in ("[]", "not json"):
+            state_file.write_text(payload, encoding="utf-8")
+            try:
+                load_status(corrupt_root)
+            except ValueError as exc:
+                assert "execution-status" in str(exc), exc
+            else:
+                raise AssertionError(f"corrupt execution state accepted: {payload!r}")
+
     print("EXECUTION STATUS SELF-TEST: PASS")
     return 0
 

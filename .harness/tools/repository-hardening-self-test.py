@@ -148,6 +148,56 @@ def main() -> int:
         )
         claude_path.write_text(claude_original, encoding="utf-8")
 
+        # Regression #106: commit фиксирует staged blob. Private key, который
+        # остался в index после очистки working copy, обязан блокировать commit.
+        key_path = root / "docs/leaked-key.md"
+        # Marker собирается из частей, чтобы сам test file не был key fixture.
+        key_marker = "-----BEGIN" + " PRIVATE KEY-----"
+        key_path.write_text(
+            f"{key_marker}\nMIIEfixture\n-----END" + " PRIVATE KEY-----\n",
+            encoding="utf-8",
+        )
+        run(root, "git", "add", "docs/leaked-key.md")
+        key_path.write_text("clean working copy\n", encoding="utf-8")
+        staged_key = run(
+            root,
+            "python3",
+            ".harness/tools/validate.py",
+            "--mode",
+            "commit",
+            check=False,
+        )
+        require_failure(
+            staged_key,
+            "private key material detected in staged file: docs/leaked-key.md",
+        )
+        run(root, "git", "rm", "-q", "--cached", "-f", "docs/leaked-key.md")
+        key_path.unlink()
+
+        # Regression #113: низкоуровневый execution-state CLI не должен
+        # завершать IMPLEMENT/FIX SUCCESS в обход Verification dispatcher-а.
+        for command, result in (
+            ("STEP IMPLEMENT STEP-001", "SUCCESS"),
+            ("STEP IMPLEMENT STEP-001", "PASS"),
+            ("STEP FIX STEP-001", "SUCCESS"),
+        ):
+            bypass = run(
+                root,
+                "python3",
+                ".harness/tools/execution-state.py",
+                "complete",
+                "--root",
+                command,
+                "--command",
+                command,
+                "--result",
+                result,
+                check=False,
+            )
+            assert bypass.returncode == 2, bypass.stdout + bypass.stderr
+            assert "VERIFICATION_REQUIRES_DISPATCH" in bypass.stdout, bypass.stdout
+        assert not (root / ".harness/local/execution-status.json").exists()
+
     print("REPOSITORY HARDENING SELF-TEST: PASS")
     return 0
 

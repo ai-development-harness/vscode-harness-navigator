@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "latest": "v0.8.0",
+  "latest": "v0.8.3",
   "transitions": [
     {
       "from": "v0.1.0",
@@ -130,6 +130,26 @@
       "to": "v0.8.0",
       "kind": "standard",
       "reloadRequired": true
+    },
+    {
+      "from": "v0.8.0",
+      "to": "v0.8.1",
+      "kind": "bridge",
+      "reloadRequired": true,
+      "reason": "v0.8.1 installs the journaled transactional update engine that v0.8.0 runtime cannot safely replace in the same session; all later hops must run on it"
+    },
+    {
+      "from": "v0.8.1",
+      "to": "v0.8.2",
+      "kind": "bridge",
+      "reloadRequired": true,
+      "reason": "v0.8.2 installs the journaled transactional update engine that older runtimes cannot safely replace in the same session; all later hops must run on it"
+    },
+    {
+      "from": "v0.8.2",
+      "to": "v0.8.3",
+      "kind": "standard",
+      "reloadRequired": false
     }
   ]
 }

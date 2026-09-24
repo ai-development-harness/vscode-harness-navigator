@@ -39,6 +39,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import threading
 
 if sys.version_info < (3, 11):
     print("ERROR: Harness validation requires Python 3.11+ (stdlib tomllib).", file=sys.stderr)
@@ -74,6 +75,7 @@ from harness_config import (
 )
 from project_integrity import validate_project_integrity
 from project_migration import legacy_manual_bypass_allowed, legacy_schema_pending
+from template_contract import preinit_template_alignment_state
 from reasoning_boundaries import projection_drift_errors
 
 
@@ -216,6 +218,90 @@ def tracked_files(root: Path) -> tuple[list[str], str | None]:
     if code != 0:
         return [], "Git index unavailable; tracked-file integrity checks require a Git working tree"
     return [p for p in out.split("\0") if p], None
+
+
+
+# Прочитать staged content каждого regular index entry. Commit фиксирует именно
+# blob из index, а не working tree, поэтому hygiene/secret checks обязаны видеть его (#106).
+# Возвращает None, если Git index недоступен: caller уже fail-closed через tracked_files().
+def iter_staged_blobs(root: Path, *, max_content_bytes: int):
+    try:
+        listing = subprocess.run(
+            ["git", "ls-files", "-s", "-z"],
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        return
+    if listing.returncode != 0:
+        return
+    paths_by_oid: dict[str, list[str]] = {}
+    for record in listing.stdout.split(b"\0"):
+        if not record:
+            continue
+        header, sep, raw_path = record.partition(b"\t")
+        parts = header.split()
+        if not sep or len(parts) != 3:
+            continue
+        mode = parts[0].decode("ascii", errors="replace")
+        # Submodule gitlink не является blob этого repository.
+        if mode == "160000":
+            continue
+        oid = parts[1].decode("ascii", errors="replace")
+        path = raw_path.decode("utf-8", errors="surrogateescape")
+        paths_by_oid.setdefault(oid, []).append(path)
+    if not paths_by_oid:
+        return
+
+    proc = subprocess.Popen(
+        ["git", "cat-file", "--batch"],
+        cwd=root,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    assert proc.stdin is not None and proc.stdout is not None
+    oids = list(paths_by_oid)
+
+    # Отдельный writer thread исключает pipe deadlock на больших repository.
+    def feed() -> None:
+        try:
+            for oid in oids:
+                proc.stdin.write(oid.encode("ascii") + b"\n")
+            proc.stdin.close()
+        except OSError:
+            pass
+
+    writer = threading.Thread(target=feed, daemon=True)
+    writer.start()
+    try:
+        for oid in oids:
+            header = proc.stdout.readline().rstrip(b"\n").split()
+            if len(header) != 3 or header[1] != b"blob":
+                # missing/unexpected object: пропускаем, остальные checks не блокируются.
+                if len(header) == 3:
+                    proc.stdout.read(int(header[2]) + 1)
+                continue
+            size = int(header[2])
+            if size > max_content_bytes:
+                # Oversized blob проверяется только по размеру; content не держим в памяти.
+                remaining = size
+                while remaining:
+                    chunk = proc.stdout.read(min(remaining, 1024 * 1024))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                data = b""
+            else:
+                data = proc.stdout.read(size)
+            proc.stdout.read(1)
+            for path in paths_by_oid[oid]:
+                yield path, size, data
+    finally:
+        writer.join()
+        proc.stdout.close()
+        proc.wait()
 
 
 
@@ -504,11 +590,39 @@ def validate_project_surface(
                 "active project schema migration required or partially migrated; "
                 "run PROJECT RECONCILE before continuing"
             )
+
+    # Pre-INIT project templates остаются project-owned и потому не входят в
+    # updater ownership. Во время target postcondition manual validator может
+    # временно пропустить только такой old-release template drift, который
+    # доказан как exact additive alignment. Commit/CI остаются strict, а после
+    # обязательного reload новый updater выполняет alignment и снова требует
+    # exact baseline.
+    allow_preinit_release_alignment = False
+    initialized = bool(get(load_manifest(root), "project.initialized", False))
+    if mode == "manual" and not initialized:
+        try:
+            template_pending, template_blockers = preinit_template_alignment_state(root)
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            errors.append(f"pre-init project template alignment check failed: {exc}")
+        else:
+            if template_blockers:
+                errors.extend(
+                    f"pre-init project template alignment blocked: {item}"
+                    for item in template_blockers
+                )
+            elif template_pending:
+                allow_preinit_release_alignment = True
+                warnings.append(
+                    "pre-init project template release alignment pending; "
+                    "reload runtime and repeat exact HARNESS UPDATE APPLY"
+                )
+
     errors.extend(
         validate_project_integrity(
             root,
             warnings=warnings,
             allow_legacy=allow_legacy,
+            allow_preinit_release_alignment=allow_preinit_release_alignment,
             ci_mode=mode == "ci",
         )
     )
@@ -989,6 +1103,7 @@ def validate_repository_surface(
         errors.append(f"configured local brief must not be tracked: {configured_local_brief}")
     max_size_mb = max_tracked_file_size_mb if isinstance(max_tracked_file_size_mb, int) and not isinstance(max_tracked_file_size_mb, bool) and max_tracked_file_size_mb > 0 else 10
     max_size = max_size_mb * 1024 * 1024
+    oversized_reported: set[str] = set()
 
     for rel in files:
         normalized = rel.replace("\\", "/")
@@ -998,6 +1113,7 @@ def validate_repository_surface(
         try:
             if p.is_file() and p.stat().st_size > max_size:
                 errors.append(f"tracked file exceeds {max_size // (1024*1024)} MiB: {normalized}")
+                oversized_reported.add(rel)
         except OSError:
             pass
 
@@ -1006,6 +1122,7 @@ def validate_repository_surface(
     # text-format проблемы только в реально tracked files.
     private_markers = [b"-----BEGIN" + suffix for suffix in (b" PRIVATE KEY-----", b" RSA PRIVATE KEY-----", b" OPENSSH PRIVATE KEY-----")]
     format_paths = policy.get("format_paths", [])
+    key_reported: set[str] = set()
     for rel in files:
         p = root / rel
         if not p.is_file() or not text_file(p):
@@ -1016,6 +1133,7 @@ def validate_repository_surface(
             continue
         if policy.get("check_private_key_material", True) and any(marker in raw for marker in private_markers):
             errors.append(f"private key material detected in tracked file: {rel}")
+            key_reported.add(rel)
         if policy.get("check_merge_markers", True):
             text = raw.decode("utf-8", errors="ignore")
             if re.search(r"(?m)^(<<<<<<<|=======|>>>>>>>)", text):
@@ -1036,6 +1154,20 @@ def validate_repository_surface(
                     if line.rstrip(" \t") != line:
                         errors.append(f"trailing whitespace: {rel}:{n}")
                         break
+
+    # Commit фиксирует staged blob: working tree может уже не содержать key
+    # или large payload, который всё ещё лежит в index (#106).
+    for rel, size, data in iter_staged_blobs(root, max_content_bytes=max_size):
+        normalized = rel.replace("\\", "/")
+        if size > max_size and rel not in oversized_reported:
+            errors.append(f"staged file exceeds {max_size // (1024*1024)} MiB: {normalized}")
+        if (
+            policy.get("check_private_key_material", True)
+            and rel not in key_reported
+            and b"\0" not in data[:8192]
+            and any(marker in data for marker in private_markers)
+        ):
+            errors.append(f"private key material detected in staged file: {normalized}")
 
     # --- Самодокументируемые config files --------------------------------
     # Каждый параметр managed YAML/TOML обязан иметь соседний комментарий и

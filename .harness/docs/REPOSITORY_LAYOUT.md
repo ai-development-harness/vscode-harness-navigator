@@ -23,6 +23,8 @@ planning/**      → default project planning/history layout
 - `shared` — например manifest/runtime configs, где нужен 3-way merge;
 - `.harness/local/**` — untracked operational state.
 
+Local state не является единым типом данных: execution/PR lifecycle — recovery, semantic/Git inputs — temporary transport, lock files — synchronization infrastructure. Автоматическое удаление разрешено только deterministic owner-у после доказанного lifecycle boundary; неизвестные local paths остаются нетронутыми.
+
 ## Default layout template
 
 ```text
@@ -59,8 +61,15 @@ planning/**      → default project planning/history layout
 │   │   ├── validate.py
 │   │   ├── execution_status.py
 │   │   └── ...
-│   └── local/
-│       └── execution/execution-status.json
+│   └── local/                           # ignored operational state
+│       ├── execution/
+│       │   ├── execution-status.json    # schema v2, bounded
+│       │   └── execution-status.lock    # advisory lock; не очищать
+│       └── git/
+│           ├── commit-message.txt       # temporary, удаляется после commit SUCCESS
+│           ├── pr-body.md               # temporary, удаляется после PR SUCCESS
+│           ├── pr-title.txt              # temporary, удаляется после PR SUCCESS
+│           └── pr-state.json             # recovery до GIT PR FINISH
 ├── .agents/skills/
 ├── .codex/
 ├── .claude/

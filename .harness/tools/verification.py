@@ -14,10 +14,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shlex
+import signal
 import subprocess
+import threading
 import time
 from typing import Any
 
@@ -160,6 +163,68 @@ def _revision_equal(left: dict[str, Any], right: dict[str, Any]) -> bool:
     )
 
 
+# Сколько последних bytes каждого потока держать в памяти для diagnostic tail.
+# Hash и byte count считаются по всему выводу потоково.
+CAPTURE_TAIL_BYTES = 64 * 1024
+# Сколько ждать закрытия pipes после завершения/убийства process group.
+PIPE_DRAIN_SECONDS = 5
+
+
+class _StreamCapture:
+    """Потоковый hash + byte count + bounded tail одного pipe."""
+
+    def __init__(self, stream: Any):
+        self._stream = stream
+        self.digest = hashlib.sha256()
+        self.size = 0
+        self.tail = bytearray()
+        self.thread = threading.Thread(target=self._drain, daemon=True)
+        self.thread.start()
+
+    def _drain(self) -> None:
+        try:
+            while True:
+                chunk = self._stream.read(65536)
+                if not chunk:
+                    return
+                self.digest.update(chunk)
+                self.size += len(chunk)
+                self.tail.extend(chunk)
+                if len(self.tail) > CAPTURE_TAIL_BYTES:
+                    del self.tail[: len(self.tail) - CAPTURE_TAIL_BYTES]
+        except (OSError, ValueError):
+            return
+
+    def finish(self) -> None:
+        self.thread.join(PIPE_DRAIN_SECONDS)
+
+
+def _popen_group_kwargs() -> dict[str, Any]:
+    # Отдельная process group: timeout убивает и внуков (`sh -c`, test runners),
+    # иначе они продолжали бы работать и держать pipes (#115).
+    if os.name == "posix":
+        return {"start_new_session": True}
+    return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+
+
+def _kill_group(proc: subprocess.Popen[bytes]) -> None:
+    if os.name == "posix":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    else:
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except OSError:
+            proc.kill()
+
+
 def _run_command(
     root: Path,
     command: str,
@@ -169,13 +234,13 @@ def _run_command(
     argv = _argv(command)
     started = time.monotonic()
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             argv,
             cwd=root,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=timeout_seconds,
-            check=False,
+            **_popen_group_kwargs(),
         )
     except FileNotFoundError as exc:
         return {
@@ -186,42 +251,70 @@ def _run_command(
             "reasonCode": "EXECUTABLE_NOT_FOUND",
             "message": str(exc),
         }
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or b""
-        stderr = exc.stderr or b""
-        return {
-            "kind": "command",
-            "command": command,
-            "argv": argv,
-            "status": "FAIL",
-            "reasonCode": "TIMEOUT",
-            "timeoutSeconds": timeout_seconds,
-            "durationMs": int((time.monotonic() - started) * 1000),
-            "exitCode": None,
-            "stdoutSha256": _hash(stdout),
-            "stderrSha256": _hash(stderr),
-            "stdoutBytes": len(stdout),
-            "stderrBytes": len(stderr),
-            "stdoutTail": _tail(stdout),
-            "stderrTail": _tail(stderr),
-        }
+    stdout = _StreamCapture(proc.stdout)
+    stderr = _StreamCapture(proc.stderr)
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+    finally:
+        # Verification не оставляет фоновых процессов ни после timeout, ни
+        # после нормального завершения lead process. На Windows завершённый
+        # PID мог быть переиспользован, поэтому taskkill — только по timeout.
+        if os.name == "posix" or timed_out:
+            _kill_group(proc)
+        proc.wait()
+        stdout.finish()
+        stderr.finish()
 
+    stdout_tail = bytes(stdout.tail)
+    stderr_tail = bytes(stderr.tail)
     result: dict[str, Any] = {
         "kind": "command",
         "command": command,
         "argv": argv,
-        "status": "PASS" if proc.returncode == 0 else "FAIL",
         "durationMs": int((time.monotonic() - started) * 1000),
-        "exitCode": proc.returncode,
-        "stdoutSha256": _hash(proc.stdout),
-        "stderrSha256": _hash(proc.stderr),
-        "stdoutBytes": len(proc.stdout),
-        "stderrBytes": len(proc.stderr),
+        "stdoutSha256": stdout.digest.hexdigest(),
+        "stderrSha256": stderr.digest.hexdigest(),
+        "stdoutBytes": stdout.size,
+        "stderrBytes": stderr.size,
     }
+    if timed_out:
+        result.update(
+            status="FAIL",
+            reasonCode="TIMEOUT",
+            timeoutSeconds=timeout_seconds,
+            exitCode=None,
+            stdoutTail=_tail(stdout_tail),
+            stderrTail=_tail(stderr_tail),
+        )
+        return result
+    result["status"] = "PASS" if proc.returncode == 0 else "FAIL"
+    result["exitCode"] = proc.returncode
     if proc.returncode != 0:
-        result["stdoutTail"] = _tail(proc.stdout)
-        result["stderrTail"] = _tail(proc.stderr)
+        result["stdoutTail"] = _tail(stdout_tail)
+        result["stderrTail"] = _tail(stderr_tail)
     return result
+
+
+def _refs_snapshot(root: Path) -> str:
+    """Все refs и HEAD: Verification не должна создавать/двигать ветки и теги."""
+    refs = subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname) %(objectname)"],
+        cwd=root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    head = subprocess.run(
+        ["git", "symbolic-ref", "-q", "HEAD"],
+        cwd=root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    return refs.stdout.decode("utf-8", "replace") + "HEAD=" + head.stdout.decode("utf-8", "replace")
 
 
 def _manual_results(
@@ -396,12 +489,21 @@ def run_step_verification(
                     "commands": commands,
                 }
 
+            refs_before = _refs_snapshot(root)
             item = _run_command(
                 root,
                 entry["value"],
                 timeout_seconds=timeout,
             )
             commands.append(item)
+            if _refs_snapshot(root) != refs_before:
+                return {
+                    "schemaVersion": 1,
+                    "status": "BLOCKED",
+                    "stepId": step_id,
+                    "reasonCode": "VERIFICATION_MUTATED_REFS",
+                    "commands": commands,
+                }
             if item["status"] == "BLOCKED":
                 return {
                     "schemaVersion": 1,

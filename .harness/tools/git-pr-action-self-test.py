@@ -62,6 +62,16 @@ if args[:2] == ["pr", "create"]:
     def value(flag):
         return args[args.index(flag) + 1]
 
+    mutate_path = os.environ.get("FAKE_MUTATE_BODY_PATH")
+    if mutate_path:
+        Path(mutate_path).write_text(
+            "## Raced body\\n\\nThis must not reach the provider.\\n",
+            encoding="utf-8",
+        )
+
+    body_file = value("--body-file")
+    body = sys.stdin.read() if body_file == "-" else Path(body_file).read_text()
+
     item = {
         "number": 17,
         "url": "https://example.invalid/pr/17",
@@ -71,6 +81,8 @@ if args[:2] == ["pr", "create"]:
         "baseRefName": value("--base"),
         "isDraft": "--draft" in args,
         "title": value("--title"),
+        "body": body,
+        "bodyFile": body_file,
     }
     state_path.write_text(json.dumps(item))
     print(item["url"])
@@ -130,22 +142,61 @@ def main() -> int:
         old_path = os.environ.get("PATH", "")
         old_state = os.environ.get("FAKE_GH_STATE")
         old_oid = os.environ.get("FAKE_HEAD_OID")
+        old_mutate = os.environ.get("FAKE_MUTATE_BODY_PATH")
         os.environ["PATH"] = str(fake_bin) + os.pathsep + old_path
         os.environ["FAKE_GH_STATE"] = str(provider_state)
         os.environ["FAKE_HEAD_OID"] = run(root, "git", "rev-parse", "HEAD")
 
         try:
             # Create path derives title from exact commit subject and persists
-            # local lifecycle state mechanically.
-            created = execute_pr(root, body_file=body)
+            # local lifecycle state mechanically. Optional semantic title input
+            # тоже является one-shot transport и удаляется после SUCCESS.
+            title_input = root / ".harness/local/git/pr-title.md"
+            title_input.write_text(
+                "unused while title_from_commit=true\n",
+                encoding="utf-8",
+            )
+            expected_body = body.read_text(encoding="utf-8")
+            os.environ["FAKE_MUTATE_BODY_PATH"] = str(body)
+            created = execute_pr(
+                root,
+                title_file=title_input,
+                body_file=body,
+            )
+            os.environ.pop("FAKE_MUTATE_BODY_PATH", None)
+
             assert created["status"] == "SUCCESS", created
             assert created["reused"] is False, created
             assert created["pr"] == 17, created
             assert created["branch"] == "feature/pr-action", created
             assert created["base"] == "main", created
+            assert created.get("cleanupWarnings"), created
+            assert body.is_file(), "raced source body was unexpectedly deleted"
+            assert "Raced body" in body.read_text(encoding="utf-8")
+            assert not title_input.exists(), "successful PR action left unchanged title file"
 
             provider = json.loads(provider_state.read_text(encoding="utf-8"))
             assert provider["title"] == "feat: deterministic provider PR", provider
+            assert provider["bodyFile"] == "-", provider
+            assert provider["body"] == expected_body, provider
+
+            # Unchanged inputs on an idempotent successful PR action are still
+            # one-shot transport and are cleaned normally.
+            reuse_body = root / ".harness/local/git/pr-body-reuse.md"
+            reuse_title = root / ".harness/local/git/pr-title-reuse.md"
+            reuse_body.write_text("reuse body\n", encoding="utf-8")
+            reuse_title.write_text("reuse title\n", encoding="utf-8")
+            reused_with_inputs = execute_pr(
+                root,
+                body_file=reuse_body,
+                title_file=reuse_title,
+            )
+            assert reused_with_inputs["status"] == "SUCCESS", reused_with_inputs
+            assert reused_with_inputs["reused"] is True, reused_with_inputs
+            assert not reuse_body.exists(), reuse_body
+            assert not reuse_title.exists(), reuse_title
+
+            body.unlink()
 
             state_path = root / ".harness/local/git/pr-state.json"
             state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -164,17 +215,60 @@ def main() -> int:
             assert reused["reused"] is True, reused
             assert reused["pr"] == 17, reused
 
+            # Regression #85: semantic input symlink не должен позволять cleanup
+            # удалить durable pr-state target после успешного reuse.
+            state_before_symlink = state_path.read_bytes()
+            body_link = root / ".harness/local/git/pr-body-link.md"
+            body_link.symlink_to("pr-state.json")
+            try:
+                execute_pr(root, body_file=body_link)
+            except GitActionError as exc:
+                assert exc.code == "PR_INPUT_PATH_BLOCKED", exc.code
+            else:
+                raise AssertionError("PR body symlink was accepted")
+            assert body_link.is_symlink(), body_link
+            assert state_path.read_bytes() == state_before_symlink
+
+            # Parent symlink запрещён так же, как leaf symlink.
+            actual_dir = root / ".harness/local/git-input-target"
+            actual_dir.mkdir(parents=True)
+            parent_body = actual_dir / "body.md"
+            parent_body.write_text("keep target\n", encoding="utf-8")
+            alias_dir = root / ".harness/local/git/alias"
+            alias_dir.symlink_to(actual_dir, target_is_directory=True)
+            try:
+                execute_pr(root, body_file=alias_dir / "body.md")
+            except GitActionError as exc:
+                assert exc.code == "PR_INPUT_PATH_BLOCKED", exc.code
+            else:
+                raise AssertionError("PR body parent symlink was accepted")
+            assert alias_dir.is_symlink(), alias_dir
+            assert parent_body.read_text(encoding="utf-8") == "keep target\n"
+
             # Exact provider head OID is a postcondition, not trusted prose.
             original = json.loads(provider_state.read_text(encoding="utf-8"))
             broken = dict(original)
             broken["headRefOid"] = "0" * 40
             provider_state.write_text(json.dumps(broken), encoding="utf-8")
+            retry_body = root / ".harness/local/git/pr-body-retry.md"
+            retry_body.write_text(
+                "## Retry\n\nKeep me when provider validation fails.\n",
+                encoding="utf-8",
+            )
+            retry_title = root / ".harness/local/git/pr-title-retry.md"
+            retry_title.write_text("keep retry title\n", encoding="utf-8")
             try:
-                execute_pr(root)
+                execute_pr(
+                    root,
+                    title_file=retry_title,
+                    body_file=retry_body,
+                )
             except GitActionError as exc:
                 assert exc.code == "PR_POSTCONDITION_FAILED", exc.code
             else:
                 raise AssertionError("provider head OID mismatch was accepted")
+            assert retry_body.is_file(), "failed PR action deleted retry body"
+            assert retry_title.is_file(), "failed PR action deleted retry title"
             provider_state.write_text(json.dumps(original), encoding="utf-8")
 
             # reuse_existing=false never creates a duplicate silently.
@@ -204,6 +298,10 @@ def main() -> int:
                 os.environ.pop("FAKE_HEAD_OID", None)
             else:
                 os.environ["FAKE_HEAD_OID"] = old_oid
+            if old_mutate is None:
+                os.environ.pop("FAKE_MUTATE_BODY_PATH", None)
+            else:
+                os.environ["FAKE_MUTATE_BODY_PATH"] = old_mutate
 
     print("GIT PR ACTION SELF-TEST: PASS")
     return 0

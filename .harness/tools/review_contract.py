@@ -49,6 +49,8 @@ from review_gates import required_reviewers
 SEVERITIES = {"critical", "high", "medium", "low"}
 CATEGORIES = {"implementation", "evidence", "contract"}
 SPECIALIZED_STATUSES = {"pass", "fail", "blocked", "not_required"}
+SURFACE_MODES = {"implementation-baseline", "worktree", "clean-tree-fallback"}
+BASELINE_STATUSES = {"valid", "missing", "invalid", "legacy-auto"}
 
 
 def _valid_sha256(value: Any) -> bool:
@@ -660,6 +662,97 @@ def validate_review_report(
                 + ", ".join(unknown_required)
             )
         required_set = set(reported_required)
+
+        # Schema-v1 historical reports не содержат durable surface proof и
+        # остаются валидными. Если хотя бы одно новое поле присутствует, набор
+        # обязан быть полным, чтобы partial metadata не выглядела доказательством.
+        surface_proof_fields = {
+            "implementation_baseline",
+            "surface_mode",
+            "changed_paths_hash",
+            "baseline_status",
+            "baseline_reason",
+        }
+        present_surface_proof = surface_proof_fields.intersection(specialized)
+        has_surface_proof = bool(present_surface_proof)
+        if has_surface_proof and present_surface_proof != surface_proof_fields:
+            missing_surface_proof = sorted(surface_proof_fields - present_surface_proof)
+            errors.append(
+                "specialized_reviews surface proof is incomplete: "
+                + ", ".join(missing_surface_proof)
+            )
+
+        implementation_baseline = specialized.get("implementation_baseline")
+        surface_mode = specialized.get("surface_mode")
+        changed_paths_hash = specialized.get("changed_paths_hash")
+        baseline_status = specialized.get("baseline_status")
+        baseline_reason = specialized.get("baseline_reason")
+
+        if has_surface_proof:
+            if implementation_baseline is not None and (
+                not isinstance(implementation_baseline, str)
+                or re.fullmatch(
+                    r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})",
+                    implementation_baseline,
+                )
+                is None
+            ):
+                errors.append(
+                    "specialized_reviews.implementation_baseline must be null or a 40/64-hex Git OID"
+                )
+            if surface_mode not in SURFACE_MODES:
+                errors.append("specialized_reviews.surface_mode is invalid")
+            if not _valid_sha256(changed_paths_hash):
+                errors.append(
+                    "specialized_reviews.changed_paths_hash must be sha256"
+                )
+            if baseline_status not in BASELINE_STATUSES:
+                errors.append("specialized_reviews.baseline_status is invalid")
+            if baseline_reason is not None and (
+                not isinstance(baseline_reason, str) or not baseline_reason.strip()
+            ):
+                errors.append(
+                    "specialized_reviews.baseline_reason must be null or non-empty"
+                )
+
+            if baseline_status == "valid":
+                if implementation_baseline is None:
+                    errors.append(
+                        "valid baseline_status requires implementation_baseline"
+                    )
+                if surface_mode != "implementation-baseline":
+                    errors.append(
+                        "valid baseline_status requires implementation-baseline surface_mode"
+                    )
+                if baseline_reason is not None:
+                    errors.append("valid baseline_status requires null baseline_reason")
+            elif baseline_status == "missing":
+                if implementation_baseline is not None:
+                    errors.append(
+                        "missing baseline_status requires null implementation_baseline"
+                    )
+                if surface_mode != "clean-tree-fallback":
+                    errors.append(
+                        "missing baseline_status requires clean-tree-fallback surface_mode"
+                    )
+                if not isinstance(baseline_reason, str) or not baseline_reason.strip():
+                    errors.append(
+                        "missing baseline_status requires baseline_reason"
+                    )
+            elif baseline_status == "invalid":
+                if implementation_baseline is None:
+                    errors.append(
+                        "invalid baseline_status requires implementation_baseline"
+                    )
+                if surface_mode != "clean-tree-fallback":
+                    errors.append(
+                        "invalid baseline_status requires clean-tree-fallback surface_mode"
+                    )
+                if not isinstance(baseline_reason, str) or not baseline_reason.strip():
+                    errors.append(
+                        "invalid baseline_status requires baseline_reason"
+                    )
+
         for kind in ("security", "tests"):
             status = specialized.get(kind)
             if status not in SPECIALIZED_STATUSES:
@@ -725,11 +818,32 @@ def validate_review_report(
         # Historical reports проверяются по сохранённому gate proof, иначе будущий
         # unrelated diff ретроактивно ломал бы immutable history.
         if require_current_revision:
-            current_gate = required_reviewers(root, step_id)
+            current_gate = (
+                required_reviewers(
+                    root,
+                    step_id,
+                    implementation_baseline=implementation_baseline,
+                )
+                if has_surface_proof
+                else required_reviewers(root, step_id)
+            )
             if gate_basis != current_gate["basis"]:
                 errors.append("specialized_reviews.gate_basis does not match current review gate")
             if required_set != set(current_gate["required"]):
                 errors.append("specialized_reviews.required does not match current review gate")
+            if has_surface_proof:
+                proof_expectations = {
+                    "implementation_baseline": current_gate["implementationBaseline"],
+                    "surface_mode": current_gate["surfaceMode"],
+                    "changed_paths_hash": current_gate["changedPathsHash"],
+                    "baseline_status": current_gate["baselineStatus"],
+                    "baseline_reason": current_gate["baselineReason"],
+                }
+                for key, expected in proof_expectations.items():
+                    if specialized.get(key) != expected:
+                        errors.append(
+                            f"specialized_reviews.{key} does not match current review gate"
+                        )
 
     for required_section in ("Scope checked", "Findings", "Verification observations", "Verdict rationale"):
         if required_section not in document["sections"]:

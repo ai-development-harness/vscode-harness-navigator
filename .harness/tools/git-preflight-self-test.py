@@ -7,6 +7,7 @@ import json
 import subprocess
 import tempfile
 
+import git_action as git_action_module
 from git_action import (
     execute_commit,
     execute_pr_finish,
@@ -179,6 +180,104 @@ def main() -> int:
         assert commit_action["createdBranch"] == blocked.details["requiredBranch"], commit_action
         assert run(project, "git", "branch", "--show-current") == "feature/user-search-api"
         assert not message_file.exists()
+
+        # Regression #89: Git должен получить validated in-memory snapshot, а
+        # не повторно читать mutable commit-message path после validation.
+        write(project, "snapshot-commit.txt", "snapshot\n")
+        run(project, "git", "add", "snapshot-commit.txt")
+        snapshot_message = project / ".harness/local/git/commit-message-snapshot.txt"
+        write(
+            project,
+            ".harness/local/git/commit-message-snapshot.txt",
+            "feat: captured snapshot\n\nContext:\n- validated before mutation\n",
+        )
+        original_action_run = git_action_module._run
+
+        def racing_commit_run(
+            action_root: Path,
+            argv: list[str],
+            *,
+            input_text: str | None = None,
+        ):
+            if argv[:2] == ["git", "commit"]:
+                snapshot_message.write_text(
+                    "fix: raced message\n\nContext:\n- must not be committed\n",
+                    encoding="utf-8",
+                    newline="\n",
+                )
+            return original_action_run(
+                action_root,
+                argv,
+                input_text=input_text,
+            )
+
+        git_action_module._run = racing_commit_run
+        try:
+            snapshot_action = execute_commit(
+                project,
+                commit_type="feat",
+                slug="Snapshot Input",
+                message_file=snapshot_message,
+            )
+        finally:
+            git_action_module._run = original_action_run
+
+        assert snapshot_action["status"] == "SUCCESS", snapshot_action
+        assert snapshot_action["mutation"]["argv"][-2:] == ["-F", "-"], snapshot_action
+        assert run(project, "git", "log", "-1", "--pretty=%s") == "feat: captured snapshot"
+        assert snapshot_message.read_text(encoding="utf-8").startswith("fix: raced message")
+        assert snapshot_action.get("cleanupWarnings"), snapshot_action
+        snapshot_message.unlink()
+
+        # Regression #85: commit input cleanup удаляет только exact validated
+        # lexical transport path и не следует symlink к другому local state.
+        write(project, "symlink-commit.txt", "staged\n")
+        run(project, "git", "add", "symlink-commit.txt")
+
+        failed_message = project / ".harness/local/git/commit-message-invalid.txt"
+        write(
+            project,
+            ".harness/local/git/commit-message-invalid.txt",
+            "not-a-conventional-subject\n",
+        )
+        try:
+            execute_commit(
+                project,
+                commit_type="feat",
+                slug="Failed Message",
+                message_file=failed_message,
+            )
+        except Exception as exc:
+            assert getattr(exc, "code", None) == "COMMIT_MESSAGE_INVALID", exc
+        else:
+            raise AssertionError("invalid commit message was accepted")
+        assert failed_message.is_file(), "failed commit deleted retry message"
+        failed_message.unlink()
+
+        message_target = project / ".harness/local/git/keep-message.txt"
+        write(
+            project,
+            ".harness/local/git/keep-message.txt",
+            "feat: protected target\n\nContext:\n- must survive\n",
+        )
+        message_link = project / ".harness/local/git/commit-message-link.txt"
+        message_link.symlink_to("keep-message.txt")
+        try:
+            execute_commit(
+                project,
+                commit_type="feat",
+                slug="Symlink Guard",
+                message_file=message_link,
+            )
+        except Exception as exc:
+            assert getattr(exc, "code", None) == "COMMIT_MESSAGE_PATH_BLOCKED", exc
+        else:
+            raise AssertionError("commit message symlink was accepted")
+        assert message_link.is_symlink(), message_link
+        assert message_target.is_file(), message_target
+        run(project, "git", "reset", "--hard", "HEAD")
+        message_link.unlink()
+        message_target.unlink()
 
         # Existing protected branch cannot be pushed after bootstrap.
         run(project, "git", "switch", "main")

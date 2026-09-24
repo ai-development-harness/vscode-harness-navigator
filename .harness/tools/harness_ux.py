@@ -70,18 +70,8 @@ def _git_snapshot(root: Path) -> dict[str, Any]:
 
 
 def _resolved_unfinished(root: Path) -> list[dict[str, Any]]:
-    """Read unresolved executions without mutating recovery state."""
-    state = load_status(root)
-    result: list[dict[str, Any]] = []
-    for execution in state.get("executions", []):
-        if execution.get("status") not in {"running", "blocked"}:
-            continue
-        item = resolve_execution(root, execution, mutate=False)
-        item["mode"] = execution.get("mode")
-        item["updatedAt"] = execution.get("updatedAt")
-        result.append(item)
-    result.sort(key=lambda item: item.get("updatedAt") or "", reverse=True)
-    return result
+    """Read only current unresolved invocations without mutating recovery state."""
+    return unresolved_executions(root, mutate=False)
 
 
 def _pr_capability(root: Path) -> dict[str, Any]:

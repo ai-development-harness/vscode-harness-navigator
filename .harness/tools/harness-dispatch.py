@@ -25,6 +25,23 @@ def emit(value: object, *, pretty: bool) -> None:
         print(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
 
 
+def _dispatch(root: Path, args: argparse.Namespace) -> dict:
+    if args.action == "start":
+        return start_dispatch(root, args.command)
+    if args.action == "complete":
+        details = json.loads(args.details_json) if args.details_json else None
+        if details is not None and not isinstance(details, dict):
+            raise ValueError("--details-json must decode to a JSON object")
+        return complete_dispatch(
+            root,
+            args.root_command,
+            args.command,
+            args.result,
+            details=details,
+        )
+    return resume_dispatch(root, args.root_command)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Dispatch Harness commands through deterministic CTS/execution routing."
@@ -58,21 +75,18 @@ def main() -> int:
     args = parser.parse_args()
     root = repo_root()
 
-    if args.action == "start":
-        value = start_dispatch(root, args.command)
-    elif args.action == "complete":
-        details = json.loads(args.details_json) if args.details_json else None
-        if details is not None and not isinstance(details, dict):
-            parser.error("--details-json must decode to a JSON object")
-        value = complete_dispatch(
-            root,
-            args.root_command,
-            args.command,
-            args.result,
-            details=details,
-        )
-    elif args.action == "resume":
-        value = resume_dispatch(root, args.root_command)
+    if args.action in {"start", "complete", "resume"}:
+        # Единый fail-closed контракт: любой отказ — BLOCKED JSON, а не
+        # traceback, который agent мог бы неверно интерпретировать (#117).
+        try:
+            value = _dispatch(root, args)
+        except (OSError, RuntimeError, ValueError) as exc:
+            value = {
+                "schemaVersion": 1,
+                "status": "BLOCKED",
+                "reasonCode": getattr(exc, "code", "DISPATCH_BLOCKED"),
+                "message": str(exc),
+            }
     else:
         try:
             value = {

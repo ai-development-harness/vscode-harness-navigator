@@ -40,122 +40,287 @@ TEST_SURFACE_RE = re.compile(
 
 # ---------------------------------------------------------------------------
 # Changed-surface collector.
-# При dirty tree объединяет staged + unstaged + untracked paths.
-# При clean tree использует последний commit только как diagnostic fallback и
-# помечает surfaceMode=clean-tree-fallback, потому что exact STEP diff потерян.
+#
+# Canonical REVIEW может получить explicit durable implementation baseline из
+# execution layer. Тогда surface = baseline..HEAD + current worktree. Без proof
+# сохраняется legacy/diagnostic fallback, но он не выдаётся за exact STEP diff.
 # ---------------------------------------------------------------------------
+_AUTO_BASELINE = object()
+
+
+# Пустое Git tree: база сравнения для repository без единого commit.
+_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+_GIT_TIMEOUT_SECONDS = 60
+
+
+def _git_stdout_z(root: Path, *args: str) -> bytes:
+    """Выполнить Git read-only query fail-closed.
+
+    Ошибка Git не является «пустым diff»: пустая surface тихо отключила бы
+    обязательных security/tests reviewers (#117).
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-c", "core.quotepath=false", *args],
+            cwd=root,
+            text=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(f"cannot collect review surface: git {args[0]} failed: {exc}") from exc
+    if proc.returncode != 0:
+        message = proc.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"cannot collect review surface: git {' '.join(args[:2])}: {message}")
+    return proc.stdout
+
+
 def _git_paths_z(root: Path, *args: str) -> list[str]:
     """Прочитать Git path list без quoting/line splitting.
 
     Git path может содержать Unicode, пробелы, tab и даже newline. Поэтому
     line-oriented stdout (`splitlines()`/`strip()`) не является корректным
     transport. Все callers обязаны запрашивать `-z`, а здесь stdout остаётся
-    bytes до NUL-splitting. `core.quotepath=false` — defense-in-depth для
-    читаемого/raw path output; `-z` остаётся основным framing contract.
-
-    Invalid UTF-8 path fail-closed через UnicodeDecodeError: Harness не должен
-    классифицировать и fingerprint-ить путь, который не может однозначно
-    представить в своём UTF-8 document/JSON contract.
+    bytes до NUL-splitting.
     """
-    proc = subprocess.run(
-        ["git", "-c", "core.quotepath=false", *args],
-        cwd=root,
-        text=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    if proc.returncode != 0:
-        return []
-    return [
-        item.decode("utf-8")
-        for item in proc.stdout.split(b"\0")
-        if item
-    ]
-
-
-def _git_changed_paths(root: Path) -> tuple[list[str], str]:
-    paths: set[str] = set()
-    for args in (
-        ("diff", "--name-only", "-z", "HEAD", "--"),
-        ("diff", "--cached", "--name-only", "-z", "--"),
-    ):
-        try:
-            paths.update(_git_paths_z(root, *args))
-        except OSError:
-            continue
-
     try:
-        paths.update(
-            _git_paths_z(
-                root,
-                "ls-files",
-                "--others",
-                "--exclude-standard",
-                "-z",
-                "--",
-            )
+        return [
+            item.decode("utf-8")
+            for item in _git_stdout_z(root, *args).split(b"\0")
+            if item
+        ]
+    except UnicodeDecodeError as exc:
+        raise ValueError("review surface contains non-UTF-8 path") from exc
+
+
+def _git_name_status_paths_z(root: Path, *args: str) -> list[str]:
+    """Вернуть обе стороны rename/copy из Git --name-status -z.
+
+    --name-only теряет source path rename/copy и может скрыть security/test
+    surface при переносе sensitive файла в нейтральный destination. Parser
+    fail-closed: malformed stream не интерпретируется как безопасно пустой diff.
+    """
+    fields = [item for item in _git_stdout_z(root, *args).split(b"\0") if item]
+    paths: list[str] = []
+    index = 0
+    try:
+        while index < len(fields):
+            status = fields[index].decode("ascii", errors="strict")
+            index += 1
+            code = status[:1]
+            if code in {"R", "C"}:
+                source = fields[index].decode("utf-8")
+                destination = fields[index + 1].decode("utf-8")
+                index += 2
+                paths.extend([source, destination])
+            else:
+                path = fields[index].decode("utf-8")
+                index += 1
+                paths.append(path)
+    except (IndexError, UnicodeDecodeError):
+        # Unexpected Git transport must not silently shrink review surface.
+        raise ValueError("malformed git --name-status -z output")
+    return paths
+
+
+def _git_ok(root: Path, *args: str) -> bool:
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
         )
-    except OSError:
-        pass
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
 
-    # STEP REVIEW обычно идёт до Git publication. Если worktree clean, exact
-    # implementation baseline уже не доказуем из одного HEAD: последний commit
-    # — только diagnostic fallback, а не полный STEP surface.
-    surface_mode = "worktree"
-    if not paths:
-        surface_mode = "clean-tree-fallback"
-        try:
-            paths.update(
-                _git_paths_z(
-                    root,
-                    "diff-tree",
-                    "--no-commit-id",
-                    "--name-only",
-                    "-r",
-                    "-z",
-                    "HEAD",
-                    "--",
-                )
-            )
-        except OSError:
-            pass
 
+def _included_path(root: Path, rel: str) -> bool:
     try:
-        review_root = review_directory(root).relative_to(root.resolve()).as_posix().rstrip("/")
+        review_root = (
+            review_directory(root)
+            .relative_to(root.resolve())
+            .as_posix()
+            .rstrip("/")
+        )
     except ValueError:
-        # Config layer уже должен запрещать escape. Если invariant нарушен,
-        # ничего не скрываем из factual changed surface.
         review_root = "__invalid_review_root__"
 
-    def included(rel: str) -> bool:
-        normalized = rel.replace("\\", "/")
-        while normalized.startswith("./"):
-            normalized = normalized[2:]
-        if (
-            not normalized
-            or normalized.startswith("/")
-            or any(part == ".." for part in normalized.split("/"))
-        ):
-            # Неожиданный Git path нельзя безопасно классифицировать как ignored.
-            return True
+    normalized = rel.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or any(part == ".." for part in normalized.split("/"))
+    ):
+        # Неожиданный Git path нельзя безопасно классифицировать как ignored.
+        return True
 
-        # Git path identity лексическая. Symlink из product path в .harness/local
-        # остаётся product change и не должен исчезать из review surface.
-        if normalized == ".harness/local" or normalized.startswith(".harness/local/"):
-            return False
+    # Git path identity лексическая. Symlink из product path в .harness/local
+    # остаётся product change и не должен исчезать из review surface.
+    if normalized == ".harness/local" or normalized.startswith(".harness/local/"):
+        return False
 
-        # Configurable reviewDirectory не является blanket ignore-root.
-        # Исключаем только lexical report-shaped artifacts, не symlink targets.
-        if normalized == review_root:
-            review_rel = ""
-        elif normalized.startswith(review_root + "/"):
-            review_rel = normalized[len(review_root) + 1 :]
-        else:
-            return True
-        return re.fullmatch(r"STEP-\d{3,}/REVIEW-.+\.md", review_rel) is None
+    # Configurable reviewDirectory не является blanket ignore-root.
+    # Исключаем только report-shaped artifacts, не symlink targets.
+    if normalized == review_root:
+        review_rel = ""
+    elif normalized.startswith(review_root + "/"):
+        review_rel = normalized[len(review_root) + 1 :]
+    else:
+        return True
+    return re.fullmatch(r"STEP-\d{3,}/REVIEW-.+\.md", review_rel) is None
 
-    return sorted(path for path in paths if included(path)), surface_mode
+
+def _has_head(root: Path) -> bool:
+    return _git_ok(root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+
+
+def _worktree_paths(root: Path) -> set[str]:
+    # Без commits всё содержимое index/worktree — новая surface: сравниваем с
+    # пустым tree, а не получаем ошибку `git diff HEAD` и пустой список.
+    base = "HEAD" if _has_head(root) else _EMPTY_TREE
+    paths: set[str] = set()
+    paths.update(
+        _git_name_status_paths_z(
+            root, "diff", "--name-status", "-z", "-M", "-C", "--find-copies-harder", base, "--"
+        )
+    )
+    paths.update(
+        _git_name_status_paths_z(
+            root, "diff", "--cached", "--name-status", "-z", "-M", "-C", "--find-copies-harder", base, "--"
+        )
+    )
+    paths.update(
+        _git_paths_z(
+            root,
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+        )
+    )
+    return {path for path in paths if _included_path(root, path)}
+
+
+def _diagnostic_last_commit_paths(root: Path) -> set[str]:
+    if not _has_head(root):
+        return set()
+    paths = _git_paths_z(
+        root,
+        "diff-tree",
+        "--no-commit-id",
+        "--root",
+        "--name-only",
+        "-r",
+        "-z",
+        "HEAD",
+        "--",
+    )
+    return {path for path in paths if _included_path(root, path)}
+
+
+def _review_surface(
+    root: Path,
+    *,
+    implementation_baseline: str | None | object = _AUTO_BASELINE,
+) -> dict[str, Any]:
+    worktree = _worktree_paths(root)
+
+    # Legacy direct callers сохраняют прежнее поведение: dirty tree считается
+    # worktree surface, clean tree использует последний commit diagnostic-only.
+    if implementation_baseline is _AUTO_BASELINE:
+        if worktree:
+            paths = sorted(worktree)
+            return {
+                "changedPaths": paths,
+                "surfaceMode": "worktree",
+                "implementationBaseline": None,
+                "baselineStatus": "legacy-auto",
+                "baselineReason": None,
+                "changedPathsHash": stable_hash({"paths": paths}),
+            }
+        paths = sorted(_diagnostic_last_commit_paths(root))
+        return {
+            "changedPaths": paths,
+            "surfaceMode": "clean-tree-fallback",
+            "implementationBaseline": None,
+            "baselineStatus": "legacy-auto",
+            "baselineReason": "clean tree has no exact implementation baseline",
+            "changedPathsHash": stable_hash({"paths": paths}),
+        }
+
+    baseline = implementation_baseline if isinstance(implementation_baseline, str) else None
+    reason: str | None = None
+    if baseline is None:
+        reason = "implementation baseline is missing"
+    elif not _git_ok(root, "rev-parse", "--verify", f"{baseline}^{{commit}}"):
+        reason = "implementation baseline commit is unavailable"
+    elif not _git_ok(root, "rev-parse", "--verify", "HEAD^{commit}"):
+        reason = "current HEAD commit is unavailable"
+    elif not _git_ok(root, "merge-base", "--is-ancestor", baseline, "HEAD"):
+        reason = "implementation baseline is not an ancestor of HEAD"
+
+    if reason is None:
+        committed = {
+            path
+            for path in _git_name_status_paths_z(
+                root,
+                "diff",
+                "--name-status",
+                "-z",
+                "-M",
+                "-C",
+                "--find-copies-harder",
+                f"{baseline}..HEAD",
+                "--",
+            )
+            if _included_path(root, path)
+        }
+        paths = sorted(committed | worktree)
+        return {
+            "changedPaths": paths,
+            "surfaceMode": "implementation-baseline",
+            "implementationBaseline": baseline,
+            "baselineStatus": "valid",
+            "baselineReason": None,
+            "changedPathsHash": stable_hash({"paths": paths}),
+        }
+
+    # Missing/invalid baseline нельзя заменять только текущим dirty diff:
+    # committed часть STEP могла существовать раньше. Оставляем видимые
+    # worktree paths + последний commit как diagnostics и требуем fail-closed
+    # specialized review.
+    paths = sorted(worktree | _diagnostic_last_commit_paths(root))
+    return {
+        "changedPaths": paths,
+        "surfaceMode": "clean-tree-fallback",
+        "implementationBaseline": baseline,
+        "baselineStatus": "missing" if baseline is None else "invalid",
+        "baselineReason": reason,
+        "changedPathsHash": stable_hash({"paths": paths}),
+    }
+
+
+def _git_changed_paths(
+    root: Path,
+    *,
+    implementation_baseline: str | None | object = _AUTO_BASELINE,
+) -> tuple[list[str], str]:
+    """Compatibility wrapper для existing tests/tooling."""
+    surface = _review_surface(
+        root,
+        implementation_baseline=implementation_baseline,
+    )
+    return list(surface["changedPaths"]), str(surface["surfaceMode"])
+
 
 
 # ---------------------------------------------------------------------------
@@ -167,26 +332,39 @@ def _git_changed_paths(root: Path) -> tuple[list[str], str]:
 # 4. добавить requirements из risk flags/type/path heuristics;
 # 5. fingerprint-нуть входы в stable basis.
 # ---------------------------------------------------------------------------
-def required_reviewers(root: Path, step_id: str) -> dict[str, Any]:
+def required_reviewers(
+    root: Path,
+    step_id: str,
+    *,
+    implementation_baseline: str | None | object = _AUTO_BASELINE,
+) -> dict[str, Any]:
     task = read_task(root, step_id)
     meta = task["frontmatter"]
     flags = set(meta.get("risk_flags", [])) if isinstance(meta.get("risk_flags"), list) else set()
     step_type = meta.get("type")
-    paths, surface_mode = _git_changed_paths(root)
+    surface = _review_surface(
+        root,
+        implementation_baseline=implementation_baseline,
+    )
+    paths = list(surface["changedPaths"])
+    surface_mode = str(surface["surfaceMode"])
 
     required: set[str] = set()
     reasons: dict[str, list[str]] = {"security": [], "tests": []}
     security_policy = review_policy(root, "security")
     tests_policy = review_policy(root, "tests")
 
-    # Чистый post-commit review — исключительный путь вне canonical
-    # REVIEW-before-GIT workflow. Без durable implementation baseline нельзя
-    # доказать, что последний commit содержит весь STEP diff, поэтому auto
-    # policy fail-closed требует обе specialized проверки.
+    # Fallback означает, что полный STEP surface не доказан. Не важно, clean
+    # сейчас worktree или dirty: без валидного baseline committed часть могла
+    # потеряться, поэтому policy остаётся fail-closed.
     if surface_mode == "clean-tree-fallback":
         required.update({"security", "tests"})
-        reasons["security"].append("clean tree has no exact implementation baseline")
-        reasons["tests"].append("clean tree has no exact implementation baseline")
+        fallback_reason = str(
+            surface.get("baselineReason")
+            or "exact implementation baseline is unavailable"
+        )
+        reasons["security"].append(fallback_reason)
+        reasons["tests"].append(fallback_reason)
 
     if security_policy == "always":
         required.add("security")
@@ -213,21 +391,29 @@ def required_reviewers(root: Path, step_id: str) -> dict[str, Any]:
             reasons["tests"].append("code/test surface changed")
 
     basis_payload = {
-        "schema": 1,
+        "schema": 2,
         "stepId": step_id,
         "stepType": step_type,
         "riskFlags": sorted(flags),
         "securityPolicy": security_policy,
         "testsPolicy": tests_policy,
         "changedPaths": paths,
+        "changedPathsHash": surface["changedPathsHash"],
         "surfaceMode": surface_mode,
+        "implementationBaseline": surface["implementationBaseline"],
+        "baselineStatus": surface["baselineStatus"],
+        "baselineReason": surface["baselineReason"],
     }
     return {
         "stepId": step_id,
         "required": sorted(required),
         "reasons": reasons,
         "changedPaths": paths,
+        "changedPathsHash": surface["changedPathsHash"],
         "surfaceMode": surface_mode,
+        "implementationBaseline": surface["implementationBaseline"],
+        "baselineStatus": surface["baselineStatus"],
+        "baselineReason": surface["baselineReason"],
         "basis": stable_hash(basis_payload),
     }
 

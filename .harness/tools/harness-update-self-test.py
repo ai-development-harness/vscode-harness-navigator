@@ -7,6 +7,7 @@ import json
 import subprocess
 import tempfile
 
+from execution_status import load_status
 from harness_update import UpdateError, adopt_legacy, apply_update, check_update
 
 
@@ -94,6 +95,76 @@ def agents(before: str, project: str, after: str) -> str:
 
 def validator() -> str:
     return '''#!/usr/bin/env python3\nimport sys\nprint("HARNESS VALIDATION: PASS")\nraise SystemExit(0)\n'''
+
+
+def legacy_execution_state() -> dict:
+    """Schema-v1 fixture: update engine не должен трогать local runtime state."""
+    timestamp = "2026-09-24T00:00:00+00:00"
+    baseline = {
+        "stepId": "STEP-001",
+        "gitHead": "a" * 40,
+        "capturedAt": timestamp,
+        "sourceExecutionId": "exec-update-implement",
+    }
+
+    def record(
+        execution_id: str,
+        root_command: str,
+        *,
+        status: str,
+        current_status: str,
+        result: str | None,
+        implementation_baseline: dict | None = None,
+    ) -> dict:
+        value = {
+            "executionId": execution_id,
+            "mode": "single",
+            "requestedCommand": root_command,
+            "rootCommand": root_command,
+            "sequence": [root_command],
+            "currentIndex": 0,
+            "status": status,
+            "current": {
+                "command": root_command,
+                "status": current_status,
+                "result": result,
+                "attempt": 1,
+                "startedAt": timestamp,
+                "completedAt": (
+                    None if current_status == "running" else timestamp
+                ),
+                "context": {},
+            },
+            "notExecuted": [],
+            "fixReviewCycles": 0,
+            "startedAt": timestamp,
+            "completedAt": None if status == "running" else timestamp,
+            "updatedAt": timestamp,
+        }
+        if implementation_baseline is not None:
+            value["implementationBaseline"] = implementation_baseline
+        return value
+
+    return {
+        "schemaVersion": 1,
+        "executions": [
+            record(
+                "exec-update-implement",
+                "STEP IMPLEMENT STEP-001",
+                status="complete",
+                current_status="complete",
+                result="SUCCESS",
+                implementation_baseline=baseline,
+            ),
+            record(
+                "exec-update-running",
+                "HARNESS CONFIG",
+                status="running",
+                current_status="running",
+                result=None,
+            ),
+        ],
+    }
 
 
 def source_repo(root: Path) -> tuple[Path, dict[str, str], str, str]:
@@ -478,8 +549,24 @@ def main() -> int:
         else:
             raise AssertionError("current updater accepted target release below v0.6.0")
 
+        # Regression #85: HARNESS UPDATE владеет control plane, но не local
+        # runtime schema. Старый v1 state должен остаться byte-for-byte прежним
+        # на CHECK/APPLY; migration выполняет только новый execution layer после
+        # simulated reload.
+        execution_state_path = (
+            project / ".harness/local/execution/execution-status.json"
+        )
+        write(
+            project,
+            ".harness/local/execution/execution-status.json",
+            json.dumps(legacy_execution_state(), ensure_ascii=False, indent=2)
+            + "\n",
+        )
+        legacy_execution_bytes = execution_state_path.read_bytes()
+
         checked = check_update(project, target="v1.1.0", source_url=str(source))
         assert checked["status"] == "PASS", checked
+        assert execution_state_path.read_bytes() == legacy_execution_bytes
         assert checked["route"] == ["v1.0.0", "v1.1.0"], checked
         assert checked["checkedThrough"] == "v1.1.0", checked
         changed = {item["path"] for item in checked["hops"][0]["changes"]}
@@ -488,6 +575,21 @@ def main() -> int:
 
         applied = apply_update(project, target="v1.1.0", source_url=str(source))
         assert applied["status"] == "UPDATED", applied
+        assert execution_state_path.read_bytes() == legacy_execution_bytes
+
+        # Simulated runtime reload: только теперь current execution layer читает
+        # legacy bytes и выполняет validated atomic v1 -> v2 migration.
+        migrated_execution = load_status(project)
+        assert migrated_execution["schemaVersion"] == 2, migrated_execution
+        assert [
+            item["executionId"] for item in migrated_execution["executions"]
+        ] == ["exec-update-running"], migrated_execution
+        assert (
+            migrated_execution["stepRecovery"]["STEP-001"][
+                "implementationBaseline"
+            ]["gitHead"]
+            == "a" * 40
+        ), migrated_execution
         assert (project / ".agents/skills/custom/SKILL.md").read_text() == "project custom skill\n"
         assert (project / ".agents/skills/core/SKILL.md").read_text() == "core v2\n"
         assert (project / ".agents/skills/new-core/SKILL.md").read_text() == "new core v1\n"

@@ -13,6 +13,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from pathlib import Path
+import hashlib
 from typing import Any
 
 from document_contract import (
@@ -21,7 +22,12 @@ from document_contract import (
     markdown_headings,
     render_document,
 )
-from execution_status import stamp_plan
+from execution_status import (
+    implementation_baseline_for_step,
+    record_review_report,
+    review_expectation_for_step,
+    stamp_plan,
+)
 from harness_config import planning_review_directory, review_directory
 from planning_contract import (
     plan_content_hash,
@@ -404,6 +410,11 @@ def _specialized_meta(
     meta: dict[str, Any] = {
         "gate_basis": gate["basis"],
         "required": sorted(required),
+        "implementation_baseline": gate.get("implementationBaseline"),
+        "surface_mode": gate.get("surfaceMode"),
+        "changed_paths_hash": gate.get("changedPathsHash"),
+        "baseline_status": gate.get("baselineStatus"),
+        "baseline_reason": gate.get("baselineReason"),
     }
     for kind in ("security", "tests"):
         if kind in supplied:
@@ -530,10 +541,46 @@ def _complete_step_after_pass(root: Path, step_id: str) -> dict[str, Any]:
 def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
     """Create one validated immutable implementation review for exact revision."""
     data = _step_review_payload(payload)
-    gate = required_reviewers(root, step_id)
+    baseline = implementation_baseline_for_step(root, step_id)
+    baseline_sha = (
+        baseline.get("gitHead")
+        if isinstance(baseline, dict)
+        else None
+    )
+    gate = required_reviewers(
+        root,
+        step_id,
+        implementation_baseline=baseline_sha,
+    )
+    revision = repository_revision(root)
+    try:
+        expectation = review_expectation_for_step(root, step_id)
+    except ValueError as exc:
+        raise SemanticArtifactError(
+            "STEP REVIEW expectation is ambiguous or missing: " + str(exc)
+        ) from exc
+
+    # Verdict принимается только внутри active STEP REVIEW, чья expectation
+    # зафиксирована dispatcher-ом до semantic handoff. Без неё writer не может
+    # доказать, что reviewer видел именно текущую revision (#112).
+    if expectation is None:
+        raise SemanticArtifactError(
+            f"STEP REVIEW verdict requires an active STEP REVIEW {step_id} "
+            "execution with stamped expectation; start it through harness-dispatch.py"
+        )
+    expected_revision = expectation.get("repositoryRevision")
+    expected_gate_basis = expectation.get("gateBasis")
+    if revision != expected_revision:
+        raise SemanticArtifactError(
+            "STEP REVIEW repository revision changed after semantic handoff"
+        )
+    if gate["basis"] != expected_gate_basis:
+        raise SemanticArtifactError(
+            "STEP REVIEW gate basis changed after semantic handoff"
+        )
+
     specialized = _specialized_meta(gate, data["specializedReviews"])
     _validate_specialized_verdict(data["verdict"], specialized)
-    revision = repository_revision(root)
     directory = review_directory(root) / step_id
 
     def content_factory(created_at: str) -> str:
@@ -588,9 +635,25 @@ def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
         raise SemanticArtifactError(
             "generated STEP review failed canonical validation: " + "; ".join(errors)
         )
+    report_rel = path.relative_to(root).as_posix()
+    try:
+        provenance_recorded = record_review_report(
+            root,
+            step_id,
+            {
+                "path": report_rel,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "verdict": data["verdict"],
+                "reviewedRevision": revision,
+                "gateBasis": gate["basis"],
+            },
+        )
+    except (OSError, ValueError):
+        provenance_recorded = False
     result = {
         "schemaVersion": 1,
         "status": data["verdict"].upper(),
+        "provenanceRecorded": provenance_recorded,
         "completionResult": data["verdict"].upper(),
         "stepId": step_id,
         "verdict": data["verdict"],
@@ -599,6 +662,9 @@ def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
         "specializedReviewGate": {
             "basis": gate["basis"],
             "required": gate["required"],
+            "surfaceMode": gate["surfaceMode"],
+            "implementationBaseline": gate["implementationBaseline"],
+            "changedPathsHash": gate["changedPathsHash"],
         },
     }
     if data["verdict"] == "pass":

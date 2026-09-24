@@ -32,7 +32,11 @@ from execution_status import (
     complete_command,
     git_commit_completion_proven,
     load_status,
+    resolve_execution,
+    normalize_single_command,
     resolve_root,
+    running_command_for,
+    stamp_review_expectation,
     start_execution,
 )
 from git_action import GitActionError, execute_pr_finish, execute_push, execute_sync
@@ -108,6 +112,24 @@ def _execution_identity(execution: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _block_recording_error(
+    root: Path,
+    root_command: str,
+    *,
+    command: str | None,
+) -> str | None:
+    """Зафиксировать blocker; вернуть ошибку записи state вместо её сокрытия.
+
+    Если blocker не удалось сохранить, execution остаётся running: caller
+    обязан сообщить это в BLOCKED ответе (`stateWriteError`), а не молчать (#117).
+    """
+    try:
+        block_execution(root, root_command, command=command)
+    except (OSError, ValueError) as exc:
+        return str(exc)
+    return None
+
+
 def _active_execution(root: Path, root_command: str) -> dict[str, Any] | None:
     """Найти active execution без изменения attempt/resolver state."""
     status = load_status(root)
@@ -118,6 +140,41 @@ def _active_execution(root: Path, root_command: str) -> dict[str, Any] | None:
         ):
             return execution
     return None
+
+
+def _step_run_completion_gate(
+    root: Path,
+    root_command: str,
+    command: str,
+    result: str,
+) -> dict[str, Any] | None:
+    """STEP RUN SUCCESS допустим только с type-specific completion proof.
+
+    Non-coding types (research/adr/audit/…) завершаются semantic handoff-ом;
+    без этой проверки их RUN закрывался бы одним словом модели (#113).
+    """
+    if result != "SUCCESS":
+        return None
+    route = route_command(root, command)
+    if route.get("domain") != "STEP" or route.get("operation") != "RUN":
+        return None
+    step_id = route.get("target")
+    if not isinstance(step_id, str) or not step_id:
+        return None
+    try:
+        proof = step_completion_proof(root, step_id)
+    except (OSError, ValueError) as exc:
+        proof = {"complete": False, "reasons": [str(exc)]}
+    if proof.get("complete") is True:
+        return None
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "status": "BLOCKED",
+        "rootCommand": root_command,
+        "command": command,
+        "reasonCode": "STEP_COMPLETION_PROOF_FAILED",
+        "details": {"reasons": proof.get("reasons", [])},
+    }
 
 
 def _verification_before_completion(
@@ -132,7 +189,9 @@ def _verification_before_completion(
     Первый элемент tuple — early dispatcher response. None означает, что
     completion разрешён. Второй — compact details для durable execution state.
     """
-    if result != "SUCCESS":
+    # PASS для IMPLEMENT/FIX не имеет CTS edge, но всё равно завершает команду;
+    # он не должен становиться обходом Verification (#113).
+    if result not in {"SUCCESS", "PASS"}:
         return None, details
 
     route = route_command(root, command)
@@ -201,16 +260,14 @@ def _verification_before_completion(
         handoff["verification"] = verification
         return handoff, None
 
-    try:
-        block_execution(root, root_command, command=command)
-    except (OSError, ValueError):
-        pass
+    state_error = _block_recording_error(root, root_command, command=command)
     return (
         {
             "schemaVersion": SCHEMA_VERSION,
             "status": "BLOCKED",
             "rootCommand": root_command,
             "command": command,
+            **({"stateWriteError": state_error} if state_error else {}),
             "reasonCode": verification.get(
                 "reasonCode",
                 "VERIFICATION_BLOCKED",
@@ -251,12 +308,48 @@ def _semantic_handoff(
                 "CONTEXT_TARGET_MISSING",
                 f"{command}: contextPhase requires STEP target",
             )
-        context = build_step_context(root, target, str(context_phase))
+        baseline = execution.get("implementationBaseline")
+        context = build_step_context(
+            root,
+            target,
+            str(context_phase),
+            implementation_baseline=(
+                baseline if isinstance(baseline, dict) else None
+            ),
+        )
         if context.get("status") != "PASS":
             raise DispatchError(
                 "STEP_CONTEXT_BLOCKED",
                 f"{command}: deterministic STEP context is not PASS",
             )
+
+        # STEP REVIEW semantic reasoning must be bound to the exact deterministic
+        # revision/gate that was handed to the reviewer. Persist this proof in
+        # execution state before returning the handoff; the model never supplies
+        # or rewrites it in semantic payload.
+        if str(context_phase) == "review":
+            deterministic = context.get("deterministic")
+            if not isinstance(deterministic, dict):
+                raise DispatchError(
+                    "REVIEW_EXPECTATION_INVALID",
+                    f"{command}: deterministic review context is missing",
+                )
+            revision = deterministic.get("repositoryRevision")
+            gate = deterministic.get("specializedReviewGate")
+            gate_basis = gate.get("basis") if isinstance(gate, dict) else None
+            try:
+                stamp_review_expectation(
+                    root,
+                    str(execution.get("executionId") or ""),
+                    target,
+                    revision if isinstance(revision, dict) else {},
+                    str(gate_basis or ""),
+                )
+            except ValueError as exc:
+                raise DispatchError(
+                    "REVIEW_EXPECTATION_INVALID",
+                    f"{command}: {exc}",
+                ) from exc
 
     result: dict[str, Any] = {
         "schemaVersion": SCHEMA_VERSION,
@@ -328,7 +421,7 @@ def _finish_machine_result(
         str(status),
         details=_machine_completion_details(handler=handler, result=result),
     )
-    resolved = resolve_root(root, str(execution["rootCommand"]))
+    resolved = resolve_execution(root, completed)
 
     if resolved.get("status") == "NEXT" and resolved.get("command"):
         next_command = str(resolved["command"])
@@ -545,7 +638,10 @@ def _deterministic_handler(
                 "kind": "reload-and-repeat",
                 "command": route["command"],
             }
-        elif engine_status == "UPDATED":
+        elif engine_status == "UPDATED" or bool(raw.get("repositoryMutated")):
+            # NO_UPDATE может всё же завершить deferred pre-INIT project-owned
+            # template alignment после обязательного reload. Release ref при
+            # этом уже current, но repository diff требует обычный Git gate.
             result["nextAction"] = {
                 "kind": "command",
                 "command": "GIT CHECK",
@@ -698,19 +794,17 @@ def start_dispatch(root: Path, raw_command: str) -> dict[str, Any]:
     try:
         return _dispatch_running(root, execution, command)
     except (DispatchError, OSError, ValueError) as exc:
-        try:
-            block_execution(
-                root,
-                str(execution["rootCommand"]),
-                command=command,
-            )
-        except (OSError, ValueError):
-            pass
+        state_error = _block_recording_error(
+            root,
+            str(execution["rootCommand"]),
+            command=command,
+        )
         return {
             "schemaVersion": SCHEMA_VERSION,
             "status": "BLOCKED",
             **_execution_identity(execution),
             "command": command,
+            **({"stateWriteError": state_error} if state_error else {}),
             "reasonCode": getattr(exc, "code", "DISPATCH_BLOCKED"),
             "message": str(exc),
         }
@@ -761,6 +855,30 @@ def complete_dispatch(
             }
 
     try:
+        # Completion принимается только для текущей running команды. Проверка
+        # идёт до Verification: чужая команда не должна запускать commands и
+        # переписывать Evidence другого STEP (#113).
+        normalized_command = normalize_single_command(root, command)["normalized"]
+        running = running_command_for(root, root_command)
+        if running is None:
+            # Нет running команды: complete_command гарантированно отклонит
+            # completion с точной причиной (already complete/blocked/not found).
+            complete_command(root, root_command, command, result, details=details)
+            raise ValueError("execution has no running command")
+        if running != normalized_command:
+            return {
+                "schemaVersion": SCHEMA_VERSION,
+                "status": "BLOCKED",
+                "rootCommand": root_command,
+                "command": command,
+                "reasonCode": "COMMAND_NOT_CURRENT",
+                "message": f"current running command is {running!r}, not {normalized_command!r}",
+            }
+
+        early = _step_run_completion_gate(root, root_command, command, result)
+        if early is not None:
+            return early
+
         early, completion_details = _verification_before_completion(
             root,
             root_command,
@@ -778,7 +896,7 @@ def complete_dispatch(
             result,
             details=completion_details,
         )
-        resolved = resolve_root(root, root_command)
+        resolved = resolve_execution(root, execution)
     except (OSError, ValueError) as exc:
         return {
             "schemaVersion": SCHEMA_VERSION,
@@ -795,11 +913,9 @@ def complete_dispatch(
             execution = begin_command(root, root_command, next_command)
             return _dispatch_running(root, execution, next_command)
         except (DispatchError, OSError, ValueError) as exc:
-            try:
-                block_execution(root, root_command, command=next_command)
-            except (OSError, ValueError):
-                pass
+            state_error = _block_recording_error(root, root_command, command=next_command)
             return {
+                **({"stateWriteError": state_error} if state_error else {}),
                 "schemaVersion": SCHEMA_VERSION,
                 "status": "BLOCKED",
                 **_execution_identity(execution),
@@ -817,11 +933,9 @@ def complete_dispatch(
             execution = begin_command(root, root_command, root_command)
             return _dispatch_running(root, execution, root_command)
         except (DispatchError, OSError, ValueError) as exc:
-            try:
-                block_execution(root, root_command, command=root_command)
-            except (OSError, ValueError):
-                pass
+            state_error = _block_recording_error(root, root_command, command=root_command)
             return {
+                **({"stateWriteError": state_error} if state_error else {}),
                 "schemaVersion": SCHEMA_VERSION,
                 "status": "BLOCKED",
                 **_execution_identity(execution),
@@ -859,11 +973,9 @@ def resume_dispatch(
         execution = begin_command(root, root_command, command)
         return _dispatch_running(root, execution, command)
     except (DispatchError, OSError, ValueError) as exc:
-        try:
-            block_execution(root, root_command, command=command)
-        except (OSError, ValueError):
-            pass
+        state_error = _block_recording_error(root, root_command, command=command)
         return {
+            **({"stateWriteError": state_error} if state_error else {}),
             "schemaVersion": SCHEMA_VERSION,
             "status": "BLOCKED",
             "rootCommand": root_command,

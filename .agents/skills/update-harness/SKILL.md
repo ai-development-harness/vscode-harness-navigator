@@ -45,10 +45,11 @@ Engine читает routing metadata из configured `source.update_manifest` н
    - unknown/project-owned paths не меняются;
    - untracked non-ignored collision блокирует update;
    - binary/non-UTF-8 managed path блокирует update;
-   - lock продвигается только после PASS target validator.
-4. Если результат `UPDATER_RELOAD_REQUIRED`, остановись. Не продолжай route текущим runtime. После reload повтори ту же UPDATE-команду: новый lock задаст текущую точку маршрута.
-5. Если результат `UPDATED`, покажи report/diff и follow-up.
-6. Если target protocol оставил project schema migration pending, до `GIT COMMIT` выполни `PROJECT RECONCILE`.
+   - lock продвигается только после PASS target validator;
+   - hop журналируется: failure или прерывание откатываются byte-for-byte.
+4. Если результат `UPDATER_RELOAD_REQUIRED`, остановись. Не продолжай route текущим runtime. После reload повтори ту же UPDATE-команду: новый lock задаст текущую точку маршрута. До INIT повторный APPLY может завершить только доказанный old-release template alignment; custom template drift не перезаписывается.
+5. Если результат `UPDATED`, покажи report/diff и follow-up. Если `NO_UPDATE` содержит `repositoryMutated=true`, это deferred pre-INIT alignment: follow-up обязан идти через `GIT CHECK`, несмотря на отсутствие нового release hop.
+6. Если target protocol оставил project schema migration pending уже после INIT, до `GIT COMMIT` выполни `PROJECT RECONCILE`.
 
 Не делай commit/push/PR автоматически.
 
@@ -98,6 +99,7 @@ Baseline обязан совпадать с current manifest release. Engine ф�
 - `OWNERSHIP_CLASS_CHANGE`;
 - unsafe/untracked managed collision;
 - invalid marker topology;
-- current/target validation failure.
+- current/target validation failure;
+- `UPDATE_JOURNAL_PENDING` — прерванный hop: повтори `HARNESS UPDATE APPLY` (он сначала откатывает журнал) или выполни `python3 .harness/tools/harness-update.py recover --json`; не восстанавливай файлы вручную.
 
 Не обходи blocker ручным копированием файлов. Если нужна ручная recovery/migration, сначала зафиксируй отдельную проблему/STEP либо попроси пользователя принять конкретное решение.

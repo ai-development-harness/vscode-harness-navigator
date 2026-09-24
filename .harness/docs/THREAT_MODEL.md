@@ -78,6 +78,28 @@ Tools отвечают за проверяемые факты и механич�
 
 Third-party skills, fetched docs и update target content считаются недоверенными данными до inspection. Они не могут повышать свой instruction priority, отключать Harness gates или автоматически выполнять bundled scripts.
 
+### Harness update source
+
+Исключение из правила выше — сам Harness. Configured `source.repository` и его immutable release tags являются **доверенным поставщиком Harness-кода**, как любая устанавливаемая dependency: после `HARNESS UPDATE APPLY` следующая Harness-команда в любом случае исполняет установленные `.harness/tools/**`. Поэтому updater не делает вид, что target code не исполняется, а ограничивает и делает обратимым момент его первого запуска ([#98](https://github.com/ai-development-harness/ai-development-harness-template/issues/98)):
+
+- содержимое hop читается только из tags; OID текущего release закреплён в project lock (`SOURCE_TAG_MOVED`);
+- target validator запускается отдельным процессом только внутри журналированной транзакции hop, после backup всех затрагиваемых paths;
+- failure или прерывание процесса откатывают hop byte-for-byte, включая lock, report и schema local state;
+- bundled scripts/install/bootstrap target release updater не запускает; commit/push/PR после update выполняются только через обычный Git gate после инспекции diff.
+
+Компрометация upstream repository/tag остаётся вне границы Harness и закрывается provider controls (protected tags, branch protection, review release PR).
+
+### Durable artifacts и provenance
+
+Review/audit/release reports и `## Evidence` пишут deterministic writers, а validators проверяют их структуру, связь с revision/gate basis и время создания ([#114](https://github.com/ai-development-harness/ai-development-harness-template/issues/114)):
+
+- verdict принимается только внутри active `STEP REVIEW` со stamped expectation;
+- writer записывает path, sha256, revision и gate basis report-а в context этого execution (локальный след происхождения);
+- report с `created_at` в будущем (сверх допуска на clock skew) невалиден и не может занять место latest;
+- generated Verification evidence засчитывается только со `Status: PASS`.
+
+Граница: агент или пользователь с shell-доступом к рабочему дереву технически может вручную создать синтаксически валидный artifact, включая `specialized_reviews` с произвольным evidence. Harness gates защищают от случайного и небрежного обхода и от несогласованного state, но не доказывают, кто написал файл. Независимость review и provenance durable history обеспечиваются снаружи — review Pull Request, CODEOWNERS и branch protection.
+
 ## Fail-closed правило
 
 Если tool не может доказать prerequisite, корректно прочитать state/config или подтвердить postcondition, результат — BLOCKED/FAIL, а не best-effort продолжение.
