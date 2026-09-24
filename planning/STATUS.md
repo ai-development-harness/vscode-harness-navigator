@@ -4,12 +4,13 @@
 
 ## Summary
 
-- total: 11
+- total: 12
 - completed: 11
+- in_progress: 1
 
 ## In progress
 
-—
+STEP-012
 
 ## Blocked
 

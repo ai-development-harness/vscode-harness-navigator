@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Node.js >= 20 (CI и `yarn test:unit` требуют Node >= 21: glob в `node --test` на Node 20 не поддержан; CI использует Node 22, проект разрабатывается на Node 24).
+- Node.js >= 22 (минимум согласован с CI, `node-version: 22`; проект разрабатывается на Node 24; на Node 20 glob в `node --test` для `yarn test:unit` не поддержан).
 - Corepack-managed Yarn 4 (Berry) с `node-modules` linker. Один раз выполните `corepack enable`,
   после чего `yarn` внутри репозитория автоматически использует версию, зафиксированную в
   `package.json#packageManager`.
