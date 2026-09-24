@@ -74,9 +74,9 @@ jobs:
         # Параметры setup-node.
         # Пример: версия Node и кэш зависимостей.
         with:
-          # Версия Node.js по engines проекта.
-          # Пример: 20.
-          node-version: 20
+          # Версия Node.js: glob в `node --test` (yarn test:unit) поддержан с Node 21.
+          # Пример: 22.
+          node-version: 22
           # Кэш зависимостей менеджера пакетов.
           # Пример: yarn.
           cache: yarn
@@ -158,9 +158,9 @@ jobs:
         # Параметры setup-node.
         # Пример: версия Node и кэш зависимостей.
         with:
-          # Версия Node.js по engines проекта.
-          # Пример: 20.
-          node-version: 20
+          # Версия Node.js: glob в `node --test` (yarn test:unit) поддержан с Node 21.
+          # Пример: 22.
+          node-version: 22
           # Кэш зависимостей менеджера пакетов.
           # Пример: yarn.
           cache: yarn

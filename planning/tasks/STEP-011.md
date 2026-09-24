@@ -16,11 +16,11 @@ risk_flags:
   - none
 plan:
   status: ready
-  revision: 1
-  context_basis: sha256:0617d805b3eacf632fa305ddf925fc73da8facd2e6ad07d2c02b45ea154e6e77
-  content_hash: sha256:aa741024114adbe33d887b3848ed5eef25298a438dc30508928caae7ddf0e98c
-  reviewed_report: planning/plan-reviews/STEP-011/PLAN-REVIEW-20260924T061342Z.md
-  planned_at: 2026-09-24T06:13:42+00:00
+  revision: 2
+  context_basis: sha256:d04708481c3e24ae697dd529c43880385b3c95f5c3497771911724f7a5f10a01
+  content_hash: sha256:61219b353cd6f1e1e6a3c3c02bdc4f591710338691179b90dd570f1c1a63f357
+  reviewed_report: planning/plan-reviews/STEP-011/PLAN-REVIEW-20260924T063121Z.md
+  planned_at: 2026-09-24T06:31:21+00:00
 ---
 
 # STEP-011 — CI workflow GitHub Actions для quality gates и packaging
@@ -35,7 +35,7 @@ plan:
 
 ## Scope
 
-- Workflow `.github/workflows/ci.yml`: триггеры `push` в `main` и `pull_request`; Node 20; Yarn через corepack по `packageManager`; кэш зависимостей; `yarn install --immutable`.
+- Workflow `.github/workflows/ci.yml`: триггеры `push` в `main` и `pull_request`; Node 22 (`node --test` с glob в `test:unit` требует Node >=21, на Node 20 CI не находит тесты); Yarn через corepack по `packageManager`; кэш зависимостей; `yarn install --immutable`.
 - Job `quality`: `yarn typecheck`, `yarn lint`, `yarn format`, `yarn test:unit`, `yarn build`.
 - Job `package`: `yarn package`, `yarn inspect:package`, `yarn test:packaged` под xvfb на `ubuntu-latest`, кэш `.vscode-test`, загрузка VSIX как artifact.
 - `permissions: contents: read`, `concurrency` с отменой устаревших запусков, actions на major-версиях.
@@ -67,7 +67,7 @@ plan:
 
 ## Acceptance criteria
 
-- `ci.yml` запускается на `push` в `main` и на `pull_request`, использует Node 20 и Yarn из `packageManager` через corepack, `yarn install --immutable` и кэш зависимостей.
+- `ci.yml` запускается на `push` в `main` и на `pull_request`, использует Node 22 и Yarn из `packageManager` через corepack, `yarn install --immutable` и кэш зависимостей.
 - Job `quality` выполняет ровно пять команд: typecheck, lint, format, test:unit, build.
 - Job `package` выполняет `yarn package`, `yarn inspect:package`, `yarn test:packaged` под xvfb, кэширует `.vscode-test` и загружает VSIX как artifact; `test:integration` в workflow отсутствует.
 - Workflow содержит `permissions: contents: read`, `concurrency` с `cancel-in-progress: true`, actions пинятся на major-версии, секретов и публикации нет.
@@ -110,7 +110,7 @@ plan:
 
 ### 2. Общая подготовка окружения в обоих jobs
 
-- В каждом job (ubuntu-latest, timeout-minutes): checkout, corepack enable (версия Yarn берётся из packageManager), setup-node с node-version: 20 и cache: yarn (corepack enable ДО setup-node), затем yarn install --immutable.
+- В каждом job (ubuntu-latest, timeout-minutes): checkout, corepack enable (версия Yarn берётся из packageManager), setup-node с node-version: 22 (glob в node --test поддержан с Node 21; на Node 20 CI не находит tests/unit) и cache: yarn (corepack enable ДО setup-node), затем yarn install --immutable.
 - Без матриц ОС/Node (out of scope).
 
 **Files:**
