@@ -186,6 +186,20 @@ suite('navigation, references и relations (Extension Host)', () => {
       assert.deepEqual(keys(fromNode), keys(mentions));
       assert.ok(fromNode.every((location) => location.uri.fsPath !== req.fsPath));
 
+      // STEP-014: menu-only алиас editor/context делегирует оригиналу с пробросом аргумента
+      const aliasFromEditor = await vscode.commands.executeCommand<vscode.Location[]>(
+        'harnessNavigator.editor.findAllReferences',
+      );
+      // активный редактор — step без ID под курсором: без проброса аргумента цели не будет
+      await vscode.window.showTextDocument(step, { selection: new vscode.Range(0, 0, 0, 0) });
+      const aliasFromNode = await vscode.commands.executeCommand<vscode.Location[]>(
+        'harnessNavigator.editor.findAllReferences',
+        { artifact: reqArtifact, folder: valid },
+      );
+      assert.deepEqual(keys(aliasFromEditor), keys(fromEditor));
+      assert.ok(aliasFromNode.length > 0);
+      assert.deepEqual(keys(aliasFromNode), keys(fromNode));
+
       // Show Relations: клик открывает файл, Find All References даёт те же Location
       let offered: vscode.QuickPickItem[] = [];
       const pick = (label: string) => {
@@ -201,6 +215,21 @@ suite('navigation, references и relations (Extension Host)', () => {
       });
       assert.ok(offered.some((item) => item.kind === vscode.QuickPickItemKind.Separator));
       assert.ok(offered.some((item) => item.label === 'STEP-950'));
+      assert.equal(vscode.window.activeTextEditor?.document.uri.fsPath, step.fsPath);
+
+      const originalOffered = offered.map((item) => item.label);
+      // активен step: без проброса аргумента цель была бы STEP-950, а не REQ-950
+      offered = [];
+      await vscode.commands.executeCommand('harnessNavigator.editor.showRelations', {
+        artifact: reqArtifact,
+        folder: valid,
+      });
+      assert.ok(originalOffered.length > 0);
+      assert.deepEqual(
+        offered.map((item) => item.label),
+        originalOffered,
+        'алиас showRelations предлагает те же пункты и пробрасывает аргумент',
+      );
       assert.equal(vscode.window.activeTextEditor?.document.uri.fsPath, step.fsPath);
 
       const forwarded: Thenable<unknown>[] = [];

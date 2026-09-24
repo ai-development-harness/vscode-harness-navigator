@@ -119,3 +119,66 @@ test('view Project Summary объявлен в package.json и имеет клю
   assert.ok(packageNlsEn[key] !== undefined, `English package.nls key: ${key}`);
   assert.ok(packageNlsRu[key] !== undefined, `Russian package.nls key: ${key}`);
 });
+
+interface ManifestCommand {
+  command: string;
+  category?: string;
+  title: string;
+}
+interface ManifestMenuEntry {
+  command: string;
+  when?: string;
+}
+const manifest = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) as {
+  contributes: { commands: ManifestCommand[]; menus: Record<string, ManifestMenuEntry[]> };
+};
+
+function resolveNls(bundle: Record<string, string>, ref: string): string {
+  const match = /^%(.+)%$/.exec(ref);
+  assert.ok(match, `не nls-ссылка: ${ref}`);
+  const value = bundle[match[1] as string];
+  assert.ok(value !== undefined, `нет ключа nls: ${ref}`);
+  return value;
+}
+
+test('STEP-014: у всех команд category «Harness», префикс только у menu-only алиасов', () => {
+  const aliases = manifest.contributes.commands.filter((c) =>
+    c.command.startsWith('harnessNavigator.editor.'),
+  );
+  assert.equal(aliases.length, 2);
+  for (const command of manifest.contributes.commands) {
+    const isAlias = aliases.includes(command);
+    assert.equal(command.category, '%category.harness%', command.command);
+    for (const bundle of [packageNlsEn, packageNlsRu]) {
+      assert.equal(resolveNls(bundle, command.category), 'Harness');
+      assert.equal(
+        resolveNls(bundle, command.title).startsWith('Harness: '),
+        isAlias,
+        `${command.command}: префикс «Harness:» в title`,
+      );
+    }
+  }
+});
+
+test('STEP-014: алиасы скрыты из палитры и используются только в editor/context', () => {
+  const { menus } = manifest.contributes;
+  for (const [menu, entries] of Object.entries(menus)) {
+    for (const entry of entries) {
+      if (!entry.command.startsWith('harnessNavigator.editor.')) continue;
+      if (menu === 'commandPalette') assert.equal(entry.when, 'false', entry.command);
+      else assert.equal(menu, 'editor/context', entry.command);
+    }
+  }
+  for (const alias of ['findAllReferences', 'showRelations']) {
+    const id = `harnessNavigator.editor.${alias}`;
+    const inPalette = (menus['commandPalette'] ?? []).filter((e) => e.command === id);
+    assert.equal(inPalette.length, 1, `${id}: запись commandPalette`);
+    assert.equal(inPalette[0]?.when, 'false', `${id}: скрыт из палитры`);
+    const inEditor = (menus['editor/context'] ?? []).filter((e) => e.command === id);
+    assert.equal(inEditor.length, 1, `${id}: запись editor/context`);
+  }
+  assert.equal(
+    menus['editor/context']?.every((e) => e.command.startsWith('harnessNavigator.editor.')),
+    true,
+  );
+});

@@ -27,10 +27,10 @@ Command Palette:
 
 Context menus:
 
-- Harness Artifacts and Harness Focus view items: Harness: Copy Artifact ID, Harness: Copy Artifact Path, Harness: Find All References, Harness: Show Relations, Harness: Copy Command
-- Harness Commands view items: Harness: Copy Command
+- Harness Artifacts and Harness Focus view items: Copy Artifact ID, Copy Artifact Path, Find All References, Show Relations, Copy Command
+- Harness Commands view items: Copy Command
 - Markdown editor: Harness: Find All References, Harness: Show Relations
-- Harness Artifacts view title buttons: Harness: Set Sort Order, Harness: Set Filter, Harness: Clear Filters
+- Harness Artifacts view title buttons: Set Sort Order, Set Filter, Clear Filters
 
 ### Settings
 
@@ -80,10 +80,10 @@ The extension only reads files. It does not run Harness commands, agents, shell 
 
 Контекстные меню:
 
-- Элементы представлений «Артефакты Harness» и «Фокус Harness»: Harness: Скопировать ID артефакта, Harness: Скопировать путь артефакта, Harness: Найти все ссылки, Harness: Показать связи, Harness: Скопировать команду
-- Элементы представления «Команды Harness»: Harness: Скопировать команду
+- Элементы представлений «Артефакты Harness» и «Фокус Harness»: Скопировать ID артефакта, Скопировать путь артефакта, Найти все ссылки, Показать связи, Скопировать команду
+- Элементы представления «Команды Harness»: Скопировать команду
 - Markdown-редактор: Harness: Найти все ссылки, Harness: Показать связи
-- Кнопки в заголовке представления «Артефакты Harness»: Harness: Задать порядок сортировки, Harness: Задать фильтр, Harness: Очистить фильтры
+- Кнопки в заголовке представления «Артефакты Harness»: Задать порядок сортировки, Задать фильтр, Очистить фильтры
 
 #### Настройки
 

@@ -60,54 +60,76 @@
     "commands": [
       {
         "command": "harnessNavigator.showDiagnostics",
+        "category": "%category.harness%",
         "title": "%command.showDiagnostics.title%"
       },
       {
         "command": "harnessNavigator.refresh",
+        "category": "%category.harness%",
         "title": "%command.refresh.title%"
       },
       {
         "command": "harnessNavigator.goToArtifact",
+        "category": "%category.harness%",
         "title": "%command.goToArtifact.title%"
       },
       {
         "command": "harnessNavigator.setSortOrder",
+        "category": "%category.harness%",
         "title": "%command.setSortOrder.title%",
         "icon": "$(sort-precedence)"
       },
       {
         "command": "harnessNavigator.setFilter",
+        "category": "%category.harness%",
         "title": "%command.setFilter.title%",
         "icon": "$(filter)"
       },
       {
         "command": "harnessNavigator.clearFilters",
+        "category": "%category.harness%",
         "title": "%command.clearFilters.title%",
         "icon": "$(clear-all)"
       },
       {
         "command": "harnessNavigator.copyArtifactId",
+        "category": "%category.harness%",
         "title": "%command.copyArtifactId.title%"
       },
       {
         "command": "harnessNavigator.copyArtifactPath",
+        "category": "%category.harness%",
         "title": "%command.copyArtifactPath.title%"
       },
       {
         "command": "harnessNavigator.findAllReferences",
+        "category": "%category.harness%",
         "title": "%command.findAllReferences.title%"
       },
       {
         "command": "harnessNavigator.showRelations",
+        "category": "%category.harness%",
         "title": "%command.showRelations.title%"
       },
       {
         "command": "harnessNavigator.findCommand",
+        "category": "%category.harness%",
         "title": "%command.findCommand.title%"
       },
       {
         "command": "harnessNavigator.copyCommand",
+        "category": "%category.harness%",
         "title": "%command.copyCommand.title%"
+      },
+      {
+        "command": "harnessNavigator.editor.findAllReferences",
+        "category": "%category.harness%",
+        "title": "%command.editor.findAllReferences.title%"
+      },
+      {
+        "command": "harnessNavigator.editor.showRelations",
+        "category": "%category.harness%",
+        "title": "%command.editor.showRelations.title%"
       }
     ],
     "menus": {
@@ -198,16 +220,24 @@
         {
           "command": "harnessNavigator.showRelations",
           "when": "editorLangId == markdown"
+        },
+        {
+          "command": "harnessNavigator.editor.findAllReferences",
+          "when": "false"
+        },
+        {
+          "command": "harnessNavigator.editor.showRelations",
+          "when": "false"
         }
       ],
       "editor/context": [
         {
-          "command": "harnessNavigator.findAllReferences",
+          "command": "harnessNavigator.editor.findAllReferences",
           "when": "resourceLangId == markdown",
           "group": "navigation@10"
         },
         {
-          "command": "harnessNavigator.showRelations",
+          "command": "harnessNavigator.editor.showRelations",
           "when": "resourceLangId == markdown",
           "group": "navigation@11"
         }
