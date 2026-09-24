@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "latest": "v0.8.3",
+  "latest": "v0.8.4",
   "transitions": [
     {
       "from": "v0.1.0",
@@ -148,6 +148,12 @@
     {
       "from": "v0.8.2",
       "to": "v0.8.3",
+      "kind": "standard",
+      "reloadRequired": false
+    },
+    {
+      "from": "v0.8.3",
+      "to": "v0.8.4",
       "kind": "standard",
       "reloadRequired": false
     }

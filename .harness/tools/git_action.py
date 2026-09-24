@@ -24,6 +24,8 @@ from git_preflight import (
     PR_STATE_PATH,
     Repo,
     commit_preflight,
+    commit_semantic_checks,
+    policy,
     pr_finish_preflight,
     pr_preflight,
     push_preflight,
@@ -49,6 +51,8 @@ def _run(
         argv,
         cwd=root,
         text=True,
+        encoding="utf-8",
+        errors="surrogateescape",
         input=input_text,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -185,6 +189,16 @@ def _validate_commit_message(
         raise GitActionError("COMMIT_MESSAGE_INVALID", "commit body is required by policy")
 
 
+def _commit_snapshot(root: Path) -> dict[str, str | None]:
+    """Branch, HEAD и дерево индекса — то, что проверяет preflight/validator."""
+    repo = Repo(root)
+    return {
+        "branch": repo.branch(),
+        "head": repo.head(),
+        "tree": repo.git("write-tree").stdout.strip(),
+    }
+
+
 def execute_commit(
     root: Path,
     *,
@@ -195,6 +209,27 @@ def execute_commit(
     """Создать commit; при exact protected-branch plan создать required branch."""
     repo = Repo(root)
     created_branch: str | None = None
+
+    # Message читается и проверяется до любых mutations: невалидный input не
+    # должен оставлять репозиторий на свежесозданной ветке (#110).
+    path = _message_path(root, message_file)
+    message_identity = _input_identity(path)
+    message = path.read_text(encoding="utf-8")
+    if _input_identity(path) != message_identity:
+        raise GitActionError(
+            "COMMIT_MESSAGE_CHANGED",
+            "commit message file changed while being read",
+        )
+    config = policy(root)
+    if commit_type not in config["commit"]["types"]:
+        raise GitActionError("INVALID_COMMIT_TYPE", f"unknown commit type: {commit_type}")
+    _validate_commit_message(
+        message,
+        commit_type=commit_type,
+        gate={"semanticChecks": commit_semantic_checks(config)},
+    )
+
+    snapshot = _commit_snapshot(root)
     try:
         gate = commit_preflight(root, commit_type=commit_type, slug=slug)
     except GitPreflightError as exc:
@@ -222,19 +257,20 @@ def execute_commit(
         if Repo(root).branch() != required:
             raise GitActionError("BRANCH_POSTCONDITION_FAILED", "created branch is not current")
         created_branch = required
+        snapshot = _commit_snapshot(root)
         gate = commit_preflight(root, commit_type=commit_type, slug=slug)
-
-    path = _message_path(root, message_file)
-    message_identity = _input_identity(path)
-    message = path.read_text(encoding="utf-8")
-    if _input_identity(path) != message_identity:
-        raise GitActionError(
-            "COMMIT_MESSAGE_CHANGED",
-            "commit message file changed while being read",
-        )
     _validate_commit_message(message, commit_type=commit_type, gate=gate)
 
-    before = Repo(root).head()
+    # Validator видел конкретные branch/HEAD/index tree. Если за время проверки
+    # что-то изменилось, commit зафиксировал бы непроверенное состояние (#107).
+    if _commit_snapshot(root) != snapshot:
+        raise GitActionError(
+            "COMMIT_INPUT_CHANGED",
+            "branch, HEAD or staged tree changed during commit preflight",
+            validated=snapshot,
+        )
+
+    before = snapshot["head"]
     argv = ["git", "commit"]
     if gate.get("sign"):
         argv.append("-S")
@@ -245,15 +281,31 @@ def execute_commit(
     # TOCTOU между validation и primary side effect при concurrent sessions.
     argv.extend(["-F", "-"])
     _run(root, argv, input_text=message)
-    after = Repo(root).head()
+    repo = Repo(root)
+    after = repo.head()
     if not after or after == before:
         raise GitActionError("COMMIT_POSTCONDITION_FAILED", "Git HEAD did not advance")
+    parents = repo.git("rev-list", "--parents", "-n", "1", after).stdout.split()[1:]
+    committed_tree = repo.git("rev-parse", f"{after}^{{tree}}").stdout.strip()
+    if (
+        repo.branch() != snapshot["branch"]
+        or parents != ([before] if before else [])
+        or committed_tree != snapshot["tree"]
+    ):
+        raise GitActionError(
+            "COMMIT_POSTCONDITION_FAILED",
+            "created commit does not match validated branch/parent/tree",
+            head=after,
+            validated=snapshot,
+            parents=parents,
+            tree=committed_tree,
+        )
 
     cleanup_warning = _cleanup_consumed_input(path, message_identity)
     result = {
         "status": "SUCCESS",
         "action": "commit",
-        "branch": Repo(root).branch(),
+        "branch": repo.branch(),
         "createdBranch": created_branch,
         "head": after,
         "mutation": {"argv": argv},
@@ -267,29 +319,52 @@ def execute_push(root: Path) -> dict[str, Any]:
     gate = push_preflight(root)
     plan = gate.get("mutationPlan", {})
     argv = plan.get("argv")
+    validated = gate.get("validatedHead")
+    branch = str(gate["branch"])
+    remote = str(gate["remote"])
     if not isinstance(argv, list) or argv[:2] != ["git", "push"]:
         raise GitActionError("UNSAFE_MUTATION_PLAN", "push preflight returned invalid argv")
-    if any(str(item).startswith("--force") or item == "-f" for item in argv):
+    # `+refspec` — такой же forced update, как `--force` (#107).
+    if any(
+        str(item).startswith(("--force", "+")) or item == "-f"
+        for item in argv
+    ):
         raise GitActionError("UNSAFE_MUTATION_PLAN", "force push is forbidden")
-    head = Repo(root).head()
+    if not isinstance(validated, str) or argv[-1] != f"{validated}:refs/heads/{branch}":
+        raise GitActionError("UNSAFE_MUTATION_PLAN", "push plan must publish the validated commit")
+    repo = Repo(root)
+    if repo.head() != validated or repo.branch() != branch:
+        raise GitActionError(
+            "PUSH_INPUT_CHANGED",
+            "branch or HEAD changed after push preflight",
+            validatedHead=validated,
+        )
     _run(root, [str(item) for item in argv])
     repo = Repo(root)
-    remote_head = repo.remote_ref(str(gate["remote"]), str(gate["branch"]))
-    if head is None or remote_head != head:
+    # Git обновляет remote-tracking ref при push в configured remote; сверяем его
+    # с validated commit, а не с локальной веткой, которая могла сдвинуться.
+    remote_head = repo.remote_ref(remote, branch)
+    if remote_head != validated:
         raise GitActionError(
             "PUSH_POSTCONDITION_FAILED",
-            "configured remote branch does not match local HEAD after push",
-            localHead=head,
+            "configured remote branch does not match validated HEAD after push",
+            localHead=validated,
             remoteHead=remote_head,
         )
+    upstream_argv = plan.get("upstreamArgv")
+    if upstream_argv:
+        expected = ["git", "branch", f"--set-upstream-to={remote}/{branch}", branch]
+        if upstream_argv != expected:
+            raise GitActionError("UNSAFE_MUTATION_PLAN", "push preflight returned invalid upstream argv")
+        _run(root, [str(item) for item in upstream_argv])
     return {
         "status": "SUCCESS",
         "action": "push",
-        "branch": gate["branch"],
-        "remote": gate["remote"],
-        "head": head,
+        "branch": branch,
+        "remote": remote,
+        "head": validated,
         "afterPush": gate.get("afterPush"),
-        "mutation": {"argv": argv},
+        "mutation": {"argv": argv, "upstreamArgv": upstream_argv},
     }
 
 
@@ -330,6 +405,17 @@ def _provider_json(root: Path, argv: list[str]) -> Any:
         ) from exc
 
 
+def _repo_selector(gate: dict[str, Any]) -> str:
+    """Явный GitHub repository из push remote; без него gh угадывает сам (#109)."""
+    selector = gate.get("repoSelector")
+    if not isinstance(selector, str) or not selector:
+        raise GitActionError(
+            "PR_REPO_UNRESOLVED",
+            f"cannot resolve GitHub repository from remote {gate.get('remote')} URL",
+        )
+    return selector
+
+
 def _open_prs(root: Path, gate: dict[str, Any]) -> list[dict[str, Any]]:
     """Query exact open head/base PRs through configured provider tool."""
     tool = str(gate["preferredTool"])
@@ -344,6 +430,8 @@ def _open_prs(root: Path, gate: dict[str, Any]) -> list[dict[str, Any]]:
             tool,
             "pr",
             "list",
+            "--repo",
+            _repo_selector(gate),
             "--head",
             str(gate["branch"]),
             "--base",
@@ -452,6 +540,9 @@ def _persist_pr_state(
                 "INVALID_PR_STATE",
                 f"cannot read existing {PR_STATE_PATH}: {exc}",
             ) from exc
+        if not isinstance(existing, dict):
+            # Иначе `.get` ниже падает AttributeError-traceback (#110).
+            raise GitActionError("INVALID_PR_STATE", f"{PR_STATE_PATH} must be a JSON object")
         identity = ("pr", "headBranch", "baseBranch")
         if any(existing.get(key) != state[key] for key in identity):
             raise GitActionError(
@@ -551,6 +642,8 @@ def execute_pr(
             str(gate["preferredTool"]),
             "pr",
             "create",
+            "--repo",
+            _repo_selector(gate),
             "--head",
             str(gate["branch"]),
             "--base",

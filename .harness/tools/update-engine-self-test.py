@@ -581,6 +581,33 @@ def test_preinit_template_change(tmp: Path) -> None:
     assert "## Follow-up" in (project / "docs/adr/TEMPLATE.md").read_text(encoding="utf-8")
 
 
+def test_graph_connectivity(tmp: Path) -> None:
+    """#105: каждый release графа обязан иметь маршрут до latest."""
+    from harness_update import _validate_graph
+
+    def edge(a: str, b: str) -> dict:
+        return {"from": a, "to": b, "kind": "standard", "reloadRequired": False}
+
+    pattern = r"v\d+\.\d+\.\d+"
+    good = {"schemaVersion": 1, "latest": "v1.2.0", "transitions": [
+        edge("v1.0.0", "v1.1.0"), edge("v1.0.5", "v1.1.0"), edge("v1.1.0", "v1.2.0"),
+    ]}
+    latest, outgoing = _validate_graph(good, pattern)
+    assert latest == "v1.2.0" and len(outgoing) == 3, outgoing
+    dead_end = {"schemaVersion": 1, "latest": "v1.2.0", "transitions": [
+        edge("v1.0.0", "v1.1.0"), edge("v1.0.5", "v1.0.9"), edge("v1.1.0", "v1.2.0"),
+    ]}
+    error = expect_error("INVALID_UPDATE_GRAPH", _validate_graph, dead_end, pattern)
+    assert "v1.0.5" in str(error), error
+    past_latest = {"schemaVersion": 1, "latest": "v1.1.0", "transitions": [
+        edge("v1.0.0", "v1.1.0"), edge("v1.1.0", "v1.2.0"),
+    ]}
+    expect_error("INVALID_UPDATE_GRAPH", _validate_graph, past_latest, pattern)
+    # Реальный graph репозитория связен.
+    real = json.loads((SOURCE_ROOT / ".harness/harness-update-graph.json").read_text(encoding="utf-8"))
+    _validate_graph(real, pattern)
+
+
 CASES = [
     test_handover_keeps_file,
     test_new_marker_block,
@@ -593,6 +620,7 @@ CASES = [
     test_graph_ignores_tag_named_like_branch,
     test_unsafe_source_tree_path,
     test_preinit_template_change,
+    test_graph_connectivity,
 ]
 
 

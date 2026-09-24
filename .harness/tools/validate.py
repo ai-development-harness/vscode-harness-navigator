@@ -306,8 +306,45 @@ def iter_staged_blobs(root: Path, *, max_content_bytes: int):
 
 
 # Проверить path против набора glob patterns из policy.
+# Как в .gitignore: pattern без `/` совпадает с basename на любой глубине
+# (`.env` ловит `apps/api/.env`), а `**/` в начале допускает и корень (#108).
 def match_any(path: str, patterns: list[str]) -> bool:
-    return any(fnmatch.fnmatch(path, pat) for pat in patterns)
+    name = path.rsplit("/", 1)[-1]
+    for pat in patterns:
+        if fnmatch.fnmatch(path, pat):
+            return True
+        if "/" not in pat and fnmatch.fnmatch(name, pat):
+            return True
+        if pat.startswith("**/") and fnmatch.fnmatch(path, pat[3:]):
+            return True
+    return False
+
+
+# Private key любого PEM/PGP типа (plain, RSA, EC, DSA, OPENSSH, ENCRYPTED, PGP BLOCK).
+PRIVATE_KEY_PATTERN = re.compile(rb"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----")
+
+# Токены с однозначным форматом; placeholder-примеры из документации не совпадают
+# по длине, а AWS doc-ключи с суффиксом EXAMPLE исключены явно.
+SECRET_TOKEN_PATTERNS = (
+    ("AWS access key", re.compile(rb"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("GitHub token", re.compile(rb"\bgh[pousr]_[A-Za-z0-9]{36}\b")),
+    ("GitHub fine-grained token", re.compile(rb"\bgithub_pat_[A-Za-z0-9_]{82}\b")),
+    ("GitLab token", re.compile(rb"\bglpat-[A-Za-z0-9_-]{20}\b")),
+    ("Slack token", re.compile(rb"\bxox[abposr]-[0-9]{6,}-[A-Za-z0-9-]{10,}")),
+)
+
+
+def secret_findings(data: bytes) -> list[str]:
+    """Вернуть типы secret material в bytes (text и binary одинаково)."""
+    found: list[str] = []
+    if PRIVATE_KEY_PATTERN.search(data):
+        found.append("private key material")
+    for label, pattern in SECRET_TOKEN_PATTERNS:
+        for match in pattern.finditer(data):
+            if not match.group(0).endswith(b"EXAMPLE"):
+                found.append(label)
+                break
+    return found
 
 
 
@@ -321,16 +358,6 @@ def is_under(path: str, configured: list[str]) -> bool:
     return False
 
 
-
-# Быстро отличить текстовый файл от binary по NUL-byte, чтобы не декодировать произвольные artifacts как UTF-8.
-def text_file(path: Path) -> bool:
-    try:
-        data = path.read_bytes()
-    except OSError:
-        return False
-    if b"\0" in data[:8192]:
-        return False
-    return True
 
 
 
@@ -1120,23 +1147,30 @@ def validate_repository_surface(
     # --- Гигиена tracked files ---------------------------------------------
     # Ищем очевидные private keys, незавершённые merge conflicts и базовые
     # text-format проблемы только в реально tracked files.
-    private_markers = [b"-----BEGIN" + suffix for suffix in (b" PRIVATE KEY-----", b" RSA PRIVATE KEY-----", b" OPENSSH PRIVATE KEY-----")]
     format_paths = policy.get("format_paths", [])
     key_reported: set[str] = set()
+    check_secrets = policy.get("check_private_key_material", True)
     for rel in files:
         p = root / rel
-        if not p.is_file() or not text_file(p):
+        if not p.is_file():
             continue
         try:
             raw = p.read_bytes()
         except OSError:
             continue
-        if policy.get("check_private_key_material", True) and any(marker in raw for marker in private_markers):
-            errors.append(f"private key material detected in tracked file: {rel}")
-            key_reported.add(rel)
+        # Secret material ищется и в binary файлах: PEM/token — ASCII внутри
+        # любого контейнера (#108). Остальная hygiene — только для text.
+        if check_secrets and rel not in oversized_reported:
+            for label in secret_findings(raw):
+                errors.append(f"{label} detected in tracked file: {rel}")
+                key_reported.add(rel)
+        if b"\0" in raw[:8192]:
+            continue
         if policy.get("check_merge_markers", True):
             text = raw.decode("utf-8", errors="ignore")
-            if re.search(r"(?m)^(<<<<<<<|=======|>>>>>>>)", text):
+            # `=======` сам по себе — Markdown setext H1, а не conflict (#110):
+            # маркер — только парные открывающая и закрывающая строки.
+            if re.search(r"(?m)^<<<<<<<(?: |$)", text) and re.search(r"(?m)^>>>>>>>(?: |$)", text):
                 errors.append(f"merge-conflict marker detected: {rel}")
         if is_under(rel, format_paths):
             if policy.get("check_utf8", True):
@@ -1161,13 +1195,9 @@ def validate_repository_surface(
         normalized = rel.replace("\\", "/")
         if size > max_size and rel not in oversized_reported:
             errors.append(f"staged file exceeds {max_size // (1024*1024)} MiB: {normalized}")
-        if (
-            policy.get("check_private_key_material", True)
-            and rel not in key_reported
-            and b"\0" not in data[:8192]
-            and any(marker in data for marker in private_markers)
-        ):
-            errors.append(f"private key material detected in staged file: {normalized}")
+        if check_secrets and rel not in key_reported:
+            for label in secret_findings(data):
+                errors.append(f"{label} detected in staged file: {normalized}")
 
     # --- Самодокументируемые config files --------------------------------
     # Каждый параметр managed YAML/TOML обязан иметь соседний комментарий и

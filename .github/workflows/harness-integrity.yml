@@ -33,9 +33,10 @@ concurrency:
   # PR группируются по номеру, push после merge — по ref основной ветки.
   # Пример: Harness Integrity-pull_request-74 и Harness Integrity-push-refs/heads/main.
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  # Новый запуск заменяет только устаревший запуск из той же concurrency-группы.
-  # Пример: true сохраняет только актуальную проверку одного PR.
-  cancel-in-progress: true
+  # Отменять устаревший запуск только для PR; проверка каждого merge commit в main
+  # доводится до конца, иначе быстрый второй merge скрыл бы результат первого (#111).
+  # Пример: true для pull_request, false для push в main.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Набор jobs workflow.
 # Пример: один `validate-harness` job для baseline template.
@@ -46,9 +47,9 @@ jobs:
     # Отображаемое имя job в GitHub UI.
     # Пример: "Validate Harness".
     name: Validate Harness
-    # Runner image для выполнения validation.
-    # Пример: `ubuntu-latest`; конкретная версия Python задаётся отдельным setup step.
-    runs-on: ubuntu-latest
+    # Runner image для выполнения validation; закреплён, чтобы смена `latest` не меняла CI молча (#111).
+    # Пример: `ubuntu-24.04`; конкретная версия Python задаётся отдельным setup step.
+    runs-on: ubuntu-24.04
     # Максимальное время job до принудительной остановки.
     # Пример: 5 минут существенно выше обычного времени validator, но защищает от зависания.
     timeout-minutes: 5
@@ -85,6 +86,38 @@ jobs:
           # Версия Python для deterministic Harness validator.
           # Пример: "3.13".
           python-version: "3.13"
+
+      # Отображаемое имя шага, который помечает изменения trust boundary в PR.
+      # Пример: "Flag Harness trust boundary changes".
+      - name: Flag Harness trust boundary changes
+        # PR проверяется своим же validator-ом, поэтому ослабление validator/policy/CI
+        # само себя не поймает (#111). Шаг не блокирует merge, а выводит warning-аннотацию,
+        # чтобы reviewer (или CODEOWNERS проекта) явно проверил эти пути.
+        # Пример: изменение `.harness/tools/validate.py` в PR даёт warning с именем файла.
+        if: github.event_name == 'pull_request'
+        # Параметры шага: SHA base и head из события PR.
+        # Пример: BASE_SHA=abc123, HEAD_SHA=def456.
+        env:
+          # Commit base branch, от которого считается diff PR.
+          # Пример: github.event.pull_request.base.sha.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # Проверяемый commit PR.
+          # Пример: github.event.pull_request.head.sha.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # Перечислить изменённые пути trust boundary и вывести GitHub warning на каждый.
+        # Пример: `::warning file=.harness/harness-policy.toml::Harness trust boundary changed`.
+        run: |
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- \
+            '.harness/tools/' \
+            '.harness/harness-policy.toml' \
+            '.harness/harness-update.toml' \
+            '.harness/git-policy.toml' \
+            '.claude/settings.json' \
+            '.codex/' \
+            '.github/' |
+          while IFS= read -r path; do
+            echo "::warning file=${path}::Harness trust boundary changed; this PR is validated by its own validator, review manually"
+          done
 
       # Отображаемое имя deterministic validation step.
       # Пример: видно как отдельная строка в Actions log.

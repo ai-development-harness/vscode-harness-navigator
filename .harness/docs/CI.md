@@ -10,7 +10,7 @@ Validator написан на Python и использует только standa
 
 Bash не используется как реализация validator: текущие проверки требуют корректного TOML parsing, работы с Git index, glob/path semantics, UTF-8/binary content и структурой skills/configs. Перенос в shell либо ослабил бы эти проверки, либо добавил внешние parser dependencies. Docker также не является обязательным runtime, чтобы локальная validation не зависела от daemon/image/network.
 
-В GitHub Actions версия Python задаётся явно через `actions/setup-python`, поэтому CI не зависит от случайной версии интерпретатора в `ubuntu-latest`.
+В GitHub Actions версия Python задаётся явно через `actions/setup-python`, а runner закреплён (`ubuntu-24.04`), поэтому CI не меняется молча при смене `ubuntu-latest`.
 
 Workflow запускает baseline validator, public CLI smoke checks и единый discoverable regression runner:
 
@@ -23,7 +23,9 @@ python3 .harness/tools/run-self-tests.py
 
 `run-self-tests.py` автоматически обнаруживает все `.harness/tools/*-self-test.py`, выполняет их в стабильном порядке и не требует ручного добавления нового regression-файла в workflow. `--list` показывает discovery surface, `--json` возвращает compact aggregate result.
 
-GitHub Actions official actions pinned по immutable commit SHA, соответствующим используемому major tag. Workflow concurrency группируется по head branch; новый push/PR event отменяет устаревший run той же ветки, но не смешивает разные branches.
+GitHub Actions official actions pinned по immutable commit SHA, соответствующим используемому major tag. Workflow concurrency группируется по номеру Pull Request или ref: новый commit в Pull Request отменяет его устаревший run, а проверки push в `main` не отменяются — каждый merge commit проверяется до конца.
+
+Pull Request проверяется собственным validator-ом из своего же дерева, поэтому изменения trust boundary (`.harness/tools/**`, policy TOML, `.claude/settings.json`, `.codex/**`, `.github/**`) шаг `Flag Harness trust boundary changes` помечает warning-аннотациями для обязательного ручного review (см. `THREAT_MODEL.md`).
 Для command transition gate workflow дополнительно проверяет отрицательный case (`GIT PR > COMMIT` обязан завершиться non-zero).
 
 Context budget gate фиксирует размер Harness-controlled always-on instructions до выбора skill. Generated project blocks в `AGENTS.md` учитываются отдельно и не входят в core limit. Текущий baseline: 7 224 chars для Codex и 8 029 chars для Claude Code (после сокращения always-on bootstrap на ~60%). Подробности — в [`TOKEN_ECONOMY.md`](TOKEN_ECONOMY.md).

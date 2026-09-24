@@ -587,6 +587,21 @@ def _validate_graph(data: dict[str, Any], tag_pattern: str) -> tuple[str, dict[s
         if source in outgoing:
             raise UpdateError("INVALID_UPDATE_GRAPH", f"multiple outgoing transitions from {source}")
         outgoing[source] = Hop(source, target, kind, reload_required, reason if isinstance(reason, str) else None)
+    # Связность (#105): рёбра идут только вперёд, поэтому циклов нет; достаточно,
+    # чтобы из каждого упомянутого release цепочка доходила до latest, а latest
+    # был конечным узлом. Иначе проект на тупиковом release не сможет обновиться.
+    if latest in outgoing:
+        raise UpdateError("INVALID_UPDATE_GRAPH", f"graph latest {latest} must not have outgoing transition")
+    nodes = set(outgoing) | {hop.target for hop in outgoing.values()}
+    if outgoing and latest not in nodes:
+        raise UpdateError("INVALID_UPDATE_GRAPH", f"graph latest {latest} is not reachable by any transition")
+    for node in sorted(nodes, key=_semver):
+        cursor = node
+        while cursor != latest:
+            hop = outgoing.get(cursor)
+            if hop is None:
+                raise UpdateError("INVALID_UPDATE_GRAPH", f"release {node} has no update route to latest {latest}")
+            cursor = hop.target
     return latest, outgoing
 
 

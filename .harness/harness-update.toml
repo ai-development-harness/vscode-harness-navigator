@@ -30,7 +30,8 @@ report_directory = "planning/harness-updates"
 [ownership]
 # Полностью Harness-owned paths. Updater заменяет их только если local content не расходится с BASE;
 # при local modification update блокируется вместо silent overwrite.
-# Core workflow skills перечислены поимённо: project/third-party skills рядом в `.agents/skills/<slug>/` не входят в update scope.\n# Пример: .harness/docs/**, `.agents/skills/run-step/**` и runtime adapter README.
+# Core workflow skills перечислены поимённо: project/third-party skills рядом в `.agents/skills/<slug>/` не входят в update scope.
+# Пример: .harness/docs/**, `.agents/skills/run-step/**` и runtime adapter README.
 harness_owned = [
   ".harness/harness-update-graph.json",
   ".harness/command-transitions.json",

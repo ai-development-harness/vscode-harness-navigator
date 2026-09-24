@@ -959,6 +959,59 @@ def test_project_owned_migration() -> None:
             raise AssertionError("tampered pinned legacy review was silently re-migrated")
 
 
+def test_template_schema_bump() -> None:
+    """#105: schema bump project-owned template мигрирует по объявленным шагам."""
+    import template_contract as tc
+
+    old = "---\nschema: 1\nkind: demo\nverdict: PASS\n---\n\n# Demo\n\n## Findings\n\nproject prose\n"
+    target = (
+        "---\nschema: 3\nkind: demo\nverdict: PASS\nseverity: low\n---\n\n"
+        "# Demo\n\n## Issues\n\n- ...\n\n## Verdict rationale\n\n...\n"
+    )
+
+    def rename_findings(meta, body):
+        return meta, body.replace("## Findings", "## Issues", 1)
+
+    with tempfile.TemporaryDirectory(prefix="harness-template-schema-") as tmp:
+        path = Path(tmp) / "TEMPLATE.md"
+        path.write_text(old, encoding="utf-8")
+        saved = dict(tc.TEMPLATE_SCHEMA_MIGRATIONS)
+        try:
+            # Необъявленный bump остаётся hard blocker-ом и файл не трогается.
+            tc.TEMPLATE_SCHEMA_MIGRATIONS.clear()
+            pending, blockers = tc._template_migration_state(path, target)
+            require(any("no declared template schema migration 1 -> 2" in b for b in blockers), blockers)
+            try:
+                tc._migrate_template_shape(path, target)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("undeclared schema bump was migrated")
+            require(path.read_text(encoding="utf-8") == old, "blocked migration changed file")
+
+            # Цепочка 1 -> 2 (non-additive) -> 3 (additive).
+            tc.TEMPLATE_SCHEMA_MIGRATIONS["demo"] = {1: rename_findings, 2: None}
+            pending, blockers = tc._template_migration_state(path, target)
+            require(pending and not blockers, (pending, blockers))
+            require(tc._migrate_template_shape(path, target), "declared migration did nothing")
+            migrated = parse_document(path)
+            require(migrated["frontmatter"]["schema"] == 3, migrated["frontmatter"])
+            require(migrated["frontmatter"]["severity"] == "low", migrated["frontmatter"])
+            require("project prose" in migrated["body"], migrated["body"])
+            require("Issues" in migrated["sections"], migrated["sections"])
+            require("Verdict rationale" in migrated["sections"], migrated["sections"])
+            require("Findings" not in migrated["sections"], migrated["sections"])
+            # Повторный запуск — no-op.
+            require(not tc._migrate_template_shape(path, target), "migration is not idempotent")
+
+            # Downgrade никогда не мигрирует.
+            _pending, blockers = tc._template_migration_state(path, old)
+            require(blockers, "schema downgrade accepted")
+        finally:
+            tc.TEMPLATE_SCHEMA_MIGRATIONS.clear()
+            tc.TEMPLATE_SCHEMA_MIGRATIONS.update(saved)
+
+
 def test_release_metadata(root: Path) -> None:
     graph = load_json(update_manifest_path(root))
     lock = load_json(update_lock_path(root))
@@ -1035,6 +1088,7 @@ def main() -> int:
         ("ownership boundary", lambda: test_ownership_contract(root)),
         ("pre-init release template alignment", test_preinit_release_template_alignment),
         ("project-owned schema migration", test_project_owned_migration),
+        ("template schema bump migration", test_template_schema_bump),
         ("release metadata", lambda: test_release_metadata(root)),
         ("journaled-engine bridge release gate", lambda: test_bridge_release_gate(root)),
     ]
