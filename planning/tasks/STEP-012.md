@@ -1,7 +1,7 @@
 ---
 schema: 1
 id: STEP-012
-status: in_progress
+status: completed
 type: implementation
 priority: low
 phase: release-preparation
@@ -135,25 +135,26 @@ plan:
 
 ## Evidence
 
+
 <!-- VERIFICATION-EVIDENCE:START -->
-- Verification run: 2026-09-24T06:51:29Z
-- Status: MANUAL_REQUIRED
-- Git head: 6c2a4751dd7b2ccc08e24fddd8bfa8a845498426
-- Worktree hash: sha256:a97b15ed9d5ea5fc2470ccbc53ba74aeb3ec6f70e53382cc1661a2ca4e788013
+- Verification run: 2026-09-24T06:53:52Z
+- Status: PASS
+- Git head: d3b4c45fd687c3424c4e2d0b4946458d6bfb0af1
+- Worktree hash: clean
 
 ### Automated verification
 - Command: yarn install --immutable
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 606
-  - stdout sha256: f000f004233830fda175e444c5183869ddccda93243605b3e87fee84833bc3ed
+  - Duration ms: 621
+  - stdout sha256: db482cc529553704704709797a1a3b4e009677baea4365b8f97686326224807b
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 234
   - stderr bytes: 0
 - Command: yarn typecheck
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 3383
+  - Duration ms: 3357
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -161,7 +162,7 @@ plan:
 - Command: yarn lint
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 4324
+  - Duration ms: 4229
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -169,7 +170,7 @@ plan:
 - Command: yarn format
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 1342
+  - Duration ms: 1364
   - stdout sha256: 17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 66
@@ -177,15 +178,15 @@ plan:
 - Command: yarn test:unit
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 7752
-  - stdout sha256: e48a351b7e254dff7816f0a90c342bb4978820123422c190e6f679f6413f3661
+  - Duration ms: 7623
+  - stdout sha256: 80786f5b470e6f96e1a2bbd0b3d503ff5e06b3b916f11fe52617619cbd5d3ee6
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-  - stdout bytes: 19200
+  - stdout bytes: 19210
   - stderr bytes: 0
 - Command: yarn build
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 533
+  - Duration ms: 543
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -193,7 +194,7 @@ plan:
 - Command: yarn package
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 3499
+  - Duration ms: 3576
   - stdout sha256: 8816faca546a524e46f023740d47959afbbfa5f0667721986f960c2114b8cfe1
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 856
@@ -201,7 +202,7 @@ plan:
 - Command: yarn inspect:package
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 323
+  - Duration ms: 317
   - stdout sha256: 930692f3e409d439b5f1a4c2146f17b102bc1b3429ad7e273b5098393caec4da
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 1305
@@ -209,7 +210,7 @@ plan:
 - Command: git diff --check
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 4
+  - Duration ms: 3
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -217,18 +218,20 @@ plan:
 - Command: python3 .harness/tools/validate.py --mode manual
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 1158
-  - stdout sha256: 4efa586beefd67ebf017e254fbfcdf381d14f0785f275500c4d380ad5e474bf9
+  - Duration ms: 1149
+  - stdout sha256: 04cc80ae557696ad2488d4ca11ecf0b13d8be682b45605ff49433b597cba433a
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 424
   - stderr bytes: 0
 
 ### Manual verification
 - Check: Workflow CI на PR остаётся зелёным (Quality, Package).
-  - Status: PENDING
+  - Status: PASS
+  - Observed: "PR #12, run https://github.com/ai-development-harness/vscode-harness-navigator/actions/runs/35966586478 (head d3b4c45): Quality pass (31s), Package pass (1m15s), Validate Harness pass. Версии Node: локальный прогон 24.21.0, CI 22 (node-version: 22); работу на минимуме Node 22 доказывает CI."
 <!-- VERIFICATION-EVIDENCE:END -->
 
 Заполняется по факту реализации и verification. Для каждой значимой проверки указывай Command, Exit code и Observed.
+
 
 ## Blocker / Failure reason
 
