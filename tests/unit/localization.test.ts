@@ -169,6 +169,14 @@ test('STEP-014: алиасы скрыты из палитры и использ�
       else assert.equal(menu, 'editor/context', entry.command);
     }
   }
+  for (const alias of ['findAllReferences', 'showRelations']) {
+    const id = `harnessNavigator.editor.${alias}`;
+    const inPalette = (menus['commandPalette'] ?? []).filter((e) => e.command === id);
+    assert.equal(inPalette.length, 1, `${id}: запись commandPalette`);
+    assert.equal(inPalette[0]?.when, 'false', `${id}: скрыт из палитры`);
+    const inEditor = (menus['editor/context'] ?? []).filter((e) => e.command === id);
+    assert.equal(inEditor.length, 1, `${id}: запись editor/context`);
+  }
   assert.equal(
     menus['editor/context']?.every((e) => e.command.startsWith('harnessNavigator.editor.')),
     true,

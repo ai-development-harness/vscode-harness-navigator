@@ -181,17 +181,21 @@ plan:
 
 
 
+
+
+
+
 <!-- VERIFICATION-EVIDENCE:START -->
-- Verification run: 2026-09-24T07:50:14Z
+- Verification run: 2026-09-24T08:07:24Z
 - Status: MANUAL_REQUIRED
-- Git head: 649011bf20c1ed64c415b11d18c0975ab9471290
-- Worktree hash: sha256:df5378f1e40aa54ed37e731b2e3fe9d3dbe6f199209fe2701f4c65a622c5292c
+- Git head: 3d460315743683459be5df628a93e9554642bdf3
+- Worktree hash: sha256:b959920a20bde6057bae8f62c9ee752739ba63138c229ec3e760ccd018a72516
 
 ### Automated verification
 - Command: yarn typecheck
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 3458
+  - Duration ms: 3603
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -199,7 +203,7 @@ plan:
 - Command: yarn lint
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 4318
+  - Duration ms: 4515
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -207,7 +211,7 @@ plan:
 - Command: yarn format
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 1382
+  - Duration ms: 1462
   - stdout sha256: 17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 66
@@ -215,15 +219,15 @@ plan:
 - Command: yarn test:unit
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 7704
-  - stdout sha256: b324e28062af2262225acb2413b8d311fe8d101e6d1abc71daebe30924871dff
+  - Duration ms: 7793
+  - stdout sha256: 2a9d5d46edefb697ea3634dc1407c6a957c279651bf2cebf089d18227b263c1e
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-  - stdout bytes: 19460
+  - stdout bytes: 19469
   - stderr bytes: 0
 - Command: yarn build
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 515
+  - Duration ms: 550
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -231,7 +235,7 @@ plan:
 - Command: yarn package
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 3594
+  - Duration ms: 3747
   - stdout sha256: 92249da31d583049f33fe2ea73aab4932b10d008868e481a179743d2f83064f6
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 856
@@ -239,7 +243,7 @@ plan:
 - Command: yarn inspect:package
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 313
+  - Duration ms: 349
   - stdout sha256: bb20c57626e15400248c73d52a1f65dfcee56f56cf37b71cb7b36822053e8746
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 1305
@@ -247,15 +251,15 @@ plan:
 - Command: yarn test:integration
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 43915
-  - stdout sha256: 4e38fe0bff01fd5547005acbd645985bcf4df60b92ddbc014812af0ddfb16cc1
-  - stderr sha256: 08fc640eedcf6ccbbc568d600ddebdf96d4c82be4171f3e286ac82f0de35cbc5
-  - stdout bytes: 36807
+  - Duration ms: 47119
+  - stdout sha256: e4c0a2f1b9f42ddf10f943ee8b464635671978485333218c619c0b4767ae7c70
+  - stderr sha256: 715ad1f887d15e268aeed064d5e4eb363bb17a0b711e1536b4f1bab22d710650
+  - stdout bytes: 37093
   - stderr bytes: 30256
 - Command: git diff --check
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 5
+  - Duration ms: 4
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -263,8 +267,8 @@ plan:
 - Command: python3 .harness/tools/validate.py --mode manual
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 1196
-  - stdout sha256: a03d4cc2ed5ed8505823d331a1a02058e06c3a164be1b4936192011d8b3e988e
+  - Duration ms: 1206
+  - stdout sha256: afa20fe71cb32d1ec90c5e43b2fdab642c48ff491061c5afe5a06e1c7fc468fe
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 424
   - stderr bytes: 0
@@ -275,6 +279,10 @@ plan:
 <!-- VERIFICATION-EVIDENCE:END -->
 
 Заполняется по факту реализации и verification. Для каждой значимой проверки указывай Command, Exit code и Observed.
+
+
+
+
 
 
 
