@@ -24,6 +24,7 @@
   "view.commands.name": "Harness Commands",
   "command.findCommand.title": "Find Command",
   "command.copyCommand.title": "Copy Command",
+  "command.openCommandDocumentation.title": "Open Documentation",
   "view.summary.name": "Harness Summary",
   "category.harness": "Harness",
   "command.editor.findAllReferences.title": "Harness: Find All References",

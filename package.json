@@ -122,6 +122,11 @@
         "title": "%command.copyCommand.title%"
       },
       {
+        "command": "harnessNavigator.openCommandDocumentation",
+        "category": "%category.harness%",
+        "title": "%command.openCommandDocumentation.title%"
+      },
+      {
         "command": "harnessNavigator.editor.findAllReferences",
         "category": "%category.harness%",
         "title": "%command.editor.findAllReferences.title%"
@@ -175,6 +180,11 @@
           "group": "navigation@1"
         },
         {
+          "command": "harnessNavigator.openCommandDocumentation",
+          "when": "view == harnessNavigator.commands && viewItem == harnessCommandItem",
+          "group": "navigation@2"
+        },
+        {
           "command": "harnessNavigator.copyCommand",
           "when": "view == harnessNavigator.artifacts && viewItem == harnessArtifactItem || view == harnessNavigator.focus && viewItem == harnessArtifactItem",
           "group": "navigation@3"
@@ -211,6 +221,10 @@
         },
         {
           "command": "harnessNavigator.copyCommand",
+          "when": "false"
+        },
+        {
+          "command": "harnessNavigator.openCommandDocumentation",
           "when": "false"
         },
         {

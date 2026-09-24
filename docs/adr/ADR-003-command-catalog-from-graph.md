@@ -12,6 +12,7 @@ requirements:
 steps:
   - STEP-006
   - STEP-007
+  - STEP-015
 ---
 
 # ADR-003 — Command Catalog строится из command graph

@@ -173,7 +173,7 @@ suite('Command Catalog (Extension Host)', () => {
       () => undefined,
       () => undefined,
     );
-    for (const target of ['planning', 'docs']) {
+    for (const target of ['planning', 'docs', '.harness/docs']) {
       await vscode.workspace.fs
         .delete(vscode.Uri.joinPath(valid.uri, target), { recursive: true, useTrash: false })
         .then(
@@ -412,4 +412,121 @@ suite('Command Catalog (Extension Host)', () => {
     await loadGraph('{ malformed', 'readError');
     assert.ok((await diagnosticLines()).some((line) => line.includes('CommandGraphReadError')));
   });
+
+  const DOCS_PATH = '.harness/docs/COMMANDS.md';
+  const writeDocs = async () => {
+    await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(valid.uri, '.harness/docs'));
+    await vscode.workspace.fs.writeFile(
+      vscode.Uri.joinPath(valid.uri, DOCS_PATH),
+      encoder.encode(
+        '# Commands\n\nintro\n\n<a id="command-step-list"></a>\n## STEP LIST\n\ntext\n',
+      ),
+    );
+  };
+  const commandNode = (canonical: string) => {
+    const node = extensionModule
+      .getCommandsViewCommandNodes()
+      .find((candidate) => candidate.command.canonical === canonical);
+    assert.ok(node, canonical);
+    return node;
+  };
+  const openedEditorPath = () => vscode.window.activeTextEditor?.document.uri.fsPath;
+
+  test('openCommandDocumentation: manifest, палитра и меню', () => {
+    const extension = vscode.extensions.getExtension(EXTENSION_ID);
+    assert.ok(extension);
+    const contributes = (extension.packageJSON as { contributes: unknown }).contributes as {
+      commands: { command: string; category?: string; title: string }[];
+      menus: Record<string, { command: string; when?: string; group?: string }[]>;
+    };
+    const declared = contributes.commands.find(
+      (entry) => entry.command === 'harnessNavigator.openCommandDocumentation',
+    );
+    assert.ok(declared);
+    assert.ok(declared.category);
+    assert.ok(!declared.title.startsWith('Harness'));
+    const expected = russian() ? 'Открыть документацию' : 'Open Documentation';
+    assert.ok(
+      declared.title === expected || declared.title === '%command.openCommandDocumentation.title%',
+      declared.title,
+    );
+    assert.equal(
+      contributes.menus.commandPalette?.find(
+        (entry) => entry.command === 'harnessNavigator.openCommandDocumentation',
+      )?.when,
+      'false',
+    );
+    const items = contributes.menus['view/item/context'] ?? [];
+    const groupOf = (command: string) =>
+      items.find(
+        (entry) =>
+          entry.command === command && entry.when?.includes('viewItem == harnessCommandItem'),
+      )?.group;
+    assert.equal(groupOf('harnessNavigator.copyCommand'), 'navigation@1');
+    assert.equal(groupOf('harnessNavigator.openCommandDocumentation'), 'navigation@2');
+  });
+
+  test('openCommandDocumentation: открывает файл на секции якоря', async () => {
+    await writeDocs();
+    await loadGraph(graphText(), 'ready');
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    await vscode.commands.executeCommand(
+      'harnessNavigator.openCommandDocumentation',
+      commandNode('STEP LIST'),
+    );
+    const editor = vscode.window.activeTextEditor;
+    assert.ok(editor);
+    assert.equal(editor.document.uri.fsPath.endsWith('COMMANDS.md'), true);
+    assert.equal(editor.selection.active.line, 5);
+  });
+
+  test('openCommandDocumentation: отсутствующий якорь — курсор в начале', async () => {
+    await writeDocs();
+    await loadGraph(
+      graphText((graph) => {
+        (graph.domains.STEP?.commands.LIST as { documentation: string }).documentation =
+          '.harness/docs/COMMANDS.md#no-such-anchor';
+      }),
+      'ready',
+    );
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    await vscode.commands.executeCommand(
+      'harnessNavigator.openCommandDocumentation',
+      commandNode('STEP LIST'),
+    );
+    assert.equal(vscode.window.activeTextEditor?.selection.active.line, 0);
+  });
+
+  const rejected: [string, string][] = [
+    ['пустое documentation', ''],
+    ['отсутствующий файл', '.harness/docs/MISSING.md#x'],
+    ['traversal', '../outside.md#x'],
+    ['абсолютный путь', '/etc/hostname'],
+  ];
+  for (const [name, documentation] of rejected) {
+    test(`openCommandDocumentation: ${name} — редактор не открывается, без исключений`, async () => {
+      await writeDocs();
+      await loadGraph(
+        graphText((graph) => {
+          (graph.domains.STEP?.commands.LIST as { documentation: string }).documentation =
+            documentation;
+        }),
+        'ready',
+      );
+      const messages: string[] = [];
+      (vscode.window as { showInformationMessage: unknown }).showInformationMessage = (
+        message: string,
+      ) => {
+        messages.push(message);
+        return Promise.resolve(undefined);
+      };
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      await vscode.commands.executeCommand(
+        'harnessNavigator.openCommandDocumentation',
+        commandNode('STEP LIST'),
+      );
+      assert.equal(openedEditorPath(), undefined);
+      assert.equal(messages.length, 1);
+    });
+  }
 });

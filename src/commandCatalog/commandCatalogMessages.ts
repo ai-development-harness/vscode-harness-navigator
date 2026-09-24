@@ -30,6 +30,10 @@ const MESSAGES = {
   copyPickStepCommand: 'Select a command to copy for {0}',
   copyNotStep: 'Select a STEP artifact to copy a STEP command.',
   copyNoStepCommands: 'The Harness command graph has no commands that take a STEP target.',
+  docNone: 'This Harness command has no documentation reference.',
+  docBlocked:
+    'The documentation reference of this command is outside the project and was not opened.',
+  docNotFound: 'The documentation file was not found: {0}',
 } as const;
 
 export const COMMAND_CATALOG_MESSAGES = MESSAGES;
