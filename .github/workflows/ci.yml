@@ -1,0 +1,238 @@
+# Имя workflow в GitHub Actions UI.
+# Пример: CI.
+name: CI
+# События, на которых выполняются project quality gates и проверка VSIX.
+# Пример: pull_request проверяет изменения до merge, push в main — итог после merge.
+on:
+  # Проверять каждый Pull Request.
+  # Пример: любой PR запускает jobs quality и package.
+  pull_request:
+  # Проверять push, включая merge в основную ветку.
+  # Пример: squash merge PR → push в main → CI.
+  push:
+    # Ограничить push основной веткой.
+    # Пример: только main.
+    branches:
+      - main
+# Минимальные GitHub token permissions всего workflow.
+# Пример: только чтение contents; workflow ничего не публикует.
+permissions:
+  # Только чтение repository contents.
+  # Пример: достаточно для checkout и локальных проверок.
+  contents: read
+# Отменять устаревшие запуски того же PR или ref.
+# Пример: новый commit в PR отменяет предыдущую проверку этого PR.
+concurrency:
+  # Группа: workflow, событие и номер PR либо ref.
+  # Пример: CI-pull_request-12 и CI-push-refs/heads/main.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  # Новый запуск заменяет устаревший из той же группы.
+  # Пример: true оставляет только актуальную проверку PR.
+  cancel-in-progress: true
+# Набор jobs workflow.
+# Пример: quality и package выполняются параллельно.
+jobs:
+  # Быстрые quality gates; Extension Host suites (yarn test:integration) остаются локальной проверкой.
+  # Пример: quality — required check в branch protection.
+  quality:
+    # Отображаемое имя job.
+    # Пример: Quality.
+    name: Quality
+    # Runner image.
+    # Пример: ubuntu-latest.
+    runs-on: ubuntu-latest
+    # Максимальное время job до остановки.
+    # Пример: 15 минут.
+    timeout-minutes: 15
+    # Последовательность шагов job.
+    # Пример: checkout → Node → install → gates.
+    steps:
+      # Имя шага получения кода.
+      # Пример: Checkout repository.
+      - name: Checkout repository
+        # Официальный action checkout на актуальном major.
+        # Пример: actions/checkout@v7.
+        uses: actions/checkout@v7
+        # Параметры checkout.
+        # Пример: отключить сохранение credentials.
+        with:
+          # Не оставлять GitHub token в git config runner.
+          # Пример: false — job только читает repository.
+          persist-credentials: false
+      # Имя шага включения Corepack.
+      # Пример: Enable Corepack.
+      - name: Enable Corepack
+        # corepack берёт версию Yarn из packageManager; шаг ДО setup-node, иначе cache: yarn не найдёт yarn.
+        # Пример: corepack enable.
+        run: corepack enable
+      # Имя шага настройки Node.js.
+      # Пример: Setup Node.js.
+      - name: Setup Node.js
+        # Официальный action setup-node на актуальном major.
+        # Пример: actions/setup-node@v7.
+        uses: actions/setup-node@v7
+        # Параметры setup-node.
+        # Пример: версия Node и кэш зависимостей.
+        with:
+          # Версия Node.js по engines проекта.
+          # Пример: 20.
+          node-version: 20
+          # Кэш зависимостей менеджера пакетов.
+          # Пример: yarn.
+          cache: yarn
+      # Имя шага установки зависимостей.
+      # Пример: Install dependencies.
+      - name: Install dependencies
+        # Установка строго по yarn.lock.
+        # Пример: yarn install --immutable падает при расхождении lockfile.
+        run: yarn install --immutable
+      # Имя шага.
+      # Пример: Typecheck.
+      - name: Typecheck
+        # Команда шага из package.json scripts.
+        # Пример: yarn typecheck.
+        run: yarn typecheck
+      # Имя шага.
+      # Пример: Lint.
+      - name: Lint
+        # Команда шага из package.json scripts.
+        # Пример: yarn lint.
+        run: yarn lint
+      # Имя шага.
+      # Пример: Format check.
+      - name: Format check
+        # Команда шага из package.json scripts.
+        # Пример: yarn format.
+        run: yarn format
+      # Имя шага.
+      # Пример: Unit tests.
+      - name: Unit tests
+        # Команда шага из package.json scripts.
+        # Пример: yarn test:unit.
+        run: yarn test:unit
+      # Имя шага.
+      # Пример: Build.
+      - name: Build
+        # Команда шага из package.json scripts.
+        # Пример: yarn build.
+        run: yarn build
+  # Сборка VSIX, инспекция пакета и тесты упакованного расширения (EN/RU).
+  # Пример: package — отдельный job с xvfb.
+  package:
+    # Отображаемое имя job.
+    # Пример: Package.
+    name: Package
+    # Runner image.
+    # Пример: ubuntu-latest; xvfb нужен для Extension Host.
+    runs-on: ubuntu-latest
+    # Максимальное время job до остановки.
+    # Пример: 30 минут: загрузка VS Code и два Extension Host прогона.
+    timeout-minutes: 30
+    # Последовательность шагов job.
+    # Пример: checkout → Node → install → package → test:packaged → artifact.
+    steps:
+      # Имя шага получения кода.
+      # Пример: Checkout repository.
+      - name: Checkout repository
+        # Официальный action checkout на актуальном major.
+        # Пример: actions/checkout@v7.
+        uses: actions/checkout@v7
+        # Параметры checkout.
+        # Пример: отключить сохранение credentials.
+        with:
+          # Не оставлять GitHub token в git config runner.
+          # Пример: false — job только читает repository.
+          persist-credentials: false
+      # Имя шага включения Corepack.
+      # Пример: Enable Corepack.
+      - name: Enable Corepack
+        # corepack берёт версию Yarn из packageManager; шаг ДО setup-node, иначе cache: yarn не найдёт yarn.
+        # Пример: corepack enable.
+        run: corepack enable
+      # Имя шага настройки Node.js.
+      # Пример: Setup Node.js.
+      - name: Setup Node.js
+        # Официальный action setup-node на актуальном major.
+        # Пример: actions/setup-node@v7.
+        uses: actions/setup-node@v7
+        # Параметры setup-node.
+        # Пример: версия Node и кэш зависимостей.
+        with:
+          # Версия Node.js по engines проекта.
+          # Пример: 20.
+          node-version: 20
+          # Кэш зависимостей менеджера пакетов.
+          # Пример: yarn.
+          cache: yarn
+      # Имя шага установки зависимостей.
+      # Пример: Install dependencies.
+      - name: Install dependencies
+        # Установка строго по yarn.lock.
+        # Пример: yarn install --immutable падает при расхождении lockfile.
+        run: yarn install --immutable
+      # Имя шага.
+      # Пример: Package VSIX.
+      - name: Package VSIX
+        # Команда шага из package.json scripts.
+        # Пример: yarn package.
+        run: yarn package
+      # Имя шага.
+      # Пример: Inspect package.
+      - name: Inspect package
+        # Команда шага из package.json scripts.
+        # Пример: yarn inspect:package.
+        run: yarn inspect:package
+      # Имя шага определения версии stable VS Code.
+      # Пример: Resolve stable VS Code version.
+      - name: Resolve stable VS Code version
+        # ID шага, чтобы ссылаться на его outputs в ключе кэша.
+        # Пример: steps.vscode.outputs.version.
+        id: vscode
+        # Версия stable входит в ключ кэша: при новой версии ключ меняется и кэш держит только актуальную сборку.
+        # Пример: version=1.139.0 в GITHUB_OUTPUT.
+        run: echo "version=$(curl -fsSL https://update.code.visualstudio.com/api/releases/stable | jq -r '.[0]')" >> "$GITHUB_OUTPUT"
+      # Имя шага кэша VS Code.
+      # Пример: Cache VS Code.
+      - name: Cache VS Code
+        # Официальный action cache на актуальном major.
+        # Пример: actions/cache@v6.
+        uses: actions/cache@v6
+        # Параметры кэша.
+        # Пример: только скачанные сборки VS Code.
+        with:
+          # Кэшируются сборки VS Code без user-data и extensions.
+          # Пример: .vscode-test/vscode-linux-x64-1.139.0.
+          path: .vscode-test/vscode-*
+          # Точный ключ без restore-keys: версия VS Code и хэш конфигурации.
+          # Пример: vscode-Linux-1.139.0-<hash>.
+          key: vscode-${{ runner.os }}-${{ steps.vscode.outputs.version }}-${{ hashFiles('.vscode-test.mjs', 'yarn.lock') }}
+      # Имя шага установки xvfb.
+      # Пример: Install xvfb.
+      - name: Install xvfb
+        # Виртуальный X-сервер для Extension Host на headless Linux.
+        # Пример: apt-get update перед install.
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+      # Имя шага тестов упакованного расширения.
+      # Пример: Test packaged extension.
+      - name: Test packaged extension
+        # test:packaged (EN/RU) под виртуальным дисплеем.
+        # Пример: xvfb-run сам выбирает свободный номер дисплея.
+        run: xvfb-run --auto-servernum yarn test:packaged
+      # Имя шага загрузки VSIX.
+      # Пример: Upload VSIX.
+      - name: Upload VSIX
+        # Официальный action upload-artifact на актуальном major.
+        # Пример: actions/upload-artifact@v7.
+        uses: actions/upload-artifact@v7
+        # Параметры artifact.
+        # Пример: имя, путь, поведение при отсутствии файлов.
+        with:
+          # Имя artifact в UI запуска.
+          # Пример: vsix.
+          name: vsix
+          # Собранный VSIX в корне repository.
+          # Пример: vscode-harness-navigator-0.1.0.vsix.
+          path: vscode-harness-navigator-*.vsix
+          # Ошибка, если VSIX не найден.
+          # Пример: error — не пропускать молча.
+          if-no-files-found: error

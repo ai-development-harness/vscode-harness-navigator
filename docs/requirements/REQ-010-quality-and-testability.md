@@ -7,6 +7,7 @@ steps:
   - STEP-001
   - STEP-007
   - STEP-010
+  - STEP-011
 adrs:
   - ADR-002
   - ADR-004
