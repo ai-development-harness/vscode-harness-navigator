@@ -302,6 +302,8 @@ suite('extension lifecycle (Extension Host)', () => {
       'harnessNavigator.clearFilters',
       'harnessNavigator.copyArtifactId',
       'harnessNavigator.copyArtifactPath',
+      'harnessNavigator.editor.findAllReferences',
+      'harnessNavigator.editor.showRelations',
     ]) {
       assert.ok(
         registeredCommands.includes(command),

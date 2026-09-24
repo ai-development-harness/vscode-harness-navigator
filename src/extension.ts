@@ -227,6 +227,20 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
   );
   registry.register(registerFindAllReferencesCommand(navigation));
   registry.register(registerShowRelationsCommand(navigation));
+  // STEP-014: menu-only алиасы для editor/context (заголовок с префиксом «Harness:»);
+  // тонкие обёртки над оригиналами, литеральные id нужны для inspect:package.
+  registry.register(
+    vscode.commands.registerCommand(
+      'harnessNavigator.editor.findAllReferences',
+      (...args: unknown[]) =>
+        vscode.commands.executeCommand('harnessNavigator.findAllReferences', ...args),
+    ),
+  );
+  registry.register(
+    vscode.commands.registerCommand('harnessNavigator.editor.showRelations', (...args: unknown[]) =>
+      vscode.commands.executeCommand('harnessNavigator.showRelations', ...args),
+    ),
+  );
 
   activeRegistry = registry;
   activeProjectStates = projectStates;
