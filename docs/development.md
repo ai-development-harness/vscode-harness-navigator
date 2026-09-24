@@ -34,7 +34,8 @@ yarn install --immutable
 | `yarn build:dev` | Очищает `dist`/`out` и собирает dev bundle `dist/extension.js` (sourcemap, без минификации). |
 | `yarn build` | Очищает `dist`/`out` и собирает production bundle (минификация, без sourcemap). |
 | `yarn compile:tests` | Компилирует `src/test/**/*.ts` в `out/test/**` через `tsc`. |
-| `yarn package` | Собирает `vscode-harness-navigator-<version>.vsix` через `@vscode/vsce` (production-сборка запускается `vscode:prepublish`). |
+| `yarn generate:icon` | Детерминированно (без зависимостей) пересоздаёт `resources/icon.png` (256x256 RGBA PNG) из `scripts/iconEncoder.ts`; пишет только этот файл. Иконку можно заменить дизайнерским PNG, правила inspection не изменятся. |
+| `yarn package` | Собирает `vscode-harness-navigator-<version>.vsix` через `@vscode/vsce` с `--readme-path docs/marketplace/README.md` (production-сборка запускается `vscode:prepublish`). |
 | `yarn inspect:package` | Читает VSIX (zero-dependency ZIP reader, без исполнения), печатает entries с SHA-256 и завершается с кодом 1 при нарушении allowlist, bundle-правил или secret heuristics. |
 | `yarn test:packaged` | `compile:tests` → извлечение VSIX в `out/packaged/extension` → подготовка `out/test-workspace` → Extension Host профили `packaged-en`, `packaged-ru` против извлечённого production bundle. Не пересобирает bundle: сначала выполните `yarn build && yarn package`. |
 
@@ -87,7 +88,11 @@ bundle. `__packaged_tests__` — единственное дополнение �
 
 `esbuild.js` собирает `src/extension.ts` в единый CommonJS `dist/extension.js` (Node runtime,
 `vscode` исключён). `.vscodeignore` ограничивает VSIX production bundle, manifest, `package.nls*`,
-`l10n/`, `README.md` и `LICENSE`; sourcemap в пакет не входит.
+`l10n/`, `resources/icon.png` и `LICENSE`; sourcemap в пакет не входит. README репозитория в VSIX не
+попадает: vsce с `--readme-path` кладёт `docs/marketplace/README.md` как `extension/readme.md`
+(поэтому `!README.md` в `.vscodeignore` нет). `docs/marketplace/README.md` — двуязычный (RU/EN)
+README для пользователей расширения: только абсолютные https-ссылки, без Harness-managed блока,
+изображений и ссылок вида `#<число>`.
 
 ## Release checklist (ручной)
 
@@ -95,14 +100,18 @@ bundle. `__packaged_tests__` — единственное дополнение �
 2. `yarn typecheck`, `yarn lint`, `yarn format`, `yarn test:unit`
 3. `xvfb-run -a yarn test:integration` (на машине с display — `yarn test:integration`)
 4. `yarn build && yarn package`
-5. `yarn inspect:package` — проверить список entries и `0 violations`
+5. `yarn inspect:package` — проверить список entries (11, включая `extension/resources/icon.png`) и
+   `0 violations`; проверить иконку (PNG, квадратная 128..1024, до 200 KiB, без text-чанков) и что
+   `extension/readme.md` совпадает с `docs/marketplace/README.md` и не содержит Harness-блока
 6. `xvfb-run -a yarn test:packaged`
 7. `git diff --check` и `python3 .harness/tools/validate.py --mode manual`
 8. Ручная проверка Status Bar / Summary в Extension Development Host (RU/EN, светлая/тёмная тема).
+9. Ручная установка VSIX в чистый профиль (`code --user-data-dir <tmp> --extensions-dir <tmp2>
+   --install-extension <vsix>`; одного `--user-data-dir` мало): иконка в списке Extensions в светлой
+   и тёмной теме, README на вкладке Details без битых ссылок.
 
 Этот проект **не** выполняет автоматическую публикацию: `vsce publish`, Git tag, push и release
-находятся вне scope и делаются владельцем вручную. Известное ограничение: `readme.md` внутри VSIX
-пока является README репозитория, а не product-facing marketplace README (вопрос публикации).
+(включая Marketplace/Open VSX) находятся вне scope и делаются владельцем вручную.
 
 ## Security / containment
 

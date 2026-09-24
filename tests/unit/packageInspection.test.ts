@@ -2,13 +2,32 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as zlib from 'node:zlib';
 import { ZipFormatError, readZipEntries, readZipEntryData } from '../../scripts/packageArchive';
+import { encodePng, pngChunk, renderIconRgba, PNG_SIGNATURE } from '../../scripts/iconEncoder';
 import {
   ALLOWED_ENTRIES,
+  compareReadmeWithSource,
   inspectPackage,
+  inspectReadmeText,
   type PackageInspectionInput,
 } from '../../scripts/packageInspection';
 
-const validManifest = { main: './dist/extension.js', l10n: './l10n', contributes: {} };
+const validManifest = {
+  main: './dist/extension.js',
+  l10n: './l10n',
+  icon: 'resources/icon.png',
+  galleryBanner: { color: '#1f2937', theme: 'dark' },
+  contributes: {},
+};
+
+function png(side: number, width: number = side): Buffer {
+  return encodePng(
+    width,
+    side,
+    renderIconRgba(Math.max(width, side)).subarray(0, width * side * 4),
+  );
+}
+const validIcon = png(256);
+const ICON_ENTRY = 'extension/resources/icon.png';
 const cleanBundle =
   'var a=require("vscode");var b=require("node:fs");var c=require("node:path");module.exports={};';
 
@@ -19,6 +38,7 @@ function input(overrides: Partial<PackageInspectionInput> = {}): PackageInspecti
     packageJson: validManifest,
     bundle: cleanBundle,
     textEntries: new Map(),
+    binaryEntries: new Map([[ICON_ENTRY, validIcon]]),
     ...overrides,
   };
 }
@@ -262,4 +282,184 @@ test('bundle: executeCommand с литеральными внутренними 
   const bundle =
     'n.commands.executeCommand("vscode.open",U.file(f));n.commands.executeCommand("harnessNavigator.findAllReferences",{a:1});n.commands.executeCommand("editor.action.peekLocations",u,p,l,"peek")';
   assert.deepEqual(inspectPackage(input({ bundle: `${cleanBundle}${bundle}` })), []);
+});
+
+function withIcon(data: Uint8Array): PackageInspectionInput {
+  return input({ binaryEntries: new Map([[ICON_ENTRY, data]]) });
+}
+
+/** Вставляет чанк перед IEND валидного PNG. */
+function insertChunk(base: Buffer, chunk: Buffer): Buffer {
+  return Buffer.concat([
+    base.subarray(0, base.length - 12),
+    chunk,
+    base.subarray(base.length - 12),
+  ]);
+}
+
+test('иконка: валидный PNG проходит, размеры 128 и 1024 допустимы', () => {
+  assert.deepEqual(inspectPackage(withIcon(validIcon)), []);
+  assert.deepEqual(inspectPackage(withIcon(png(128))), []);
+  assert.deepEqual(
+    inspectPackage(withIcon(png(1024))).filter((item) => !item.includes('too large')),
+    [],
+  );
+});
+
+test('иконка: нарушения размеров, формата и метаданных', () => {
+  const cases: [string, Uint8Array, string][] = [
+    ['64x64', png(64), 'icon side'],
+    ['неквадратная', png(200, 256), 'square'],
+    ['больше 1024', png(1025), 'icon side'],
+    ['не PNG', Buffer.from('GIF89a not a png at all'), 'bad signature'],
+    ['tEXt', insertChunk(validIcon, pngChunk('tEXt', Buffer.from('k\0v'))), 'tEXt'],
+    ['iTXt', insertChunk(validIcon, pngChunk('iTXt', Buffer.from('k\0v'))), 'iTXt'],
+    ['zTXt', insertChunk(validIcon, pngChunk('zTXt', Buffer.from('k\0v'))), 'zTXt'],
+    [
+      'больше 200 KiB',
+      insertChunk(validIcon, pngChunk('prVt', Buffer.alloc(201 * 1024))),
+      'too large',
+    ],
+    ['обрезанный', validIcon.subarray(0, 40), 'IEND'],
+    ['без IHDR первым', Buffer.concat([PNG_SIGNATURE, pngChunk('IEND', Buffer.alloc(0))]), 'IHDR'],
+  ];
+  for (const [label, data, expected] of cases) {
+    const violations = inspectPackage(withIcon(data));
+    assert.ok(
+      violations.some((item) => item.includes(expected)),
+      `${label}: ${violations.join(' | ')}`,
+    );
+  }
+});
+
+test('иконка: путь manifest.icon, отсутствие entry и лишние изображения', () => {
+  assert.ok(
+    inspectPackage(input({ packageJson: { ...validManifest, icon: 'images/icon.png' } })).some(
+      (item) => item.includes('manifest icon must be'),
+    ),
+  );
+  assert.ok(
+    inspectPackage(input({ packageJson: { ...validManifest, icon: undefined } })).some((item) =>
+      item.includes('manifest icon must be'),
+    ),
+  );
+  assert.ok(
+    inspectPackage(input({ binaryEntries: new Map() })).some((item) =>
+      item.includes('icon entry is missing'),
+    ),
+  );
+  for (const extra of [
+    'extension/resources/logo.svg',
+    'extension/a.gif',
+    'extension/a.ico',
+    'extension/a.jpg',
+    'extension/a.jpeg',
+    'extension/a.webp',
+    'extension/resources/second.png',
+  ])
+    assert.ok(
+      inspectPackage(input({ entryNames: [...ALLOWED_ENTRIES, extra] })).some((item) =>
+        item.includes(extra),
+      ),
+      extra,
+    );
+});
+
+test('galleryBanner: некорректные color и theme дают violations', () => {
+  for (const galleryBanner of [
+    { color: 'red', theme: 'dark' },
+    { color: '#fff', theme: 'dark' },
+    { color: '#1f2937', theme: 'blue' },
+    { color: '#1f2937' },
+    'dark',
+  ])
+    assert.ok(
+      inspectPackage(input({ packageJson: { ...validManifest, galleryBanner } })).some((item) =>
+        item.includes('galleryBanner'),
+      ),
+      JSON.stringify(galleryBanner),
+    );
+  assert.deepEqual(
+    inspectPackage(input({ packageJson: { ...validManifest, galleryBanner: undefined } })),
+    [],
+  );
+});
+
+test('README: Harness-managed блок и относительные приватные ссылки дают violations', () => {
+  const readme = (text: string): PackageInspectionInput =>
+    input({ textEntries: new Map([['extension/readme.md', text]]) });
+  assert.deepEqual(inspectPackage(readme('# Title\n[repo](https://github.com/a/b)')), []);
+  for (const text of [
+    '<!-- PROJECT:START -->',
+    'x <!-- PROJECT:END -->',
+    '[a](docs/x.md)',
+    '[a](planning/x.md)',
+    '[a](.harness/x.yaml)',
+    '[a](./docs/x.md)',
+  ])
+    assert.ok(inspectPackage(readme(text)).length > 0, text);
+});
+
+test('иконка: данные после IEND, отсутствие IDAT и битый CRC', () => {
+  const noIdat = Buffer.concat([
+    PNG_SIGNATURE,
+    validIcon.subarray(8, 33),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+  const badCrc = Buffer.from(validIcon);
+  badCrc[29] = (badCrc[29] ?? 0) ^ 0xff; // CRC чанка IHDR
+  const cases: [string, Uint8Array, string][] = [
+    [
+      'tEXt после IEND',
+      Buffer.concat([validIcon, pngChunk('tEXt', Buffer.from('k\0v'))]),
+      'trailing',
+    ],
+    ['хвост байтов', Buffer.concat([validIcon, Buffer.from([1, 2, 3])]), 'trailing'],
+    ['без IDAT', noIdat, 'no IDAT'],
+    ['битый CRC', badCrc, 'bad CRC'],
+  ];
+  for (const [label, data, expected] of cases) {
+    const violations = inspectPackage(withIcon(data));
+    assert.ok(
+      violations.some((item) => item.includes(expected)),
+      `${label}: ${violations.join(' | ')}`,
+    );
+  }
+  assert.deepEqual(inspectPackage(withIcon(validIcon)), []);
+});
+
+test('README: расширенные формы относительных ссылок и переписанная vsce форма', () => {
+  const bad = [
+    '[a](docs/x.md)',
+    '[a](/docs/x.md)',
+    '[a](../docs/x.md)',
+    '[a](../../planning/x.md)',
+    '[a](/.harness/x.yaml)',
+    '[a](other.md)',
+    '<img src="images/a.png">',
+    "<a href='docs/a.md'>x</a>",
+    '[ref]: docs/x.md',
+    'see #12 for details',
+    '[a](https://github.com/o/r/blob/HEAD/docs/x.md)',
+    'https://github.com/o/r/blob/HEAD/planning/x.md',
+    'https://github.com/o/r/blob/HEAD/.harness/x.yaml',
+  ];
+  for (const text of bad) assert.ok(inspectReadmeText(text).length > 0, text);
+  const good = [
+    '# Title\n[a](https://github.com/o/r)',
+    '<a href="https://example.com">x</a>',
+    '[a](#section)',
+    '[ref]: https://example.com/x',
+    'Issue-free text with STEP-010',
+  ];
+  for (const text of good) assert.deepEqual(inspectReadmeText(text), [], text);
+});
+
+test('README: сравнение с исходником — equal, differs, source-missing', () => {
+  assert.equal(compareReadmeWithSource('a', 'a').status, 'equal');
+  assert.equal(compareReadmeWithSource('a', 'b').status, 'differs');
+  const missing = compareReadmeWithSource('a', undefined);
+  assert.equal(missing.status, 'source-missing');
+  assert.match(missing.message, /skipped/u);
+  assert.equal(compareReadmeWithSource(undefined, 'a').status, 'packaged-missing');
 });

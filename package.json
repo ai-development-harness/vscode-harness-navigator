@@ -4,6 +4,11 @@
   "description": "%extension.description%",
   "version": "0.0.1",
   "publisher": "ai-development-harness",
+  "icon": "resources/icon.png",
+  "galleryBanner": {
+    "color": "#1f2937",
+    "theme": "dark"
+  },
   "license": "MIT",
   "private": true,
   "repository": {
@@ -321,9 +326,10 @@
     "test:integration": "yarn build:dev && yarn compile:tests && node --import tsx scripts/prepare-test-workspace.ts && vscode-test --label integration-en --label integration-ru --label mvp-en --label mvp-ru",
     "test": "yarn test:unit && yarn test:integration",
     "vscode:prepublish": "yarn build",
-    "package": "vsce package --no-dependencies",
+    "package": "vsce package --no-dependencies --readme-path docs/marketplace/README.md",
     "inspect:package": "node --import tsx scripts/inspect-package.ts",
-    "test:packaged": "yarn compile:tests && node --import tsx scripts/prepare-packaged-extension.ts && node --import tsx scripts/prepare-test-workspace.ts && vscode-test --label packaged-en --label packaged-ru"
+    "test:packaged": "yarn compile:tests && node --import tsx scripts/prepare-packaged-extension.ts && node --import tsx scripts/prepare-test-workspace.ts && vscode-test --label packaged-en --label packaged-ru",
+    "generate:icon": "node --import tsx scripts/generate-icon.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -346,5 +352,12 @@
   "dependencies": {
     "js-yaml": "^4.1.0"
   },
-  "packageManager": "yarn@4.10.3+sha512.c38cafb5c7bb273f3926d04e55e1d8c9dfa7d9c3ea1f36a4868fa028b9e5f72298f0b7f401ad5eb921749eb012eb1c3bb74bf7503df3ee43fd600d14a018266f"
+  "packageManager": "yarn@4.10.3+sha512.c38cafb5c7bb273f3926d04e55e1d8c9dfa7d9c3ea1f36a4868fa028b9e5f72298f0b7f401ad5eb921749eb012eb1c3bb74bf7503df3ee43fd600d14a018266f",
+  "keywords": [
+    "harness",
+    "navigation",
+    "requirements",
+    "adr",
+    "read-only"
+  ]
 }
