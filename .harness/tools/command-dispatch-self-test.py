@@ -337,13 +337,38 @@ def main() -> int:
         assert special_run["status"] == "SEMANTIC", special_run
         assert special_run["command"] == "STEP RUN STEP-124", special_run
         assert special_run["skill"] == "run-step", special_run
+        # Regression #113: non-coding STEP RUN не закрывается одним словом
+        # модели — SUCCESS без type-specific completion proof блокируется.
         special_done = complete_dispatch(
             root,
             special_run["rootCommand"],
             special_run["command"],
             "SUCCESS",
         )
-        assert special_done["status"] == "DONE", special_done
+        assert special_done["status"] == "BLOCKED", special_done
+        assert special_done["reasonCode"] == "STEP_COMPLETION_PROOF_FAILED", special_done
+        special_blocked = complete_dispatch(
+            root,
+            special_run["rootCommand"],
+            special_run["command"],
+            "BLOCKED",
+        )
+        assert special_blocked["status"] == "BLOCKED", special_blocked
+
+        # Regression #113: completion чужой (не текущей) команды отклоняется до
+        # Verification и не трогает state.
+        foreign = start_dispatch(root, "PROJECT QUICK FIX: foreign completion regression")
+        assert foreign["status"] == "SEMANTIC", foreign
+        foreign_done = complete_dispatch(
+            root,
+            foreign["rootCommand"],
+            "STEP IMPLEMENT STEP-001",
+            "SUCCESS",
+        )
+        assert foreign_done["status"] == "BLOCKED", foreign_done
+        assert foreign_done["reasonCode"] == "COMMAND_NOT_CURRENT", foreign_done
+        foreign_ok = complete_dispatch(root, foreign["rootCommand"], foreign["command"], "SUCCESS")
+        assert foreign_ok["status"] == "DONE", foreign_ok
 
         # Deterministic CHECK должен автоматически пройти первый segment
         # и вернуть модели только следующий semantic COMMIT handoff.

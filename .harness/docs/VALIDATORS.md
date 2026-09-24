@@ -862,9 +862,11 @@ python3 .harness/tools/step-context.py STEP-NNN --phase review --json
 
 - `- command: \`...\`` — argv-команда, запускаемая напрямую без shell;
 - `- manual: ...` — действительно неавтоматизируемая semantic/visual проверка;
-- shell control operators не разрешены; сложную проверку нужно вынести в repository script;
+- shell control operators не разрешены; сложную проверку нужно вынести в repository script. Это защита от случайного shell-синтаксиса, а не sandbox: commands — доверенная часть STEP contract и исполняются с правами текущего пользователя;
+- command запускается в отдельной process group; по timeout и после завершения lead process вся group завершается, фоновые процессы не переживают Verification;
+- stdout/stderr читаются потоково: SHA-256 и byte count считаются по всему выводу, в памяти хранится только bounded tail;
 - timeout берётся из `execution.verificationCommandTimeoutSeconds`;
-- repository revision до/после каждой command обязана совпасть;
+- repository revision до/после каждой command обязана совпасть (`VERIFICATION_MUTATED_REPOSITORY`); refs и HEAD тоже (`VERIFICATION_MUTATED_REFS`);
 - PASS Evidence хранит exit code, duration, stdout/stderr SHA-256 и byte counts; raw successful output не загружается в model context;
 - FAIL может вернуть короткий diagnostic tail;
 - manual checks не считаются PASS без exact supplied observation.

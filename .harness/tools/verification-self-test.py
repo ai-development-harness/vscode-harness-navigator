@@ -8,7 +8,11 @@ import subprocess
 import tempfile
 
 from command_dispatch import complete_dispatch, start_dispatch
-from verification import EVIDENCE_START, run_step_verification
+import hashlib
+import os
+import time
+
+from verification import CAPTURE_TAIL_BYTES, EVIDENCE_START, _run_command, run_step_verification
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -233,6 +237,49 @@ def main() -> int:
         unsafe = run_step_verification(root, "STEP-001")
         assert unsafe["status"] == "BLOCKED", unsafe
         assert unsafe["reasonCode"] == "VERIFICATION_RUNTIME_BLOCKED", unsafe
+
+        # Regression #115: timeout убивает всю process group, включая внуков,
+        # которые иначе продолжили бы работать после Verification.
+        if os.name == "posix":
+            reset(root)
+            leak = root / "leaked-grandchild.txt"
+            grandchild = (
+                "import subprocess, sys, time; "
+                "subprocess.Popen([sys.executable, '-c', "
+                "'import time, pathlib; time.sleep(2); pathlib.Path(\\'leaked-grandchild.txt\\').write_text(\\'x\\')']); "
+                "time.sleep(30)"
+            )
+            timed = _run_command(root, f'python3 -c "{grandchild}"', timeout_seconds=1)
+            assert timed["status"] == "FAIL" and timed["reasonCode"] == "TIMEOUT", timed
+            time.sleep(3)
+            assert not leak.exists(), "grandchild survived verification timeout"
+
+        # Regression #115: большой вывод учитывается полностью (hash/bytes),
+        # но в памяти хранится только bounded tail.
+        size = 5 * 1024 * 1024
+        big = _run_command(
+            root,
+            f'python3 -c "import sys; sys.stdout.buffer.write(b\'a\' * {size}); sys.exit(3)"',
+            timeout_seconds=60,
+        )
+        assert big["stdoutBytes"] == size, big["stdoutBytes"]
+        assert big["stdoutSha256"] == hashlib.sha256(b"a" * size).hexdigest()
+        assert big["status"] == "FAIL" and len(big["stdoutTail"] or "") <= CAPTURE_TAIL_BYTES
+
+        # Regression #115: Verification не может создавать/двигать refs.
+        reset(root)
+        step.write_text(
+            task(command_line("git tag verification-side-effect")),
+            encoding="utf-8",
+            newline="\n",
+        )
+        run(root, "git", "add", ".")
+        run(root, "git", "commit", "-qm", "refs fixture")
+        refs_mutated = run_step_verification(root, "STEP-001")
+        assert refs_mutated["status"] == "BLOCKED", refs_mutated
+        assert refs_mutated["reasonCode"] == "VERIFICATION_MUTATED_REFS", refs_mutated
+        run(root, "git", "tag", "-d", "verification-side-effect")
+        run(root, "git", "reset", "-q", "--hard", "HEAD~1")
 
         # Dispatcher enforces the runner before FIX/IMPLEMENT SUCCESS. Manual
         # pending returns the same semantic command; confirmed checks allow DONE.

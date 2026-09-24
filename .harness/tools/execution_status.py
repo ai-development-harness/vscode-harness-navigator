@@ -619,8 +619,14 @@ def load_status(root: Path) -> dict[str, Any]:
     with execution_state_lock(root):
         if not path.is_file():
             return empty_status()
-        with path.open("r", encoding="utf-8") as fh:
-            value = json.load(fh)
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                value = json.load(fh)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"execution-status: cannot parse JSON: {exc}") from exc
+        # Не-object root (array/string) — повреждённый state, а не AttributeError (#117).
+        if not isinstance(value, dict):
+            raise ValueError("execution-status: root must be a JSON object")
 
         if value.get("schemaVersion") == LEGACY_STATUS_SCHEMA_VERSION:
             errors = _validate_v1_status(value)
@@ -1603,9 +1609,15 @@ def begin_command(
 
     if execution["mode"] == "chain":
         # Chain продолжает только sequence, которую пользователь ввёл изначально.
-        # CTS не имеет права добавить в неё «логичный» лишний segment.
+        # CTS не имеет права добавить в неё «логичный» лишний segment. Позиция
+        # всегда продвигается на следующий segment: команда может повторяться
+        # (REVIEW > FIX > REVIEW), и поиск первого вхождения зациклил бы chain (#116).
         sequence = execution["sequence"]
-        index = sequence.index(normalized_command)
+        index = int(execution.get("currentIndex", 0)) + 1
+        if index >= len(sequence) or sequence[index] != normalized_command:
+            raise ValueError(
+                f"chain expects segment {index}, cannot begin {normalized_command!r}"
+            )
         execution["currentIndex"] = index
 
     # FIX -> REVIEW завершает один repair cycle. Счётчик хранится в root
@@ -1614,7 +1626,7 @@ def begin_command(
     previous_parsed = normalize_single_command(root, current["command"])
     next_parsed = normalize_single_command(root, normalized_command)
     if (
-        execution["mode"] == "orchestration"
+        execution["mode"] in {"orchestration", "chain"}
         and previous_parsed.get("domain") == "STEP"
         and previous_parsed.get("operation") == "FIX"
         and current.get("status") == "complete"
@@ -1642,6 +1654,54 @@ def begin_command(
     save_status(root, status)
     return execution
 
+
+
+def running_command_for(root: Path, root_command: str) -> str | None:
+    """Вернуть текущую running команду active execution root или None."""
+    normalized_root = _normalize_root(root, root_command)["rootCommand"]
+    latest = _latest_invocation(load_status(root), root_command=normalized_root)
+    if latest is None or latest[0] != "active":
+        return None
+    execution = latest[1]
+    current = execution.get("current")
+    if execution.get("status") != "running" or not isinstance(current, dict):
+        return None
+    if current.get("status") != "running":
+        return None
+    command = current.get("command")
+    return command if isinstance(command, str) else None
+
+
+def _fix_review_limit(
+    root: Path,
+    execution: dict[str, Any],
+    current_command: str,
+    next_command: str,
+    result: str,
+) -> dict[str, Any] | None:
+    """BLOCKED, если REVIEW FAIL открыл бы FIX сверх execution.maxFixReviewCycles."""
+    current_parsed = normalize_single_command(root, current_command)
+    next_parsed = normalize_single_command(root, next_command)
+    if not (
+        current_parsed.get("domain") == "STEP"
+        and current_parsed.get("operation") == "REVIEW"
+        and result == "FAIL"
+        and next_parsed.get("operation") == "FIX"
+    ):
+        return None
+    cycles = int(execution.get("fixReviewCycles", 0))
+    limit = max_fix_review_cycles(root)
+    if cycles < limit:
+        return None
+    return {
+        "status": "BLOCKED",
+        "executionId": execution["executionId"],
+        "rootCommand": execution["rootCommand"],
+        "command": None,
+        "reasonCode": "FIX_REVIEW_LIMIT_REACHED",
+        "fixReviewCycles": cycles,
+        "maxFixReviewCycles": limit,
+    }
 
 
 # Явно остановить root execution как blocked. Blocked state сохраняется между sessions и не продолжается автоматически.
@@ -2018,6 +2078,10 @@ def resolve_execution(
                 "reasonCode": "CHAIN_CONDITION_NOT_MET",
                 "notExecuted": sequence[index + 1 :],
             }
+        # Ручная chain подчиняется тому же FIX↔REVIEW budget, что и STEP RUN.
+        limited = _fix_review_limit(root, execution, current["command"], next_command, result)
+        if limited is not None:
+            return limited
         return {
             "status": "NEXT",
             "executionId": execution["executionId"],
@@ -2054,26 +2118,10 @@ def resolve_execution(
             # execution.maxFixReviewCycles — deterministic orchestration budget,
             # а не рекомендация агенту. После исчерпания лимита REVIEW FAIL не
             # может открыть ещё один FIX даже при повторной session.
-            if (
-                parsed.get("domain") == "STEP"
-                and parsed.get("operation") == "REVIEW"
-                and result == "FAIL"
-                and candidates[0].get("to") == "FIX"
-            ):
-                cycles = int(execution.get("fixReviewCycles", 0))
-                limit = max_fix_review_cycles(root)
-                if cycles >= limit:
-                    return {
-                        "status": "BLOCKED",
-                        "executionId": execution["executionId"],
-                        "rootCommand": execution["rootCommand"],
-                        "command": None,
-                        "reasonCode": "FIX_REVIEW_LIMIT_REACHED",
-                        "fixReviewCycles": cycles,
-                        "maxFixReviewCycles": limit,
-                    }
-
             next_command = _build_next_from_edge(root, current["command"], candidates[0])
+            limited = _fix_review_limit(root, execution, current["command"], next_command, result)
+            if limited is not None:
+                return limited
             return {
                 "status": "NEXT",
                 "executionId": execution["executionId"],
@@ -2204,6 +2252,39 @@ def stamp_review_expectation(
 
 
 @execution_state_mutation
+@execution_state_mutation
+def record_review_report(root: Path, step_id: str, record: dict[str, Any]) -> bool:
+    """Связать созданный writer-ом report с active STEP REVIEW execution.
+
+    Локальный след происхождения: какой execution создал report, с каким
+    content hash и для какой revision. Возвращает False, если active REVIEW нет.
+    """
+    status = load_status(root)
+    for execution in status.get("executions", []):
+        current = execution.get("current")
+        if execution.get("status") != "running" or not isinstance(current, dict):
+            continue
+        if current.get("status") != "running":
+            continue
+        try:
+            parsed = normalize_single_command(root, str(current.get("command") or ""))
+        except ValueError:
+            continue
+        if parsed.get("domain") != "STEP" or parsed.get("operation") != "REVIEW":
+            continue
+        if parsed.get("target") != step_id:
+            continue
+        context = current.get("context")
+        if not isinstance(context, dict):
+            context = {}
+            current["context"] = context
+        context["reviewReport"] = dict(record)
+        execution["updatedAt"] = utc_now()
+        save_status(root, status)
+        return True
+    return False
+
+
 def review_expectation_for_step(
     root: Path,
     step_id: str,

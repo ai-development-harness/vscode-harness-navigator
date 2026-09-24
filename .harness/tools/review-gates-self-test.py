@@ -406,6 +406,26 @@ def main() -> int:
         assert missing_gate["baselineStatus"] == "missing", missing_gate
         assert {"security", "tests"}.issubset(set(missing_gate["required"])), missing_gate
 
+    # Regression #117: ошибка Git не является пустой surface. В repository
+    # без commits staged/untracked файлы — полноценная review surface, а вне
+    # Git repository сбор surface падает явно, а не отключает reviewers.
+    with tempfile.TemporaryDirectory(prefix="harness-review-unborn-") as tmp:
+        unborn = Path(tmp)
+        subprocess.run(["git", "init", "-q"], cwd=unborn, check=True)
+        (unborn / "src").mkdir()
+        (unborn / "src/auth.py").write_text("SECRET = 1\n", encoding="utf-8")
+        (unborn / "notes.md").write_text("untracked\n", encoding="utf-8")
+        subprocess.run(["git", "add", "src/auth.py"], cwd=unborn, check=True)
+        unborn_paths, unborn_mode = _git_changed_paths(unborn)
+        assert "src/auth.py" in unborn_paths and "notes.md" in unborn_paths, (unborn_mode, unborn_paths)
+    with tempfile.TemporaryDirectory(prefix="harness-review-nogit-") as tmp:
+        try:
+            _git_changed_paths(Path(tmp))
+        except ValueError as exc:
+            assert "cannot collect review surface" in str(exc), exc
+        else:
+            raise AssertionError("review surface outside Git repository was treated as empty")
+
     print("REVIEW GATES SELF-TEST: PASS")
     return 0
 

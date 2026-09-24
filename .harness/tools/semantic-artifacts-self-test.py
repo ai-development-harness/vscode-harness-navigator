@@ -13,6 +13,7 @@ from execution_status import (
     block_execution,
     complete_command,
     implementation_baseline_for_step,
+    load_status,
     resolve_root,
     review_expectation_for_step,
     stamp_review_expectation,
@@ -568,6 +569,18 @@ def main() -> int:
             pass_review_payload,
         )
         assert step_review["status"] == "PASS", step_review
+        # Regression #114: writer связывает report с active REVIEW execution.
+        assert step_review["provenanceRecorded"] is True, step_review
+        review_records = [
+            item["current"]["context"].get("reviewReport")
+            for item in load_status(root)["executions"]
+            if isinstance(item.get("current"), dict)
+            and isinstance(item["current"].get("context"), dict)
+        ]
+        assert any(
+            record and record.get("path") == step_review["report"]
+            for record in review_records
+        ), review_records
         assert step_review["completionResult"] == "PASS", step_review
         assert step_review["stepCompletion"]["completed"] is True, step_review
         assert step_review["specializedReviewGate"]["basis"] == clean_gate["basis"], step_review

@@ -495,6 +495,10 @@ def set_release(root: Path, release: str, edge: tuple[str, str]) -> None:
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     lock["release"] = release
     lock["source"]["ref"] = f"v{release}"
+    # Fixture-релизы — новые локальные tags; pinned commit исходного checkout
+    # (в пользовательском проекте это commit реального release) к ним не относится
+    # и дал бы ложный SOURCE_TAG_MOVED (#119).
+    lock["source"].pop("commit", None)
     lock_path.write_text(json.dumps(lock, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     graph_path = root / ".harness/harness-update-graph.json"
     data = json.loads(graph_path.read_text(encoding="utf-8"))
@@ -511,6 +515,13 @@ def test_preinit_template_change(tmp: Path) -> None:
     # сценарий относится только к releases, которые реально меняют их.
     if not hasattr(template_contract, "preinit_template_alignment_state"):
         print("SKIP: test_preinit_template_change (release has no pre-INIT alignment API)")
+        return
+    # Fixture строится из tracked-дерева текущего checkout. В initialized
+    # проекте (self-test после update) это product state, а не pre-INIT шаблон:
+    # сценарий там неприменим и покрывается CI template-репозитория (#119).
+    manifest_text = (SOURCE_ROOT / ".harness/manifest.yaml").read_text(encoding="utf-8")
+    if re.search(r"(?m)^  initialized:\s*true\s*$", manifest_text):
+        print("SKIP: test_preinit_template_change (checkout is an initialized project)")
         return
     data = json.loads((SOURCE_ROOT / ".harness/harness-update-graph.json").read_text(encoding="utf-8"))
     current = data["latest"]

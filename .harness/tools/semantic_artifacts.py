@@ -13,6 +13,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from pathlib import Path
+import hashlib
 from typing import Any
 
 from document_contract import (
@@ -23,6 +24,7 @@ from document_contract import (
 )
 from execution_status import (
     implementation_baseline_for_step,
+    record_review_report,
     review_expectation_for_step,
     stamp_plan,
 )
@@ -633,9 +635,25 @@ def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
         raise SemanticArtifactError(
             "generated STEP review failed canonical validation: " + "; ".join(errors)
         )
+    report_rel = path.relative_to(root).as_posix()
+    try:
+        provenance_recorded = record_review_report(
+            root,
+            step_id,
+            {
+                "path": report_rel,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "verdict": data["verdict"],
+                "reviewedRevision": revision,
+                "gateBasis": gate["basis"],
+            },
+        )
+    except (OSError, ValueError):
+        provenance_recorded = False
     result = {
         "schemaVersion": 1,
         "status": data["verdict"].upper(),
+        "provenanceRecorded": provenance_recorded,
         "completionResult": data["verdict"].upper(),
         "stepId": step_id,
         "verdict": data["verdict"],

@@ -312,6 +312,21 @@ def _evidence_present(task: dict[str, Any]) -> bool:
     return bool(value and value not in {"—", "-"} and not has_unresolved_placeholder(value))
 
 
+_GENERATED_EVIDENCE = re.compile(
+    r"<!-- VERIFICATION-EVIDENCE:START -->(.*?)<!-- VERIFICATION-EVIDENCE:END -->",
+    re.S,
+)
+
+
+def _generated_verification_status(task: dict[str, Any]) -> str | None:
+    """Status generated Verification block или None, если block отсутствует."""
+    match = _GENERATED_EVIDENCE.search(task["sections"].get("Evidence", ""))
+    if match is None:
+        return None
+    status = re.search(r"(?m)^- Status: (\S+)\s*$", match.group(1))
+    return status.group(1) if status else "UNKNOWN"
+
+
 # ---------------------------------------------------------------------------
 # Completion proof.
 # Статус STEP сам по себе недостаточен. Proof зависит от type и может включать
@@ -338,6 +353,11 @@ def step_completion_proof(
         reasons.append("status is not completed")
 
     evidence = _evidence_present(task)
+    # Generated Verification block — deterministic факт, а не prose: FAIL или
+    # PENDING в нём не может считаться доказательством completion (#113).
+    verification_status = _generated_verification_status(task)
+    if verification_status is not None and verification_status != "PASS":
+        reasons.append(f"generated Verification evidence status is {verification_status}")
     if step_type in {"research"}:
         if not evidence:
             reasons.append("research step has no durable Evidence")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -45,6 +46,17 @@ def repo_root() -> Path:
     here = Path(__file__).resolve()
     proc = run(here.parent, "git", "rev-parse", "--show-toplevel")
     return Path(proc.stdout.strip())
+
+
+def preinit_manifest_text(source: Path) -> str:
+    """Manifest fixture в состоянии до PROJECT INIT.
+
+    Self-test запускается и в пользовательских проектах после update: там
+    manifest уже initialized, а pre-INIT сценарий должен проверять именно
+    pre-INIT контракт, а не состояние checkout-а (#119).
+    """
+    text = (source / ".harness/manifest.yaml").read_text(encoding="utf-8")
+    return re.sub(r"(?m)^(  initialized:)\s*true\s*$", r"\1 false", text, count=1)
 
 
 def require(value: bool, message: str) -> None:
@@ -429,7 +441,7 @@ def test_preinit_release_template_alignment() -> None:
         manifest_path = root / ".harness/manifest.yaml"
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(
-            (source / ".harness/manifest.yaml").read_text(encoding="utf-8"),
+            preinit_manifest_text(source),
             encoding="utf-8",
         )
 
@@ -521,7 +533,7 @@ def test_preinit_release_template_alignment() -> None:
         # validator: successful postcondition keeps exact baseline, failure
         # restores the old release template byte-for-byte.
         manifest_path.write_text(
-            (source / ".harness/manifest.yaml").read_text(encoding="utf-8"),
+            preinit_manifest_text(source),
             encoding="utf-8",
         )
         review_path.write_text(old_release_review, encoding="utf-8")

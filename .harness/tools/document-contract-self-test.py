@@ -2,7 +2,17 @@
 """Regression self-test низкоуровневых Markdown/YAML document contracts."""
 from __future__ import annotations
 
-from document_contract import markdown_headings, parse_sections, render_document, split_frontmatter
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from document_contract import (
+    markdown_headings,
+    parse_sections,
+    render_document,
+    atomic_write_text,
+    split_frontmatter,
+    validate_report_timestamp_identity,
+)
 from harness_config import parse_yaml_subset
 
 
@@ -87,6 +97,36 @@ list:
     assert values["commented"] == "value", values
     assert values["quoted"] == "C# language", values
     assert values["list"] == ["C#", "docs/architecture.md#auth"], values
+
+    # Regression #114: report из будущего не может стать «latest» по
+    # sortable filename; небольшой clock skew допускается.
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    for delta, expect_error in ((timedelta(days=365 * 70), True), (timedelta(minutes=1), False), (-timedelta(days=1), False)):
+        instant = now + delta
+        name = "REVIEW-" + instant.strftime("%Y%m%dT%H%M%SZ") + ".md"
+        errors = validate_report_timestamp_identity(
+            Path(name),
+            prefix="REVIEW-",
+            created_at=instant.isoformat().replace("+00:00", "Z"),
+        )
+        has_future_error = "created_at must not be in the future" in errors
+        assert has_future_error == expect_error, (delta, errors)
+
+    # Regression #117: atomic rewrite сохраняет permissions существующего файла.
+    import os
+    import tempfile
+
+    if os.name == "posix":
+        with tempfile.TemporaryDirectory(prefix="harness-atomic-mode-") as tmp:
+            target = Path(tmp) / "STEP-001.md"
+            target.write_text("before\n", encoding="utf-8")
+            os.chmod(target, 0o664)
+            atomic_write_text(target, "after\n")
+            assert target.read_text(encoding="utf-8") == "after\n"
+            assert target.stat().st_mode & 0o777 == 0o664, oct(target.stat().st_mode)
+            fresh = Path(tmp) / "new.md"
+            atomic_write_text(fresh, "new\n")
+            assert fresh.stat().st_mode & 0o777 == 0o644, oct(fresh.stat().st_mode)
 
     print("DOCUMENT CONTRACT SELF-TEST: PASS")
     return 0

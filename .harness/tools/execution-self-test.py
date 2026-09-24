@@ -25,7 +25,7 @@ from execution_status import (
     unresolved_executions,
 )
 from document_contract import content_hash
-from planning_contract import plan_content_hash, planning_context_basis
+from planning_contract import plan_content_hash, planning_context_basis, step_completion_proof
 from review_contract import (
     latest_trusted_review,
     repository_revision,
@@ -471,6 +471,21 @@ def main() -> int:
         # существующий Ready basis остаётся свежим и IMPLEMENT сразу разрешается.
         dependency_path = root / "planning/tasks/STEP-002.md"
         dependency_text = dependency_path.read_text(encoding="utf-8")
+
+        # Regression #113: generated Verification block со Status FAIL не
+        # является доказательством completion, даже если Evidence не пуст.
+        write(
+            dependency_path,
+            dependency_text.replace("status: planned", "status: completed").replace(
+                "## Evidence\n\n—",
+                "## Evidence\n\n<!-- VERIFICATION-EVIDENCE:START -->\n"
+                "- Verification run: 2026-09-21T00:00:00+00:00\n- Status: FAIL\n"
+                "<!-- VERIFICATION-EVIDENCE:END -->",
+            ),
+        )
+        failed_proof = step_completion_proof(root, "STEP-002")
+        assert failed_proof["complete"] is False, failed_proof
+        assert any("status is FAIL" in item for item in failed_proof["reasons"]), failed_proof
         write(
             dependency_path,
             dependency_text.replace("status: planned", "status: completed").replace(
@@ -800,6 +815,36 @@ def main() -> int:
         exhausted = resolve_root(root, run_root)
         assert_resolved(exhausted, "BLOCKED", None, "FIX_REVIEW_LIMIT_REACHED")
         assert exhausted["fixReviewCycles"] == 1
+
+        # Regression #116: chain с повторяющейся командой продвигает позицию,
+        # а не возвращается к первому вхождению. Второй REVIEW FAIL завершает
+        # chain, а не открывает FIX заново.
+        repeat_chain = "STEP REVIEW STEP-001 > STEP FIX STEP-001 > STEP REVIEW STEP-001"
+        start_execution(root, repeat_chain)
+        complete_command(root, repeat_chain, "STEP REVIEW STEP-001", "FAIL")
+        assert_resolved(resolve_root(root, repeat_chain), "NEXT", "STEP FIX STEP-001", "CHAIN_NEXT_SEGMENT")
+        begin_command(root, repeat_chain, "STEP FIX STEP-001")
+        complete_command(root, repeat_chain, "STEP FIX STEP-001", "SUCCESS")
+        second_review = begin_command(root, repeat_chain, "STEP REVIEW STEP-001")
+        assert second_review["currentIndex"] == 2, second_review
+        assert second_review["fixReviewCycles"] == 1, second_review
+        complete_command(root, repeat_chain, "STEP REVIEW STEP-001", "FAIL")
+        chain_done = resolve_root(root, repeat_chain)
+        assert chain_done["status"] == "DONE" and chain_done["command"] is None, chain_done
+
+        # Chain подчиняется тому же FIX↔REVIEW budget, что и STEP RUN.
+        long_chain = (
+            "STEP REVIEW STEP-001 > STEP FIX STEP-001 > STEP REVIEW STEP-001"
+            " > STEP FIX STEP-001 > STEP REVIEW STEP-001"
+        )
+        start_execution(root, long_chain)
+        complete_command(root, long_chain, "STEP REVIEW STEP-001", "FAIL")
+        begin_command(root, long_chain, "STEP FIX STEP-001")
+        complete_command(root, long_chain, "STEP FIX STEP-001", "SUCCESS")
+        begin_command(root, long_chain, "STEP REVIEW STEP-001")
+        complete_command(root, long_chain, "STEP REVIEW STEP-001", "FAIL")
+        chain_limited = resolve_root(root, long_chain)
+        assert_resolved(chain_limited, "BLOCKED", None, "FIX_REVIEW_LIMIT_REACHED")
 
         # Specialized result без конкретного evidence summary/reference невалиден.
         evidence_probe = root / "planning/reviews/STEP-001/REVIEW-20260921T040000Z.md"
@@ -1604,6 +1649,21 @@ def main() -> int:
         else:
             raise AssertionError("unsupported execution schema was accepted")
         assert migration_state_path.read_bytes() == unsupported_bytes
+
+    # Regression #117: повреждённый state (не-object JSON или мусор) — это
+    # ValueError для BLOCKED, а не AttributeError/traceback.
+    with tempfile.TemporaryDirectory(prefix="harness-execution-corrupt-") as tmp:
+        corrupt_root = Path(tmp)
+        state_file = corrupt_root / ".harness/local/execution/execution-status.json"
+        state_file.parent.mkdir(parents=True)
+        for payload in ("[]", "not json"):
+            state_file.write_text(payload, encoding="utf-8")
+            try:
+                load_status(corrupt_root)
+            except ValueError as exc:
+                assert "execution-status" in str(exc), exc
+            else:
+                raise AssertionError(f"corrupt execution state accepted: {payload!r}")
 
     print("EXECUTION STATUS SELF-TEST: PASS")
     return 0

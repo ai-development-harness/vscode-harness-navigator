@@ -48,6 +48,35 @@ TEST_SURFACE_RE = re.compile(
 _AUTO_BASELINE = object()
 
 
+# Пустое Git tree: база сравнения для repository без единого commit.
+_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+_GIT_TIMEOUT_SECONDS = 60
+
+
+def _git_stdout_z(root: Path, *args: str) -> bytes:
+    """Выполнить Git read-only query fail-closed.
+
+    Ошибка Git не является «пустым diff»: пустая surface тихо отключила бы
+    обязательных security/tests reviewers (#117).
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-c", "core.quotepath=false", *args],
+            cwd=root,
+            text=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(f"cannot collect review surface: git {args[0]} failed: {exc}") from exc
+    if proc.returncode != 0:
+        message = proc.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"cannot collect review surface: git {' '.join(args[:2])}: {message}")
+    return proc.stdout
+
+
 def _git_paths_z(root: Path, *args: str) -> list[str]:
     """Прочитать Git path list без quoting/line splitting.
 
@@ -56,21 +85,14 @@ def _git_paths_z(root: Path, *args: str) -> list[str]:
     transport. Все callers обязаны запрашивать `-z`, а здесь stdout остаётся
     bytes до NUL-splitting.
     """
-    proc = subprocess.run(
-        ["git", "-c", "core.quotepath=false", *args],
-        cwd=root,
-        text=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    if proc.returncode != 0:
-        return []
-    return [
-        item.decode("utf-8")
-        for item in proc.stdout.split(b"\0")
-        if item
-    ]
+    try:
+        return [
+            item.decode("utf-8")
+            for item in _git_stdout_z(root, *args).split(b"\0")
+            if item
+        ]
+    except UnicodeDecodeError as exc:
+        raise ValueError("review surface contains non-UTF-8 path") from exc
 
 
 def _git_name_status_paths_z(root: Path, *args: str) -> list[str]:
@@ -80,18 +102,7 @@ def _git_name_status_paths_z(root: Path, *args: str) -> list[str]:
     surface при переносе sensitive файла в нейтральный destination. Parser
     fail-closed: malformed stream не интерпретируется как безопасно пустой diff.
     """
-    proc = subprocess.run(
-        ["git", "-c", "core.quotepath=false", *args],
-        cwd=root,
-        text=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    if proc.returncode != 0:
-        return []
-
-    fields = [item for item in proc.stdout.split(b"\0") if item]
+    fields = [item for item in _git_stdout_z(root, *args).split(b"\0") if item]
     paths: list[str] = []
     index = 0
     try:
@@ -167,46 +178,52 @@ def _included_path(root: Path, rel: str) -> bool:
     return re.fullmatch(r"STEP-\d{3,}/REVIEW-.+\.md", review_rel) is None
 
 
+def _has_head(root: Path) -> bool:
+    return _git_ok(root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+
+
 def _worktree_paths(root: Path) -> set[str]:
+    # Без commits всё содержимое index/worktree — новая surface: сравниваем с
+    # пустым tree, а не получаем ошибку `git diff HEAD` и пустой список.
+    base = "HEAD" if _has_head(root) else _EMPTY_TREE
     paths: set[str] = set()
-    for args in (
-        ("diff", "--name-status", "-z", "-M", "-C", "--find-copies-harder", "HEAD", "--"),
-        ("diff", "--cached", "--name-status", "-z", "-M", "-C", "--find-copies-harder", "--"),
-    ):
-        try:
-            paths.update(_git_name_status_paths_z(root, *args))
-        except OSError:
-            continue
-    try:
-        paths.update(
-            _git_paths_z(
-                root,
-                "ls-files",
-                "--others",
-                "--exclude-standard",
-                "-z",
-                "--",
-            )
+    paths.update(
+        _git_name_status_paths_z(
+            root, "diff", "--name-status", "-z", "-M", "-C", "--find-copies-harder", base, "--"
         )
-    except OSError:
-        pass
+    )
+    paths.update(
+        _git_name_status_paths_z(
+            root, "diff", "--cached", "--name-status", "-z", "-M", "-C", "--find-copies-harder", base, "--"
+        )
+    )
+    paths.update(
+        _git_paths_z(
+            root,
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+        )
+    )
     return {path for path in paths if _included_path(root, path)}
 
 
 def _diagnostic_last_commit_paths(root: Path) -> set[str]:
-    try:
-        paths = _git_paths_z(
-            root,
-            "diff-tree",
-            "--no-commit-id",
-            "--name-only",
-            "-r",
-            "-z",
-            "HEAD",
-            "--",
-        )
-    except OSError:
+    if not _has_head(root):
         return set()
+    paths = _git_paths_z(
+        root,
+        "diff-tree",
+        "--no-commit-id",
+        "--root",
+        "--name-only",
+        "-r",
+        "-z",
+        "HEAD",
+        "--",
+    )
     return {path for path in paths if _included_path(root, path)}
 
 

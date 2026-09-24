@@ -184,6 +184,9 @@ def timestamped_report_instant(name: str, prefix: str) -> datetime | None:
     return parsed.replace(tzinfo=timezone.utc)
 
 
+REPORT_CLOCK_SKEW_TOLERANCE = timedelta(minutes=5)
+
+
 def validate_report_timestamp_identity(
     path: Path,
     *,
@@ -205,6 +208,11 @@ def validate_report_timestamp_identity(
         return errors
     if created != filename_time:
         errors.append("created_at must match UTC timestamp encoded in filename")
+    # Report «из будущего» навсегда занял бы место latest по sortable filename
+    # и скрыл бы последующие реальные reports (#114). Небольшой допуск —
+    # на расхождение часов между машинами.
+    if created > datetime.now(timezone.utc) + REPORT_CLOCK_SKEW_TOLERANCE:
+        errors.append("created_at must not be in the future")
     return errors
 
 
@@ -227,15 +235,33 @@ def atomic_write_text(path: Path, content: str) -> None:
         dir=str(path.parent),
     )
     tmp = Path(tmp_name)
+    # mkstemp создаёт 0600: без этого каждое atomic rewrite тихо меняло бы
+    # permissions tracked файла (#117). Новый файл получает обычный 0644.
+    try:
+        mode = path.stat().st_mode & 0o777 if path.is_file() else 0o644
+    except OSError:
+        mode = 0o644
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
+        os.chmod(tmp, mode)
         os.replace(tmp, path)
     finally:
         if tmp.exists():
             tmp.unlink(missing_ok=True)
+    if os.name == "posix":
+        try:
+            dir_fd = os.open(path.parent, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(dir_fd)
+        except OSError:
+            pass
+        finally:
+            os.close(dir_fd)
 
 
 # ---------------------------------------------------------------------------

@@ -81,64 +81,75 @@ def main() -> int:
     args = parser.parse_args()
     root = repo_root()
 
-    if args.action == "start":
-        emit(start_execution(root, args.command))
-    elif args.action == "begin":
-        emit(begin_command(root, args.root, args.command))
-    elif args.action == "complete":
-        # IMPLEMENT/FIX SUCCESS (и PASS, который resolver тоже считает
-        # завершением) обязан пройти deterministic `## Verification`,
-        # которую выполняет только harness-dispatch.py complete. Низкоуровневый
-        # CLI не должен быть обходным путём мимо этого gate (#113).
-        try:
-            parsed = normalize_single_command(root, args.command)
-        except ValueError:
-            parsed = {}
-        if (
-            args.result in {"SUCCESS", "PASS"}
-            and parsed.get("domain") == "STEP"
-            and parsed.get("operation") in {"IMPLEMENT", "FIX"}
-        ):
+    # Единый fail-closed контракт CLI: отказ — BLOCKED JSON, не traceback (#117).
+    try:
+        if args.action == "start":
+            emit(start_execution(root, args.command))
+        elif args.action == "begin":
+            emit(begin_command(root, args.root, args.command))
+        elif args.action == "complete":
+            # IMPLEMENT/FIX SUCCESS (и PASS, который resolver тоже считает
+            # завершением) обязан пройти deterministic `## Verification`,
+            # которую выполняет только harness-dispatch.py complete. Низкоуровневый
+            # CLI не должен быть обходным путём мимо этого gate (#113).
+            try:
+                parsed = normalize_single_command(root, args.command)
+            except ValueError:
+                parsed = {}
+            if (
+                args.result in {"SUCCESS", "PASS"}
+                and parsed.get("domain") == "STEP"
+                and parsed.get("operation") in {"IMPLEMENT", "FIX"}
+            ):
+                emit(
+                    {
+                        "status": "BLOCKED",
+                        "reasonCode": "VERIFICATION_REQUIRES_DISPATCH",
+                        "message": (
+                            "STEP IMPLEMENT/FIX SUCCESS requires Verification; use "
+                            "python3 .harness/tools/harness-dispatch.py complete"
+                        ),
+                    }
+                )
+                return 2
+            # details — редкая command-specific metadata внутри той же execution
+            # (например resolved update target/route). Это не отдельный state file.
+            details = json.loads(args.details_json) if args.details_json else None
+            if details is not None and not isinstance(details, dict):
+                raise ValueError("--details-json must decode to a JSON object")
             emit(
-                {
-                    "status": "BLOCKED",
-                    "reasonCode": "VERIFICATION_REQUIRES_DISPATCH",
-                    "message": (
-                        "STEP IMPLEMENT/FIX SUCCESS requires Verification; use "
-                        "python3 .harness/tools/harness-dispatch.py complete"
-                    ),
-                }
+                complete_command(
+                    root,
+                    args.root,
+                    args.command,
+                    args.result,
+                    details=details,
+                )
             )
-            return 2
-        # details — редкая command-specific metadata внутри той же execution
-        # (например resolved update target/route). Это не отдельный state file.
-        details = json.loads(args.details_json) if args.details_json else None
-        if details is not None and not isinstance(details, dict):
-            raise ValueError("--details-json must decode to a JSON object")
+        elif args.action == "block":
+            emit(block_execution(root, args.root, command=args.command))
+        elif args.action == "status":
+            emit(load_status(root))
+        elif args.action == "find":
+            emit(
+                find_completed(
+                    root,
+                    args.command,
+                    result=args.result,
+                    latest_only=args.latest,
+                )
+            )
+        elif args.action == "stamp-plan":
+            emit(stamp_plan(root, args.step_id))
+    except (OSError, RuntimeError, ValueError) as exc:
         emit(
-            complete_command(
-                root,
-                args.root,
-                args.command,
-                args.result,
-                details=details,
-            )
+            {
+                "status": "BLOCKED",
+                "reasonCode": getattr(exc, "code", "EXECUTION_STATE_BLOCKED"),
+                "message": str(exc),
+            }
         )
-    elif args.action == "block":
-        emit(block_execution(root, args.root, command=args.command))
-    elif args.action == "status":
-        emit(load_status(root))
-    elif args.action == "find":
-        emit(
-            find_completed(
-                root,
-                args.command,
-                result=args.result,
-                latest_only=args.latest,
-            )
-        )
-    elif args.action == "stamp-plan":
-        emit(stamp_plan(root, args.step_id))
+        return 2
     return 0
 
 
