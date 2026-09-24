@@ -139,5 +139,8 @@ Harness Integrity CI (`.github/workflows/harness-integrity.yml`) являетс�
   собранный VSIX загружается как artifact `vsix`. Скачанный VS Code кэшируется в `.vscode-test`
   с ключом по версии stable.
 
+Actions в `ci.yml` закреплены по commit SHA с комментарием `# vN`; SHA обновляют еженедельные PR
+Dependabot (`.github/dependabot.yml`, экосистема `github-actions`), вручную обновлять их не нужно.
+
 Локальной проверкой остаётся `yarn test:integration` (в CI не запускается). Workflow не публикует
 расширение и не использует secrets.

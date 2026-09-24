@@ -51,8 +51,8 @@ jobs:
       # Пример: Checkout repository.
       - name: Checkout repository
         # Официальный action checkout на актуальном major.
-        # Пример: actions/checkout@v7.
-        uses: actions/checkout@v7
+        # Пример: actions/checkout@<commit SHA> # v7 (тег v7 закреплён по SHA).
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         # Параметры checkout.
         # Пример: отключить сохранение credentials.
         with:
@@ -69,8 +69,8 @@ jobs:
       # Пример: Setup Node.js.
       - name: Setup Node.js
         # Официальный action setup-node на актуальном major.
-        # Пример: actions/setup-node@v7.
-        uses: actions/setup-node@v7
+        # Пример: actions/setup-node@<commit SHA> # v7 (тег v7 закреплён по SHA).
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         # Параметры setup-node.
         # Пример: версия Node и кэш зависимостей.
         with:
@@ -135,8 +135,8 @@ jobs:
       # Пример: Checkout repository.
       - name: Checkout repository
         # Официальный action checkout на актуальном major.
-        # Пример: actions/checkout@v7.
-        uses: actions/checkout@v7
+        # Пример: actions/checkout@<commit SHA> # v7 (тег v7 закреплён по SHA).
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         # Параметры checkout.
         # Пример: отключить сохранение credentials.
         with:
@@ -153,8 +153,8 @@ jobs:
       # Пример: Setup Node.js.
       - name: Setup Node.js
         # Официальный action setup-node на актуальном major.
-        # Пример: actions/setup-node@v7.
-        uses: actions/setup-node@v7
+        # Пример: actions/setup-node@<commit SHA> # v7 (тег v7 закреплён по SHA).
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         # Параметры setup-node.
         # Пример: версия Node и кэш зависимостей.
         with:
@@ -195,8 +195,8 @@ jobs:
       # Пример: Cache VS Code.
       - name: Cache VS Code
         # Официальный action cache на актуальном major.
-        # Пример: actions/cache@v6.
-        uses: actions/cache@v6
+        # Пример: actions/cache@<commit SHA> # v6 (тег v6 закреплён по SHA).
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         # Параметры кэша.
         # Пример: только скачанные сборки VS Code.
         with:
@@ -222,8 +222,8 @@ jobs:
       # Пример: Upload VSIX.
       - name: Upload VSIX
         # Официальный action upload-artifact на актуальном major.
-        # Пример: actions/upload-artifact@v7.
-        uses: actions/upload-artifact@v7
+        # Пример: actions/upload-artifact@<commit SHA> # v7 (тег v7 закреплён по SHA).
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         # Параметры artifact.
         # Пример: имя, путь, поведение при отсутствии файлов.
         with:

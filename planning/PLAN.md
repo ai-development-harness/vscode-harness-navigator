@@ -16,3 +16,4 @@
 | STEP-010 | Подготовка расширения к публикации: иконка, README и метаданные VSIX | implementation | medium | completed | STEP-007 | REQ-010 |
 | STEP-011 | CI workflow GitHub Actions для quality gates и packaging | implementation | medium | completed | STEP-010 | REQ-010 |
 | STEP-012 | Согласование engines.node с минимумом Node 22 | implementation | low | completed | STEP-011 | REQ-010 |
+| STEP-013 | Закрепление GitHub Actions по commit SHA и Dependabot | implementation | low | in_progress | STEP-011 | REQ-010 |
