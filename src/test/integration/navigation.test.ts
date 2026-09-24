@@ -190,11 +190,14 @@ suite('navigation, references и relations (Extension Host)', () => {
       const aliasFromEditor = await vscode.commands.executeCommand<vscode.Location[]>(
         'harnessNavigator.editor.findAllReferences',
       );
+      // активный редактор — step без ID под курсором: без проброса аргумента цели не будет
+      await vscode.window.showTextDocument(step, { selection: new vscode.Range(0, 0, 0, 0) });
       const aliasFromNode = await vscode.commands.executeCommand<vscode.Location[]>(
         'harnessNavigator.editor.findAllReferences',
         { artifact: reqArtifact, folder: valid },
       );
       assert.deepEqual(keys(aliasFromEditor), keys(fromEditor));
+      assert.ok(aliasFromNode.length > 0);
       assert.deepEqual(keys(aliasFromNode), keys(fromNode));
 
       // Show Relations: клик открывает файл, Find All References даёт те же Location
@@ -215,12 +218,13 @@ suite('navigation, references и relations (Extension Host)', () => {
       assert.equal(vscode.window.activeTextEditor?.document.uri.fsPath, step.fsPath);
 
       const originalOffered = offered.map((item) => item.label);
-      await vscode.window.showTextDocument(guide);
+      // активен step: без проброса аргумента цель была бы STEP-950, а не REQ-950
       offered = [];
       await vscode.commands.executeCommand('harnessNavigator.editor.showRelations', {
         artifact: reqArtifact,
         folder: valid,
       });
+      assert.ok(originalOffered.length > 0);
       assert.deepEqual(
         offered.map((item) => item.label),
         originalOffered,
