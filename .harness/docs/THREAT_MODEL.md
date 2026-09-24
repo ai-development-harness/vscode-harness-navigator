@@ -102,6 +102,10 @@ Review/audit/release reports и `## Evidence` пишут deterministic writers, 
 
 Граница: агент или пользователь с shell-доступом к рабочему дереву технически может вручную создать синтаксически валидный artifact, включая `specialized_reviews` с произвольным evidence. Harness gates защищают от случайного и небрежного обхода и от несогласованного state, но не доказывают, кто написал файл. Независимость review и provenance durable history обеспечиваются снаружи — review Pull Request, CODEOWNERS и branch protection.
 
+### Legacy completion baseline
+
+`legacy_completed_steps` в migration report — одноразовый compatibility proof для истории до контракта immutable review. Он создаётся только migration flow для STEP, мигрированных из legacy формата, и виден в diff того же PR. Harness не защищает от сознательно подделанного migration report (как и от подделанного review report): защитой служит review PR. Невалидный report отвергается целиком, partial allowlist не выдаётся.
+
 ### CI и secret hygiene
 
 CI `Harness Integrity` запускает validator из дерева самого PR: PR, ослабляющий validator/policy/workflow, проходит собственную проверку. Поэтому CI помечает изменения trust boundary (`.harness/tools/**`, policy TOML, `.claude/settings.json`, `.codex/**`, `.github/**`) warning-аннотациями, а решающей защитой остаётся review. Проект задаёт владельцев этих путей своим `CODEOWNERS` и включает в branch protection «Require review from Code Owners»; шаблон не поставляет `CODEOWNERS`, потому что владельцы у каждого проекта свои.

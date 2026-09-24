@@ -266,7 +266,17 @@ Updater **не переписывает project-owned active documents**.
 - legacy Ready plan без durable semantic review → draft;
 - project-owned templates → additive structural migration к current protocol definitions с сохранением existing project values/prose; non-additive conflict остаётся blocker;
 - projections → regenerate;
-- historical immutable reports → не переписываются; legacy implementation review reports hash-pin-ятся в migration report как immutable compatibility proof.
+- historical immutable reports → не переписываются; legacy implementation review reports hash-pin-ятся в migration report как immutable compatibility proof;
+- completed implementation-like legacy STEP без единого trusted review (например, из релизов, где review reports ещё не хранились) → **legacy completion baseline**: migration report перечисляет их в `legacy_completed_steps`, completion proof принимает их с пометкой `LEGACY_COMPLETION`. Это не PASS review и не восстановленный задним числом отчёт; любой новый trusted review по STEP имеет приоритет. Baseline создаётся только для STEP, мигрированных из legacy формата в этом же прогоне.
+
+Legacy migration не теряет содержимое:
+
+- разделы вне канонического набора и исходные metadata-строки (включая значения, перенесённые на следующую строку) сохраняются в конце документа (`## Legacy metadata`);
+- REQ из монолитного `SPEC.md` получает весь свой текст (заголовок следующей главы в него не попадает); отсутствующие обязательные разделы REQ/ADR добавляются с явной пометкой «не выделялось в legacy документе», а не выдумываются;
+- legacy ADR на русском (`- Статус: Принято`, `## Контекст`, `## Решение` …) распознаётся; частичная замена («Заменяет: ADR-026, только …») остаётся текстом и не превращается в `supersedes`;
+- legacy `Mutation policy` без подразделов получает `### Allowed/Conditional/Forbidden`, исходная формулировка сохраняется в `Allowed`;
+- взаимные ссылки STEP/REQ/ADR дополняются для документов этой миграции;
+- hand-written файлы на месте generated projections (`SPEC.md`, `STATUS.md`, roadmap, status, OQ index) до перезаписи сохраняются рядом как `<name>.legacy.md`.
 
 Migration идемпотентна: повторный запуск без фактических изменений не создаёт новый migration report. Уже pinned historical review нельзя тихо удалить/изменить/re-pin: hash mismatch является corruption blocker.
 

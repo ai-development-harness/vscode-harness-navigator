@@ -89,6 +89,15 @@ def main() -> int:
         require_failure(validate(root), "merge-conflict marker detected: docs/setext.md")
         run(root, "git", "rm", "-q", "-f", "docs/setext.md")
 
+        # Multiline scalar во frontmatter skill не поддерживается restricted YAML:
+        # validator называет причину, а не «missing name».
+        skill = root / ".agents/skills/zz-multiline/SKILL.md"
+        skill.parent.mkdir(parents=True, exist_ok=True)
+        skill.write_text("---\nname: zz-multiline\ndescription: >\n  folded\n---\n\n# X\n", encoding="utf-8")
+        run(root, "git", "add", ".agents/skills/zz-multiline/SKILL.md")
+        require_failure(validate(root), "skill frontmatter cannot be parsed: .agents/skills/zz-multiline/SKILL.md")
+        run(root, "git", "rm", "-q", "-f", ".agents/skills/zz-multiline/SKILL.md")
+
         # Regression #108: basename-паттерны действуют на любой глубине.
         for rel, needle in (
             ("apps/api/.env", "forbidden tracked file: apps/api/.env"),

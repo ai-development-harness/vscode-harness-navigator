@@ -377,6 +377,16 @@ def parse_markdown_frontmatter(path: Path) -> dict:
 
 
 
+# Вернуть причину, по которой frontmatter не разбирается, или None.
+def markdown_frontmatter_error(path: Path) -> str | None:
+    try:
+        split_frontmatter(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, DocumentError) as exc:
+        return str(exc)
+    return None
+
+
+
 # Извлечь обязательные name/description core skill поверх общего frontmatter parser.
 def parse_skill_frontmatter(path: Path) -> tuple[str | None, str | None]:
     fields = parse_markdown_frontmatter(path)
@@ -894,6 +904,12 @@ def validate_runtime_surface(
         for p in sorted(skills_root.glob("*/SKILL.md")):
             name, desc = parse_skill_frontmatter(p)
             rel = str(p.relative_to(root))
+            parse_error = markdown_frontmatter_error(p)
+            if parse_error is not None:
+                # Иначе ошибка разбора (например, multiline `description: >`)
+                # маскируется под «missing name».
+                errors.append(f"skill frontmatter cannot be parsed: {rel}: {parse_error}")
+                continue
             if not name:
                 errors.append(f"skill frontmatter missing name: {rel}")
             elif name in seen_skill_names:

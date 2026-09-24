@@ -43,6 +43,7 @@ from document_contract import (
     OQ_STATUSES,
     PLAN_STATUSES,
     PRIORITIES,
+    REQ_ID_PATTERN,
     REQ_ID_RE,
     STEP_ID_RE,
     STEP_STATUSES,
@@ -391,7 +392,26 @@ def step_completion_proof(
         )
         review_snapshot: dict[str, Any] | None = None
         if trusted is None:
-            reasons.append("trusted PASS review is missing")
+            from review_contract import legacy_completed_steps
+
+            try:
+                legacy_source = legacy_completed_steps(root).get(step_id)
+            except ValueError:
+                legacy_source = None
+            if legacy_source is None:
+                reasons.append("trusted PASS review is missing")
+            else:
+                # Завершён до контракта immutable review; зафиксирован migration
+                # baseline. Не PASS review: любой новый trusted review его заменяет.
+                # Стабильная метка, а не путь report-а: projection, посчитанная
+                # внутри migration до записи report-а, совпадает с последующей.
+                review_snapshot = {
+                    "path": "legacy completion baseline",
+                    "verdict": "LEGACY_COMPLETION",
+                    "legacy": True,
+                    "legacy_completion": True,
+                    "content_hash": None,
+                }
         elif trusted.get("verdict") != "PASS":
             reasons.append("latest trusted review verdict is not PASS")
         else:
@@ -922,7 +942,7 @@ def _validate_open_questions(root: Path, errors: list[str]) -> None:
     known_reqs = {
         match.group(1)
         for path in requirements_directory(root).glob("REQ-*.md")
-        if (match := re.match(r"(REQ-\d{3,})-", path.name))
+        if (match := re.match(rf"({REQ_ID_PATTERN})-", path.name))
     }
     known_adrs = {
         match.group(1)

@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "harnessVersion": "1",
-  "release": "0.8.4",
+  "release": "0.8.5",
   "source": {
     "repository": "ai-development-harness/ai-development-harness-template",
-    "ref": "v0.8.4",
-    "commit": "c4b21ab5a14fa545ed6af812311fafbe90490205"
+    "ref": "v0.8.5",
+    "commit": "d838b46837a589234728a0a78454e0ec8d7e6d09"
   },
-  "updatedAt": "2026-09-24T18:04:39+00:00"
+  "updatedAt": "2026-09-24T19:00:54+00:00"
 }
