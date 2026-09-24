@@ -6,6 +6,7 @@ source: brief
 steps:
   - STEP-001
   - STEP-007
+  - STEP-010
 adrs:
   - ADR-002
   - ADR-004

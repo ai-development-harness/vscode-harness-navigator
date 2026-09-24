@@ -13,3 +13,4 @@
 | STEP-007 | Интеграция MVP и release proof | implementation | high | completed | STEP-004, STEP-005, STEP-006 | REQ-001, REQ-002, REQ-003, REQ-004, REQ-005, REQ-006, REQ-007, REQ-008, REQ-009, REQ-010 |
 | STEP-008 | Кросс-платформенное no-follow containment чтение manifest и полнота localization regression | bugfix | high | completed | STEP-001 | REQ-002, REQ-008 |
 | STEP-009 | Bridge ADR для traceability STEP-002 и platform containment | adr | high | completed | STEP-008 | REQ-002 |
+| STEP-010 | Подготовка расширения к публикации: иконка, README и метаданные VSIX | implementation | medium | completed | STEP-007 | REQ-010 |
