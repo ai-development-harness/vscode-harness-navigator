@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from document_contract import (
     atomic_write_text,
@@ -536,6 +536,61 @@ def _merge_missing_mapping_keys(
     return changed, blockers
 
 
+# Объявленные сопровождающим шаги повышения `schema` project-owned templates (#105).
+# Ключ — `kind` template, а для templates без kind — prefix id (`STEP`, `REQ`, `ADR`, `OQ`).
+# Значение — {from_schema: step}: `None` означает аддитивный шаг (новые keys/sections
+# добавит обычная additive migration), callable(meta, body) -> (meta, body) —
+# non-additive преобразование. Необъявленный bump остаётся hard blocker-ом.
+TemplateSchemaStep = Callable[[dict[str, Any], str], tuple[dict[str, Any], str]] | None
+TEMPLATE_SCHEMA_MIGRATIONS: dict[str, dict[int, TemplateSchemaStep]] = {}
+
+
+def _template_key(meta: dict[str, Any]) -> str | None:
+    kind = meta.get("kind")
+    if isinstance(kind, str) and kind:
+        return kind
+    artifact_id = meta.get("id")
+    if isinstance(artifact_id, str) and "-" in artifact_id:
+        return artifact_id.split("-", 1)[0]
+    return None
+
+
+def _upgrade_template_schema(
+    meta: dict[str, Any],
+    body: str,
+    expected_meta: dict[str, Any],
+) -> tuple[dict[str, Any], str, bool, list[str]]:
+    """Поднять `schema` по объявленным шагам; вернуть (meta, body, changed, blockers)."""
+    actual = meta.get("schema")
+    target = expected_meta.get("schema")
+    if actual == target:
+        return meta, body, False, []
+    mismatch = f"frontmatter.schema differs from current template schema {target}"
+    if (
+        isinstance(actual, bool) or isinstance(target, bool)
+        or not isinstance(actual, int) or not isinstance(target, int)
+        or actual > target
+    ):
+        return meta, body, False, [mismatch]
+    steps = TEMPLATE_SCHEMA_MIGRATIONS.get(_template_key(expected_meta) or "", {})
+    upgraded = deepcopy(meta)
+    for version in range(actual, target):
+        if version not in steps:
+            return meta, body, False, [
+                f"{mismatch}: no declared template schema migration {version} -> {version + 1}"
+            ]
+        step = steps[version]
+        if step is not None:
+            try:
+                upgraded, body = step(upgraded, body)
+            except Exception as exc:  # noqa: BLE001 - migration failure = blocker
+                return meta, body, False, [
+                    f"template schema migration {version} -> {version + 1} failed: {exc}"
+                ]
+        upgraded["schema"] = version + 1
+    return upgraded, body, True, []
+
+
 def _template_migration_state(
     path: Path,
     expected: str,
@@ -556,11 +611,12 @@ def _template_migration_state(
             f"duplicate structural section '## {name}'"
             for name in actual_doc["duplicate_sections"]
         )
-    if actual_meta.get("schema") != expected_meta.get("schema"):
-        blockers.append(
-            "frontmatter.schema differs from current template schema "
-            f"{expected_meta.get('schema')}"
-        )
+    actual_meta, body, changed_schema, schema_blockers = _upgrade_template_schema(
+        actual_meta,
+        actual_doc["body"],
+        expected_meta,
+    )
+    blockers.extend(schema_blockers)
     expected_kind = expected_meta.get("kind")
     if expected_kind is not None and actual_meta.get("kind") != expected_kind:
         blockers.append(f"frontmatter.kind must be {expected_kind}")
@@ -571,11 +627,12 @@ def _template_migration_state(
         prefix="frontmatter",
     )
     blockers.extend(mapping_blockers)
+    sections = parse_sections(body)[0] if changed_schema else actual_doc["sections"]
     changed_sections = any(
-        name not in actual_doc["sections"]
+        name not in sections
         for name in expected_doc["sections"]
     )
-    return changed_meta or changed_sections, blockers
+    return changed_schema or changed_meta or changed_sections, blockers
 
 
 def _additive_template_candidate(
@@ -603,11 +660,12 @@ def _additive_template_candidate(
             f"duplicate structural section '## {name}'"
             for name in actual_doc["duplicate_sections"]
         )
-    if actual_meta.get("schema") != expected_meta.get("schema"):
-        blockers.append(
-            "frontmatter.schema differs from current template schema "
-            f"{expected_meta.get('schema')}"
-        )
+    actual_meta, body, changed_schema, schema_blockers = _upgrade_template_schema(
+        actual_meta,
+        actual_doc["body"],
+        expected_meta,
+    )
+    blockers.extend(schema_blockers)
     expected_kind = expected_meta.get("kind")
     if expected_kind is not None and actual_meta.get("kind") != expected_kind:
         blockers.append(f"frontmatter.kind must be {expected_kind}")
@@ -621,17 +679,20 @@ def _additive_template_candidate(
     if blockers:
         return None, blockers
 
-    body = actual_doc["body"].rstrip()
+    sections, duplicates = parse_sections(body) if changed_schema else (actual_doc["sections"], [])
+    if duplicates:
+        return None, [f"duplicate structural section '## {name}'" for name in duplicates]
+    body = body.rstrip()
     changed_sections = False
     for name, default_content in expected_doc["sections"].items():
-        if name in actual_doc["sections"]:
+        if name in sections:
             continue
         body += f"\n\n## {name}"
         if default_content:
             body += f"\n\n{default_content}"
         changed_sections = True
 
-    if not (changed_meta or changed_sections):
+    if not (changed_schema or changed_meta or changed_sections):
         return None, []
     return render_document(actual_meta, body), []
 

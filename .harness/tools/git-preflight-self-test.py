@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import os
 import subprocess
 import tempfile
 
@@ -16,7 +17,9 @@ from git_action import (
 )
 from git_preflight import (
     GitPreflightError,
+    _planned_branch,
     commit_preflight,
+    policy as load_policy,
     pr_preflight,
     pr_finish_preflight,
     push_preflight,
@@ -120,6 +123,16 @@ def expect_blocked(code: str, fn) -> GitPreflightError:
         fn()
     except GitPreflightError as exc:
         assert exc.code == code, (exc.code, exc)
+        return exc
+    raise AssertionError(f"expected blocker {code}")
+
+
+def expect_code(code: str, fn) -> Exception:
+    """Как expect_blocked, но для GitActionError и GitPreflightError."""
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001 - проверяем structured code
+        assert getattr(exc, "code", None) == code, (getattr(exc, "code", None), exc)
         return exc
     raise AssertionError(f"expected blocker {code}")
 
@@ -279,6 +292,96 @@ def main() -> int:
         message_link.unlink()
         message_target.unlink()
 
+        # Regression #110: невалидный message на protected branch отклоняется
+        # до `git switch -c` и не оставляет репозиторий на новой ветке.
+        run(project, "git", "switch", "main")
+        write(project, "early-message.txt", "staged\n")
+        run(project, "git", "add", "early-message.txt")
+        write(project, ".harness/local/git/early.txt", "bad subject\n")
+        expect_code(
+            "COMMIT_MESSAGE_INVALID",
+            lambda: execute_commit(
+                project,
+                commit_type="feat",
+                slug="Early Message",
+                message_file=project / ".harness/local/git/early.txt",
+            ),
+        )
+        assert run(project, "git", "branch", "--show-current") == "main"
+        assert not run(project, "git", "branch", "--list", "feature/early-message")
+        run(project, "git", "reset", "-q", "--hard", "HEAD")
+        (project / ".harness/local/git/early.txt").unlink()
+        run(project, "git", "switch", "feature/user-search-api")
+
+        # Regression #110: commit type проверяется и вне protected branches.
+        expect_blocked(
+            "INVALID_COMMIT_TYPE",
+            lambda: commit_preflight(project, commit_type="chore", slug="x"),
+        )
+        write(project, ".harness/local/git/type.txt", "chore: x\n\nContext:\n- y\n")
+        expect_code(
+            "INVALID_COMMIT_TYPE",
+            lambda: execute_commit(
+                project,
+                commit_type="chore",
+                slug="x",
+                message_file=project / ".harness/local/git/type.txt",
+            ),
+        )
+        (project / ".harness/local/git/type.txt").unlink()
+
+        # Regression #110: лишний placeholder в name_pattern — BLOCKED, не KeyError.
+        broken = load_policy(project)
+        broken["branch"] = {**broken["branch"], "name_pattern": "{prefix}/{slug}-{extra}"}
+        expect_blocked("INVALID_GIT_POLICY", lambda: _planned_branch(broken, "feat", "x"))
+
+        # Regression #107: изменение индекса между validation и commit — BLOCKED,
+        # HEAD не двигается.
+        write(project, "toctou-a.txt", "a\n")
+        run(project, "git", "add", "toctou-a.txt")
+        write(project, ".harness/local/git/toctou.txt", "feat: toctou\n\nContext:\n- x\n")
+        head_before = run(project, "git", "rev-parse", "HEAD")
+        original_commit_preflight = git_action_module.commit_preflight
+
+        def racing_commit_preflight(*args, **kwargs):
+            gate = original_commit_preflight(*args, **kwargs)
+            write(project, "toctou-b.txt", "unvalidated\n")
+            run(project, "git", "add", "toctou-b.txt")
+            return gate
+
+        git_action_module.commit_preflight = racing_commit_preflight
+        try:
+            expect_code(
+                "COMMIT_INPUT_CHANGED",
+                lambda: execute_commit(
+                    project,
+                    commit_type="feat",
+                    slug="toctou",
+                    message_file=project / ".harness/local/git/toctou.txt",
+                ),
+            )
+        finally:
+            git_action_module.commit_preflight = original_commit_preflight
+        assert run(project, "git", "rev-parse", "HEAD") == head_before
+        run(project, "git", "reset", "-q", "--hard", "HEAD")
+        (project / ".harness/local/git/toctou.txt").unlink()
+
+        # Regression #110: non-UTF-8 имя файла не превращается в traceback.
+        if os.name == "posix":
+            raw_name = project / os.fsdecode(b"raw-\xff.txt")
+            raw_name.write_text("x\n", encoding="utf-8")
+            run(project, "git", "add", "-A")
+            raw_gate = commit_preflight(project, commit_type="feat", slug="raw")
+            assert raw_gate["status"] == "PASS", raw_gate
+            assert any(name.startswith("raw-") for name in raw_gate["staged"]), raw_gate
+            run(project, "git", "reset", "-q", "--hard", "HEAD")
+
+        # Regression #107: ветка `+name` — это forced refspec; BLOCKED до push.
+        run(project, "git", "switch", "-q", "-c", "+forced")
+        expect_blocked("INVALID_BRANCH_NAME", lambda: push_preflight(project))
+        run(project, "git", "switch", "-q", "feature/user-search-api")
+        run(project, "git", "branch", "-D", "+forced")
+
         # Existing protected branch cannot be pushed after bootstrap.
         run(project, "git", "switch", "main")
         expect_blocked("PROTECTED_BRANCH_PUSH_BLOCKED", lambda: push_preflight(project))
@@ -287,10 +390,35 @@ def main() -> int:
         # New feature branch gets an exact non-force push plan with upstream setup.
         push_gate = push_preflight(project)
         assert push_gate["status"] == "PASS", push_gate
-        assert "--set-upstream" in push_gate["mutationPlan"]["argv"], push_gate
+        validated = run(project, "git", "rev-parse", "HEAD")
+        # Regression #107: публикуется явный validated commit, а не имя ветки.
+        assert push_gate["mutationPlan"]["argv"][-1] == (
+            f"{validated}:refs/heads/feature/user-search-api"
+        ), push_gate
+        assert push_gate["mutationPlan"]["setUpstream"] is True, push_gate
         assert "--force" not in push_gate["mutationPlan"]["argv"], push_gate
+
+        # Regression #107: HEAD сдвинулся после preflight — push BLOCKED.
+        original_push_preflight = git_action_module.push_preflight
+
+        def racing_push_preflight(*args, **kwargs):
+            gate = original_push_preflight(*args, **kwargs)
+            run(project, "git", "commit", "-q", "--allow-empty", "-m", "unvalidated")
+            return gate
+
+        git_action_module.push_preflight = racing_push_preflight
+        try:
+            expect_code("PUSH_INPUT_CHANGED", lambda: execute_push(project))
+        finally:
+            git_action_module.push_preflight = original_push_preflight
+        run(project, "git", "reset", "-q", "--hard", validated)
+
         push_action = execute_push(project)
         assert push_action["status"] == "SUCCESS", push_action
+        assert push_action["head"] == validated, push_action
+        assert run(
+            project, "git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"
+        ) == "origin/feature/user-search-api"
         assert push_action["afterPush"] == "create-if-missing", push_action
 
         # PR gate requires exact published HEAD and configured base/tool/template.

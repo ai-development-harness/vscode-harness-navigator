@@ -66,23 +66,8 @@ def copy_tracked(target: Path) -> None:
         shutil.copy2(source, destination)
 
 
-def case_setext_heading_merge_marker(tmp: Path) -> None:
-    """#110: Markdown setext heading не является merge-conflict marker."""
-    copy_tracked(tmp)
-    git_init(tmp)
-    write(tmp, "docs/setext.md", "Title\n=======\n\ntext\n")
-    commit_all(tmp, "baseline with setext heading")
-    proc = run(tmp, "python3", ".harness/tools/validate.py", "--mode", "manual", check=False)
-    if proc.returncode == 0:
-        return
-    if "merge-conflict marker detected: docs/setext.md" in proc.stdout:
-        raise KnownFailure("setext heading reported as merge-conflict marker")
-    raise AssertionError(proc.stdout + proc.stderr)
-
-
-KNOWN_ISSUES: list[tuple[int, str, Callable[[Path], None]]] = [
-    (110, "setext heading reported as merge marker", case_setext_heading_merge_marker),
-]
+# #110 (setext heading) исправлен и перенесён в repository-hardening-self-test.py.
+KNOWN_ISSUES: list[tuple[int, str, Callable[[Path], None]]] = []
 
 
 

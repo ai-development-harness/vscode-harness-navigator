@@ -51,6 +51,11 @@ import sys
 args = sys.argv[1:]
 state_path = Path(os.environ["FAKE_GH_STATE"])
 
+# #109: provider-вызовы обязаны явно адресовать repository push remote.
+if "--repo" not in args or args[args.index("--repo") + 1] != "acme/app":
+    print("fake gh: missing --repo acme/app: " + " ".join(args), file=sys.stderr)
+    raise SystemExit(8)
+
 if args[:2] == ["pr", "list"]:
     if state_path.is_file():
         print(json.dumps([json.loads(state_path.read_text())]))
@@ -109,7 +114,11 @@ def prepare(root: Path) -> tuple[Path, Path]:
     run(root, "git", "config", "user.name", "PR Action Test")
     run(root, "git", "add", ".")
     run(root, "git", "commit", "-qm", "chore: bootstrap fixture")
-    run(root, "git", "remote", "add", "origin", str(remote))
+    # Raw URL — GitHub, а insteadOf ведёт в локальный bare remote: так gh
+    # получает `--repo acme/app`, а push остаётся offline.
+    github_url = "https://github.com/acme/app.git"
+    run(root, "git", "remote", "add", "origin", github_url)
+    run(root, "git", "config", f"url.{remote}.insteadOf", github_url)
     run(root, "git", "push", "-q", "-u", "origin", "main")
 
     run(root, "git", "switch", "-qc", "feature/pr-action")
@@ -214,6 +223,29 @@ def main() -> int:
             assert reused["status"] == "SUCCESS", reused
             assert reused["reused"] is True, reused
             assert reused["pr"] == 17, reused
+
+            # Regression #110: pr-state не object — BLOCKED, а не AttributeError.
+            valid_state = state_path.read_bytes()
+            state_path.write_text("[]\n", encoding="utf-8")
+            try:
+                execute_pr(root)
+            except GitActionError as exc:
+                assert exc.code == "INVALID_PR_STATE", exc.code
+            else:
+                raise AssertionError("non-object pr-state was accepted")
+            state_path.write_bytes(valid_state)
+
+            # Regression #109: без распознаваемого GitHub remote gh не вызывается
+            # вовсе, а не угадывает default repository.
+            github_url = run(root, "git", "config", "--get", "remote.origin.url").strip()
+            run(root, "git", "remote", "set-url", "origin", str(_remote))
+            try:
+                execute_pr(root)
+            except GitActionError as exc:
+                assert exc.code == "PR_REPO_UNRESOLVED", exc.code
+            else:
+                raise AssertionError("PR action ran without explicit --repo")
+            run(root, "git", "remote", "set-url", "origin", github_url)
 
             # Regression #85: semantic input symlink не должен позволять cleanup
             # удалить durable pr-state target после успешного reuse.

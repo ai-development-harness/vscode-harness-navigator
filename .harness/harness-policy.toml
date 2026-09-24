@@ -198,7 +198,8 @@ required_commands = [
 ]
 
 # Glob-patterns файлов, которые не должны быть tracked Git.
-# Пример: local brief, private runtime overrides, `.env`, private keys, dependencies/build/cache/log artifacts.
+# Pattern без `/` совпадает с именем файла на любой глубине (как в .gitignore); `**/x/**` — каталог x на любой глубине.
+# Пример: local brief, private runtime overrides, `.env`, private keys/keystores, credentials, dependencies/build/cache/log artifacts.
 forbidden_tracked_globs = [
   "PROJECT_BRIEF.local.md",
   "AGENTS.local.md",
@@ -212,7 +213,18 @@ forbidden_tracked_globs = [
   "*.pem",
   "*.key",
   "id_rsa",
+  "id_dsa",
+  "id_ecdsa",
   "id_ed25519",
+  "*.p12",
+  "*.pfx",
+  "*.jks",
+  "*.keystore",
+  "*.tfstate",
+  "*.tfstate.backup",
+  ".pypirc",
+  "**/.ssh/**",
+  "**/.aws/credentials",
   "node_modules/**",
   "dist/**",
   "build/**",
@@ -229,6 +241,8 @@ forbidden_tracked_globs = [
 # Пример: `.env.example` разрешён как безопасный документированный шаблон без secrets.
 allowed_tracked_globs = [
   ".env.example",
+  ".env.sample",
+  ".env.template",
 ]
 
 # Пути, для которых validator применяет lightweight text-format hygiene checks.
@@ -276,8 +290,8 @@ check_final_newline = true
 # Запрещать ли trailing whitespace в проверяемых text files.
 # Пример: true.
 check_trailing_whitespace = true
-# Проверять ли tracked text files на типичные маркеры приватных ключей.
-# Пример: true блокирует случайное добавление PEM/OpenSSH private key material.
+# Проверять ли tracked и staged files (включая binary) на secret material.
+# Пример: true блокирует PEM/PGP/OpenSSH private keys и токены AWS/GitHub/GitLab/Slack.
 check_private_key_material = true
 # Искать ли неразрешённые Git merge-conflict markers `<<<<<<<`, `=======`, `>>>>>>>`.
 # Пример: true блокирует случайный commit незавершённого conflict resolution.

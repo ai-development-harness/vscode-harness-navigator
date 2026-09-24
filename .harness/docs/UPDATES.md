@@ -74,6 +74,8 @@ Moving default branch не является BASE/THEIRS content source. Файл
 
 Наличие tag без допустимого route недостаточно.
 
+Graph обязан быть связным: `latest` — конечный узел без outgoing transition, и из каждого упомянутого release цепочка transitions доходит до `latest`. Тупиковый release отклоняется как `INVALID_UPDATE_GRAPH`, поэтому release gate (`update-engine-self-test.py`) не пропустит graph, на котором какой-то проект не смог бы обновиться.
+
 ## CHECK
 
 `HARNESS UPDATE CHECK` строго read-only.
@@ -281,7 +283,8 @@ Canonical current definitions поставляются Harness control plane, а
 - missing template создаётся из current protocol default;
 - missing frontmatter mapping keys и missing structural sections добавляются additive способом;
 - существующие project values, unknown keys и prose не заменяются protocol defaults;
-- изменение `schema`, `kind` или mapping/non-mapping shape считается non-additive и блокирует автоматическую миграцию;
+- изменение `kind` или mapping/non-mapping shape считается non-additive и блокирует автоматическую миграцию;
+- повышение `schema` мигрирует только по шагам, объявленным в `TEMPLATE_SCHEMA_MIGRATIONS` (`template_contract.py`): ключ — `kind` template (или prefix id: `STEP`, `REQ`, `ADR`, `OQ`), значение — `{from_schema: step}`, где `None` означает аддитивный шаг, а callable `(meta, body) -> (meta, body)` — non-additive преобразование; `PROJECT RECONCILE` применяет цепочку шагов, затем обычную additive migration. Необъявленный шаг, понижение `schema` или ошибка преобразования остаются blocker-ом;
 - `legacy_schema_pending()` обязан обнаруживать structural drift до commit/CI;
 - любое будущее изменение обязательной template shape должно иметь regression `old valid project → update/reconcile → current validation PASS`.
 

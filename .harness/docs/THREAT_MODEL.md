@@ -32,7 +32,7 @@ Harness **не** является защитой от:
 
 Runtime-specific permissions, Claude deny rules, Codex sandbox и Git hooks являются defense-in-depth. Они не заменяют runtime-neutral canonical contracts.
 
-Текущий Claude adapter использует project-level `permissions.deny` для обычных Bash/PowerShell форм прямых Git mutations. Это снижает риск случайного bypass, но command-pattern permission rules не считаются непреодолимой sandbox boundary и намеренно не дублируют весь parser Git policy. Codex adapter сохраняет `sandbox_mode = "workspace-write"` и `approval_policy = "on-request"`; mutation safety для обоих runtime доказывается одинаковыми deterministic tools.
+Текущий Claude adapter использует project-level `permissions.deny` для обычных Bash/PowerShell форм прямых Git mutations: commit/push/merge/rebase, перезапись и удаление refs (`update-ref`, `branch -f/-M/-D`, `switch -C`, `checkout -B`, удаление/перезапись tags), потеря работы (`reset --hard`, `clean`, `stash drop/clear`, `filter-branch`), глобальные формы `git -C`/`git -c` и `gh pr merge`/`gh api`. Это снижает риск случайного bypass, но command-pattern permission rules не считаются непреодолимой sandbox boundary и намеренно не дублируют весь parser Git policy: shell-алиасы, скрипты и команды `## Verification` (subprocess) под deny rules не попадают. Codex adapter сохраняет `sandbox_mode = "workspace-write"` и `approval_policy = "on-request"`; mutation safety для обоих runtime доказывается одинаковыми deterministic tools.
 
 ## Trust boundaries
 
@@ -72,6 +72,8 @@ Tools отвечают за проверяемые факты и механич�
 
 `GIT PR` имеет узкую semantic boundary только для title/body content. Provider mechanics выполняет `git-action.py`: повторный preflight, exact head/base query, reuse/create, published head-OID postcondition и local PR state. Недоверенный semantic prose не может подменить provider/head/base/draft policy.
 
+Provider-вызовы `gh` всегда получают явный `--repo`, выведенный из raw URL `push.remote`; если repository из URL не выводится, PR action BLOCKED, а не полагается на выбор default repository самим `gh` (fork-сценарии).
+
 Многошаговый `GIT PR FINISH` допускает crash между mechanical steps. Recovery не доверяет факту текущей ветки: local PR state + provider `MERGED` + exact provider head OID повторно проверяются, и executor продолжает только remaining idempotent/safe cleanup.
 
 ### External skills и sources
@@ -99,6 +101,12 @@ Review/audit/release reports и `## Evidence` пишут deterministic writers, 
 - generated Verification evidence засчитывается только со `Status: PASS`.
 
 Граница: агент или пользователь с shell-доступом к рабочему дереву технически может вручную создать синтаксически валидный artifact, включая `specialized_reviews` с произвольным evidence. Harness gates защищают от случайного и небрежного обхода и от несогласованного state, но не доказывают, кто написал файл. Независимость review и provenance durable history обеспечиваются снаружи — review Pull Request, CODEOWNERS и branch protection.
+
+### CI и secret hygiene
+
+CI `Harness Integrity` запускает validator из дерева самого PR: PR, ослабляющий validator/policy/workflow, проходит собственную проверку. Поэтому CI помечает изменения trust boundary (`.harness/tools/**`, policy TOML, `.claude/settings.json`, `.codex/**`, `.github/**`) warning-аннотациями, а решающей защитой остаётся review. Проект задаёт владельцев этих путей своим `CODEOWNERS` и включает в branch protection «Require review from Code Owners»; шаблон не поставляет `CODEOWNERS`, потому что владельцы у каждого проекта свои.
+
+Validator блокирует tracked/staged secret material: forbidden globs (basename-паттерны действуют на любой глубине), PEM/PGP private keys любого типа и токены с однозначным форматом (AWS, GitHub, GitLab, Slack) — в том числе внутри binary файлов. Это baseline, а не замена provider secret scanning.
 
 ## Fail-closed правило
 

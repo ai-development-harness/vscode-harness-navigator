@@ -49,6 +49,15 @@ class GitPreflightError(RuntimeError):
         self.details = details
 
 
+def _require_safe_branch_name(name: str) -> None:
+    """`+name` Git трактует в refspec как forced update, `-name` — как опцию (#107)."""
+    if name.startswith(("+", "-")):
+        raise GitPreflightError(
+            "INVALID_BRANCH_NAME",
+            f"branch name must not start with '+' or '-': {name}",
+        )
+
+
 class Repo:
     """Минимальный read-model над Git CLI.
 
@@ -64,6 +73,9 @@ class Repo:
             ["git", *args],
             cwd=self.root,
             text=True,
+            # Non-UTF-8 имена файлов не должны превращаться в traceback (#110).
+            encoding="utf-8",
+            errors="surrogateescape",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -81,6 +93,7 @@ class Repo:
         value = proc.stdout.strip()
         if not value:
             raise GitPreflightError("DETACHED_HEAD", "cannot resolve current branch")
+        _require_safe_branch_name(value)
         return value
 
     def has_head(self) -> bool:
@@ -381,7 +394,14 @@ def _planned_branch(config: dict[str, Any], commit_type: str | None, slug: str |
     pattern = _text(config["branch"], "name_pattern", section="branch")
     if "{prefix}" not in pattern or "{slug}" not in pattern:
         raise GitPreflightError("INVALID_GIT_POLICY", "branch.name_pattern must contain {prefix} and {slug}")
-    candidate = pattern.format(prefix=prefix, slug=_slug(slug, limit))
+    try:
+        candidate = pattern.format(prefix=prefix, slug=_slug(slug, limit))
+    except (KeyError, IndexError, ValueError) as exc:
+        raise GitPreflightError(
+            "INVALID_GIT_POLICY",
+            f"branch.name_pattern supports only {{prefix}} and {{slug}}: {exc}",
+        ) from exc
+    _require_safe_branch_name(candidate)
     proc = subprocess.run(
         ["git", "check-ref-format", "--branch", candidate],
         text=True,
@@ -434,6 +454,19 @@ def check(root: Path) -> dict[str, Any]:
 # Если нужна новая ветка, engine возвращает deterministic requiredBranch через
 # structured blocker вместо самостоятельного branch creation.
 # ---------------------------------------------------------------------------
+def commit_semantic_checks(config: dict[str, Any]) -> dict[str, Any]:
+    """Semantic commit-message checks из policy; не зависят от Git state."""
+    commit_cfg = config["commit"]
+    return {
+        "requireSingleLogicalChange": bool(commit_cfg.get("require_single_logical_change")),
+        "messageStyle": commit_cfg.get("style"),
+        "subjectMaxLength": commit_cfg.get("subject_max_length"),
+        "requireBody": bool(commit_cfg.get("require_body")),
+        "includeVerification": bool(commit_cfg.get("include_verification")),
+        "includeTraceability": bool(commit_cfg.get("include_traceability")),
+    }
+
+
 def commit_preflight(
     root: Path,
     *,
@@ -446,6 +479,10 @@ def commit_preflight(
     state = repo.status()
     commit_cfg = config["commit"]
     branch_cfg = config["branch"]
+
+    # Commit type входит в policy для любой ветки, не только protected (#110).
+    if commit_type is not None and commit_type not in commit_cfg["types"]:
+        raise GitPreflightError("INVALID_COMMIT_TYPE", f"unknown commit type: {commit_type}")
 
     if _bool(commit_cfg, "require_harness_validation", section="commit"):
         _validator(root)
@@ -502,14 +539,7 @@ def commit_preflight(
         staged=staged,
         sign=_bool(commit_cfg, "sign", section="commit"),
         allowEmpty=_bool(commit_cfg, "allow_empty", section="commit"),
-        semanticChecks={
-            "requireSingleLogicalChange": bool(commit_cfg.get("require_single_logical_change")),
-            "messageStyle": commit_cfg.get("style"),
-            "subjectMaxLength": commit_cfg.get("subject_max_length"),
-            "requireBody": bool(commit_cfg.get("require_body")),
-            "includeVerification": bool(commit_cfg.get("include_verification")),
-            "includeTraceability": bool(commit_cfg.get("include_traceability")),
-        },
+        semanticChecks=commit_semantic_checks(config),
         mutationPlan={
             "operation": "git commit",
             "forceForbidden": True,
@@ -538,6 +568,10 @@ def push_preflight(root: Path) -> dict[str, Any]:
     if _bool(push, "fetch_before_push", section="push"):
         repo.fetch(remote)
 
+    # Публикуется ровно тот commit, который видел validator: executor пушит
+    # явный `<oid>:refs/heads/<branch>`, а не то, куда ветка указывает позже (#107).
+    validated_head = repo.head()
+
     if _bool(push, "require_harness_validation", section="push"):
         _validator(root)
 
@@ -548,8 +582,13 @@ def push_preflight(root: Path) -> dict[str, Any]:
             "push.require_clean_worktree=true and worktree/index is not clean",
         )
 
-    if not repo.has_head():
+    if validated_head is None:
         raise GitPreflightError("NO_COMMITS", "cannot push repository without commits")
+    if repo.head() != validated_head or repo.branch() != branch:
+        raise GitPreflightError(
+            "PUSH_INPUT_CHANGED",
+            "branch or HEAD changed during push preflight",
+        )
 
     remote_oid = repo.remote_ref(remote, branch)
     relation = repo.ahead_behind(remote, branch)
@@ -581,11 +620,15 @@ def push_preflight(root: Path) -> dict[str, Any]:
             )
 
     args = ["git", "push"]
-    if _bool(push, "set_upstream", section="push") and remote_oid is None:
-        args.append("--set-upstream")
     if _bool(push, "push_tags", section="push"):
         args.append("--tags")
-    args.extend([remote, branch])
+    # Полный refspec: имя ветки никогда не интерпретируется как `+force`/опция.
+    # Upstream для oid-refspec Git не выставляет — это делает executor отдельно.
+    args.extend([remote, f"{validated_head}:refs/heads/{branch}"])
+    set_upstream = (
+        _bool(push, "set_upstream", section="push")
+        and repo.upstream() is None
+    )
 
     return _result(
         "push",
@@ -597,14 +640,52 @@ def push_preflight(root: Path) -> dict[str, Any]:
         ahead=ahead,
         behind=behind,
         worktree=state,
+        validatedHead=validated_head,
         mutationPlan={
             "argv": args,
             "forceForbidden": True,
-            "setUpstream": _bool(push, "set_upstream", section="push"),
+            "setUpstream": set_upstream,
+            "upstreamArgv": (
+                ["git", "branch", f"--set-upstream-to={remote}/{branch}", branch]
+                if set_upstream
+                else None
+            ),
             "pushTags": _bool(push, "push_tags", section="push"),
         },
         afterPush=config["pull_request"]["after_push"],
     )
+
+
+_REPO_PART = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def github_repo_selector(repo: Repo, remote: str) -> str | None:
+    """`--repo` для gh из configured remote URL: `owner/repo` или `host/owner/repo`.
+
+    Без явного `--repo` gh выбирает default repository сам — в fork-сценарии это
+    может быть не `push.remote`, а `pr list --head` находит чужие PR с тем же
+    именем ветки (#109). Читается raw `remote.<name>.url` (до insteadOf);
+    нераспознанный URL (например, локальный путь) даёт None.
+    """
+    proc = repo.git("config", "--get", f"remote.{remote}.url", check=False)
+    url = proc.stdout.strip()
+    if proc.returncode or not url:
+        return None
+    match = re.match(r"^[a-z][a-z0-9+.-]*://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+)$", url)
+    if match is None:
+        match = re.match(r"^(?:[^@/]+@)?([^/:]+):(?!/)(.+)$", url)
+    if match is None:
+        return None
+    host = match.group(1).lower()
+    parts = [part for part in match.group(2).split("/") if part]
+    if len(parts) < 2:
+        return None
+    owner, name = parts[-2], parts[-1].removesuffix(".git")
+    if not (_REPO_PART.match(owner) and _REPO_PART.match(name)):
+        return None
+    if host in {"github.com", "www.github.com", "ssh.github.com"}:
+        return f"{owner}/{name}"
+    return f"{host}/{owner}/{name}"
 
 
 # ---------------------------------------------------------------------------
@@ -666,6 +747,7 @@ def pr_preflight(root: Path) -> dict[str, Any]:
         "pr",
         branch=branch,
         remote=remote,
+        repoSelector=github_repo_selector(repo, remote),
         publishedHead=remote_oid,
         provider=provider,
         preferredTool=preferred_tool,
@@ -721,8 +803,18 @@ def _github_pr_view(root: Path, config: dict[str, Any], selector: str | int) -> 
         )
     if shutil.which(tool) is None:
         raise GitPreflightError("PR_TOOL_UNAVAILABLE", f"configured PR tool is unavailable: {tool}")
+    remote = _text(config["push"], "remote", section="push")
+    repo_selector = github_repo_selector(Repo(root), remote)
+    if repo_selector is None:
+        raise GitPreflightError(
+            "PR_REPO_UNRESOLVED",
+            f"cannot resolve GitHub repository from remote {remote} URL",
+        )
     proc = subprocess.run(
-        [tool, "pr", "view", str(selector), "--json", "number,state,mergedAt,headRefName,headRefOid,baseRefName,url"],
+        [
+            tool, "pr", "view", str(selector), "--repo", repo_selector,
+            "--json", "number,state,mergedAt,headRefName,headRefOid,baseRefName,url",
+        ],
         cwd=root,
         text=True,
         stdout=subprocess.PIPE,
