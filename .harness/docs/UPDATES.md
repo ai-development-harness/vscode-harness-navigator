@@ -104,13 +104,14 @@ Engine перед первой записью сам повторно прове
 
 Route применяется hop-by-hop, и каждый hop — отдельная транзакция с журналом `.harness/local/update-journal/`:
 
-1. backup всех затрагиваемых managed paths, lock и local runtime state (`.harness/local/execution/execution-status.json`) сохраняется до первой записи;
+1. backup всех затрагиваемых managed paths, lock и local runtime state (`.harness/local/execution/execution-status.json`) сохраняется до первой записи. Snapshot execution state и создание journal выполняются под тем же advisory lock, что canonical execution layer; после появления journal другие canonical sessions не могут менять execution state до commit/rollback;
 2. files пишутся атомарно (temp + fsync + rename); код engine (`harness_update.py`, `harness-update.py`, `update_recovery.py`) пишется последним;
-3. lock и durable report этого hop создаются внутри транзакции;
+3. lock этого hop пишется внутри транзакции;
 4. target validator запускается отдельным процессом;
-5. только после его PASS журнал удаляется — это commit point hop.
+5. только после его PASS создаётся durable report. Журнал до записи на диск резервирует path, уникальный staging path и sha256 содержимого. Полный report пишется в staging и публикуется `os.link` (атомарно, без overwrite); затем журнал фиксирует inode. Окна с незарегистрированным `UPDATE-*.md` нет, а rollback удаляет report только при доказанном владении (тот же inode, что у staging, или записанный inode + sha256): чужой report, занявший то же имя, не удаляется никогда;
+6. затем журнал атомарно переименовывается в tombstone `update-journal.discarded-*` — это commit point hop; удаление tombstone уже не участвует в решении commit/rollback, а оставшийся после crash tombstone удаляет следующая транзакция или recovery. Rollback завершается так же; перед первой записью он проверяет наличие всех backup blobs (неполный journal — fail-closed `UPDATE_JOURNAL_INVALID` без частичного отката) и удаляет `execution-status.lock`, если того не было до hop. `HARNESS UPDATE CHECK` при pending journal возвращает `UPDATE_JOURNAL_PENDING` до создания execution record.
 
-Любой failure, включая `KeyboardInterrupt`, откатывает hop byte-for-byte: восстанавливаются files и modes, удаляются введённые paths и report, local state восстанавливается, если target code изменил его `schemaVersion`. Если процесс был убит, журнал остаётся на диске: `HARNESS UPDATE CHECK` возвращает `UPDATE_JOURNAL_PENDING`, а следующий `HARNESS UPDATE APPLY` сначала откатывает прерванный hop (`recoveredInterruptedUpdate` в результате) и затем выполняет update заново. Ручной recovery без остальных Harness-модулей:
+Любой failure, включая `KeyboardInterrupt`, откатывает hop byte-for-byte: восстанавливаются files и **exact permission bits**, удаляются введённые paths и report, journaled local state (`execution-status.json`) восстанавливается до pre-hop bytes, а созданный hop-ом отсутствовавший файл удаляется — независимо от `schemaVersion`. Rollback local state также выполняется под execution-status lock, поэтому параллельная canonical session не может потерять свою запись: она либо завершилась до snapshot, либо блокируется pending update transaction. Если lock был создан уже внутри hop target-validator-ом, recovery сначала durable переводит journal в `recovering` (это отзывает transactionId у surviving validator), затем дожидается освобождения lock, восстанавливает state и только после этого удаляет созданный lock до снятия journal gate. Если процесс был убит, журнал остаётся на диске: `HARNESS UPDATE CHECK` возвращает `UPDATE_JOURNAL_PENDING`, а следующий `HARNESS UPDATE APPLY` сначала откатывает прерванный hop (`recoveredInterruptedUpdate` в результате) и затем выполняет update заново. Ручной recovery без остальных Harness-модулей:
 
 ```bash
 python3 .harness/tools/harness-update.py recover --json
@@ -302,7 +303,7 @@ Canonical current definitions поставляются Harness control plane, а
 
 ## Update reports
 
-Каждый применённый hop создаёт собственный report в configured `state.report_directory` с machine-readable YAML frontmatter `schema: 1` — внутри транзакции hop, поэтому откат hop удаляет и его report. `initial_release`/`final_target` описывают сам hop, requested target указан в body.
+Каждый применённый hop создаёт собственный report в configured `state.report_directory` с machine-readable YAML frontmatter `schema: 1` — внутри транзакции hop и только после PASS target validator, поэтому report никогда не утверждает непроверенный PASS, а откат/recovery hop удаляет и его report. `initial_release`/`final_target` описывают сам hop, requested target указан в body.
 
 Canonical имя — строго `UPDATE-<UTC timestamp>.md`; `created_at` обязан обозначать тот же whole-second UTC instant. UPDATE reports входят в immutable durable history: существующий report нельзя переписать/удалить/rename. Если текущая UTC-секунда уже занята, writer выбирает следующий свободный whole-second timestamp; альтернативных suffix-форматов нет.
 
@@ -328,6 +329,8 @@ python3 .harness/tools/harness-update.py adopt --from vX.Y.Z --json
 ```
 
 Baseline должен совпадать с current manifest release. Новый lock pin-ит не только tag ref, но и exact commit OID. Если `harness_owned` files расходятся с baseline, adoption возвращает `ADOPTION_BASELINE_DRIFT` и lock не создаётся: lock не имеет права утверждать baseline, которого в проекте нет.
+
+Lock adoption пишется внутри журнала и принимается только после PASS того же postcondition validator (`validate.py --mode manual`), что и обычный hop. `ADOPTED` означает валидное resulting state; при failure/прерывании lock не остаётся (`POSTCONDITION_FAILED`). Поэтому adoption проекта, который уже не проходит manual validation, блокируется до исправления.
 
 Текущий deterministic updater поддерживает baseline **не старее `v0.6.0`**. Для current lock, target или adoption baseline ниже этого floor операция завершается с `UNSUPPORTED_HARNESS_RELEASE`. Historical transitions до `v0.6.0` остаются в update graph как immutable release history и regression boundary для старых bridge, но больше не являются поддерживаемой точкой входа runtime.
 

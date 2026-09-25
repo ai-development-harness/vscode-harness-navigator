@@ -50,7 +50,10 @@ Read-only deterministic preflight без model call: dispatcher напрямую
 - вызывает `git-action.py commit --commit-type ... --slug ... --message-file ...`;
 - executor повторяет preflight, при protected `auto-create` создаёт только exact required branch;
 - message читается и валидируется один раз Harness-ом, затем exact captured text передаётся `git commit -F -` через stdin; Git не переоткрывает mutable input path;
-- только после PASS создаёт **локальный commit** и проверяет новый HEAD.
+- только после PASS создаёт **локальный commit** и проверяет новый HEAD;
+- до validator фиксируется snapshot `{branch, HEAD, index tree}`, перед `git commit` он сверяется повторно (`COMMIT_INPUT_CHANGED`), после — commit обязан иметь validated parent и tree.
+
+Git hooks (`pre-commit`, `prepare-commit-msg`, `commit-msg` …) выполняются как обычно. Если hook изменил index, message или даже переключил branch, executor возвращает `COMMIT_POSTCONDITION_FAILED` при любом расхождении с validated branch/parent/tree и пытается компенсировать только доказанный primary commit. `git commit` запускается с уникальным `GIT_REFLOG_ACTION` и `core.logAllRefUpdates=always`; ownership ищется по reflog **всех local branch refs**, поэтому branch-switch hook не прячет созданный commit от compensation. Exact ref возвращается compare-and-swap-ом к parent primary commit (для root commit — CAS-удаление ref). Index восстанавливается к validated tree только если hook не переключил branch; иначе рабочее дерево/index не переписываются разрушительно и остаются для ручной проверки. Если marker неоднозначен или ref уже сдвинут дальше (CAS не совпал), компенсация не выполняется и результат содержит `compensation.status = not_compensated`; `reset --hard` не используется никогда. Если hook перевёл HEAD в detached state, marker есть только в reflog `HEAD`: тогда CAS (`update-ref --no-deref`) возвращает на parent сам detached `HEAD`.
 - после доказанного commit SUCCESS пытается удалить только exact validated `.harness/local/git/commit-message.txt`; symlink path запрещён, при failure message сохраняется для retry, а secondary cleanup failure возвращается warning и не отменяет уже созданный commit.
 
 Message строится по `.gitmessage`:

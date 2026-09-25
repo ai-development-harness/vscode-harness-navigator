@@ -49,6 +49,10 @@ def copy_tracked(target: Path) -> None:
             continue
         rel = token.decode("utf-8")
         source = SOURCE_ROOT / rel
+        # Tracked path, удалённый из working tree, но не из index (обычный `rm`
+        # без `git rm`), fixture не нужен — пропускаем вместо traceback.
+        if not source.is_file():
+            continue
         destination = target / rel
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
@@ -102,6 +106,49 @@ def main() -> int:
             "kind": "deterministic",
             "handler": "harness-update-apply",
         }
+
+        # #132 follow-up: stale update journal восстанавливается до создания
+        # новой APPLY execution, иначе execution-status rollback удалил бы её.
+        pending = root / ".harness/local/update-journal"
+        pending.mkdir(parents=True)
+
+        # Final review P2: CHECK при pending journal сохраняет updater-specific
+        # reasonCode и не создаёт execution record.
+        status_file = root / ".harness/local/execution/execution-status.json"
+        status_before = status_file.read_bytes() if status_file.exists() else None
+        pending_check = start_dispatch(root, "HARNESS UPDATE CHECK")
+        assert pending_check["status"] == "BLOCKED", pending_check
+        assert pending_check["reasonCode"] == "UPDATE_JOURNAL_PENDING", pending_check
+        assert (status_file.read_bytes() if status_file.exists() else None) == status_before
+        assert pending.exists(), "CHECK must not recover the journal"
+
+        original_recover = command_dispatch_module.recover_pending
+        original_apply = command_dispatch_module.apply_update
+
+        def fake_recover(_root):
+            shutil.rmtree(pending)
+            return {"rolledBack": True, "operation": "hop", "state": "verifying"}
+
+        def fake_apply(_root, *, target=None):
+            return {
+                "status": "NO_UPDATE",
+                "current": "v0.8.5",
+                "resolvedTarget": target or "v0.8.5",
+                "route": ["v0.8.5"],
+                "repositoryMutated": False,
+            }
+
+        command_dispatch_module.recover_pending = fake_recover
+        command_dispatch_module.apply_update = fake_apply
+        try:
+            recovered_apply = start_dispatch(root, "HARNESS UPDATE APPLY")
+        finally:
+            command_dispatch_module.recover_pending = original_recover
+            command_dispatch_module.apply_update = original_apply
+        assert recovered_apply["status"] == "DONE", recovered_apply
+        assert recovered_apply["result"]["status"] == "SUCCESS", recovered_apply
+        assert recovered_apply["result"]["recoveredInterruptedUpdate"]["rolledBack"] is True, recovered_apply
+        assert not pending.exists(), "pending journal survived pre-dispatch recovery"
 
         # Mutating deterministic handler may return SUCCESS rather than PASS.
         # Dispatcher must persist exact SUCCESS and finish without semantic handoff.

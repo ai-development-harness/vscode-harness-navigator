@@ -26,6 +26,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import tempfile
 from typing import Any, Callable
 
@@ -125,12 +126,17 @@ def create_durable_report(
     directory: Path,
     content_factory: Callable[[str], str],
     now: datetime | None = None,
+    ledger: Any = None,
 ) -> tuple[Path, str]:
     """Атомарно создать immutable timestamped report без overwrite race.
 
     Filename reservation и create — одна операция O_EXCL. Если другой writer
     успел занять тот же UTC second между вычислением имени и записью, caller не
     перезаписывает его report, а пробует следующий canonical second.
+
+    `ledger` (transactional caller) получает доказательство владения, которое
+    позволяет rollback удалить только report этой транзакции; см.
+    `_create_owned_report`.
     """
     directory.mkdir(parents=True, exist_ok=True)
     instant = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(microsecond=0)
@@ -138,6 +144,12 @@ def create_durable_report(
     while True:
         filename = prefix + instant.strftime("%Y%m%dT%H%M%SZ") + ".md"
         path = directory / filename
+        if ledger is not None:
+            created_at = _create_owned_report(path, ledger=ledger, instant=instant, content_factory=content_factory)
+            if created_at is None:
+                instant += timedelta(seconds=1)
+                continue
+            return path, created_at
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         try:
             fd = os.open(path, flags, 0o666)
@@ -160,6 +172,54 @@ def create_durable_report(
             path.unlink(missing_ok=True)
             raise
         return path, created_at
+
+
+def _create_owned_report(
+    path: Path,
+    *,
+    ledger: Any,
+    instant: datetime,
+    content_factory: Callable[[str], str],
+) -> str | None:
+    """Создать report так, чтобы rollback мог доказать, что файл — наш (#130).
+
+    Порядок (каждый шаг crash-safe для rollback):
+
+    1. `ledger.reserve` — journal фиксирует path, уникальный staging path и
+       sha256 содержимого до любых записей на диск;
+    2. полный report пишется в staging (O_EXCL, имя с random nonce);
+    3. `os.link(staging, path)` публикует его атомарно: имя занимается сразу
+       с полным содержимым, а FileExistsError означает, что имя чужое;
+    4. `ledger.confirm` фиксирует inode, после чего staging удаляется.
+
+    Пока staging существует, владение доказывает `samefile(staging, path)`;
+    после — записанный inode + sha256. Проигранная гонка за имя сначала
+    удаляет staging, потом снимает резервацию: чужой файл ни на одном шаге
+    не выглядит нашим. Возвращает None, если имя занято.
+    """
+    if path.exists() or path.is_symlink():
+        return None
+    created_at = instant.isoformat(timespec="seconds").replace("+00:00", "Z")
+    data = content_factory(created_at).encode("utf-8")
+    staging = path.with_name(f".{path.name}.{secrets.token_hex(8)}.staging")
+    ledger.reserve(path, staging, hashlib.sha256(data).hexdigest())
+    # При исключении на любом шаге staging не удаляется здесь: он уже в journal,
+    # и rollback использует его как доказательство владения, затем удаляет.
+    fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    try:
+        os.link(staging, path)
+    except FileExistsError:
+        staging.unlink()
+        ledger.release(path)
+        return None
+    ledger.confirm(path, os.stat(path))
+    staging.unlink()
+    return created_at
+
 
 def parse_utc_timestamp(value: Any) -> datetime | None:
     """Разобрать timezone-aware ISO-8601 instant и нормализовать его в UTC."""

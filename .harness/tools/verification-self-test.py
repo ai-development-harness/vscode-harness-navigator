@@ -47,6 +47,10 @@ def copy_tracked(target: Path) -> None:
             continue
         rel = token.decode("utf-8")
         source = SOURCE_ROOT / rel
+        # Tracked path, удалённый из working tree, но не из index (обычный `rm`
+        # без `git rm`), fixture не нужен — пропускаем вместо traceback.
+        if not source.is_file():
+            continue
         destination = target / rel
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)

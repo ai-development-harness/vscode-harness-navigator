@@ -31,6 +31,8 @@ Per-STEP файлы запрещены.
 
 Все read-modify-write операции сериализуются advisory lock-файлом `.harness/local/execution/execution-status.lock`. На Unix используется `flock`, на Windows — `msvcrt.locking`; lock освобождается ОС при завершении процесса. Atomic `os.replace` сохраняет целостность JSON, а lock отдельно предотвращает lost update между параллельными sessions/subagents.
 
+Во время активного `.harness/local/update-journal/` этот же lock образует concurrency boundary с self-update: snapshot local state создаётся под lock, после чего обычная canonical session получает `UPDATE_IN_PROGRESS` и не пишет state до commit/rollback update. Target validator получает transaction identity только внутри собственного subprocess, чтобы будущая deterministic migration могла использовать execution layer без открытия доступа другим sessions.
+
 ## Schema v2 и bounded state
 
 Текущий local format — `schemaVersion: 2`. Он намеренно разделяет три разные семантики:
