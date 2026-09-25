@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import path from 'node:path';
 import type { Artifact, ArtifactKind } from '../projectModel/artifactIndex';
+import type { ArtifactPresentation } from './artifactPresentation';
 import { VIEW_MESSAGES } from './viewMessages';
 
 const KIND_ICONS: Readonly<Record<ArtifactKind, string>> = {
@@ -31,12 +32,18 @@ export interface ArtifactLeafNode {
 export function buildArtifactTreeItem(
   folder: vscode.WorkspaceFolder,
   artifact: Artifact,
+  presentation?: ArtifactPresentation,
 ): vscode.TreeItem {
   const item = new vscode.TreeItem(artifact.id, vscode.TreeItemCollapsibleState.None);
   item.id = `harnessNavigator.artifact:${folder.uri.toString()}:${artifact.id}`;
   item.description = artifact.title;
   item.tooltip = buildTooltip(folder, artifact);
-  item.iconPath = new vscode.ThemeIcon(KIND_ICONS[artifact.kind]);
+  // Focus View не передаёт presentation и сохраняет нейтральную kind-иконку.
+  // Semantic цвет/иконка создаются только opt-in consumer-ом Artifacts View.
+  item.iconPath = new vscode.ThemeIcon(
+    presentation?.iconId ?? KIND_ICONS[artifact.kind],
+    presentation?.colorId === undefined ? undefined : new vscode.ThemeColor(presentation.colorId),
+  );
   item.contextValue = 'harnessArtifactItem';
   item.command = {
     command: 'vscode.open',
