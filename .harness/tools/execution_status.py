@@ -66,6 +66,9 @@ from review_contract import latest_review as latest_valid_review
 # STEP, Git, Harness update и остальные namespaces.
 STATUS_PATH = ".harness/local/execution/execution-status.json"
 LOCK_PATH = ".harness/local/execution/execution-status.lock"
+UPDATE_JOURNAL_PATH = ".harness/local/update-journal/journal.json"
+UPDATE_JOURNAL_DIR = ".harness/local/update-journal"
+UPDATE_TRANSACTION_ENV = "HARNESS_UPDATE_TRANSACTION"
 _PROCESS_LOCKS: dict[str, threading.RLock] = {}
 _PROCESS_LOCKS_GUARD = threading.Lock()
 _LOCK_LOCAL = threading.local()
@@ -144,7 +147,6 @@ def execution_state_lock(root: Path):
     уже открытой transaction.
     """
     lock_path = root / LOCK_PATH
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
     key = str(lock_path.resolve())
     process_lock = _process_lock(key)
 
@@ -155,6 +157,8 @@ def execution_state_lock(root: Path):
             _LOCK_LOCAL.held = held
         depth = int(held.get(key, 0))
         if depth > 0:
+            # Outer owner уже прошёл gate до начала update. Updater увидит
+            # существующий lock и дождётся завершения всей reentrant transaction.
             held[key] = depth + 1
             try:
                 yield
@@ -162,6 +166,11 @@ def execution_state_lock(root: Path):
                 held[key] -= 1
             return
 
+        # Double-check protocol: сначала не создаём новый lock-file при pending
+        # update, затем после OS acquire повторяем проверку на случай гонки,
+        # когда journal появился между первой проверкой и flock/locking.
+        _require_update_transaction_access(root)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
         fh = lock_path.open("a+b")
         try:
             if os.name == "nt":
@@ -176,6 +185,7 @@ def execution_state_lock(root: Path):
                 import fcntl
 
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            _require_update_transaction_access(root)
             held[key] = 1
             try:
                 yield
@@ -192,6 +202,41 @@ def execution_state_lock(root: Path):
                     fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
         finally:
             fh.close()
+
+
+def _require_update_transaction_access(root: Path) -> None:
+    """Не допустить lost update execution state во время Harness update.
+
+    begin_journal() создаёт journal и snapshot под тем же advisory lock. После
+    этого другие canonical sessions должны остановиться до commit/rollback.
+    Внутренний target validator может получить transactionId через environment,
+    если будущая версия validator действительно использует execution layer.
+    """
+    directory = root / UPDATE_JOURNAL_DIR
+    if not directory.exists() and not directory.is_symlink():
+        return
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError("UPDATE_IN_PROGRESS: update journal boundary is invalid")
+    path = root / UPDATE_JOURNAL_PATH
+    if not path.is_file():
+        raise ValueError("UPDATE_IN_PROGRESS: Harness update transaction is preparing")
+    try:
+        journal = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"UPDATE_IN_PROGRESS: cannot read update journal: {exc}") from exc
+    transaction_id = journal.get("transactionId") if isinstance(journal, dict) else None
+    transaction_state = journal.get("state") if isinstance(journal, dict) else None
+    if (
+        isinstance(transaction_id, str)
+        and transaction_id
+        and transaction_state in {"applying", "verifying"}
+        and os.environ.get(UPDATE_TRANSACTION_ENV) == transaction_id
+    ):
+        return
+    raise ValueError(
+        "UPDATE_IN_PROGRESS: execution state is locked by HARNESS UPDATE APPLY; "
+        "finish or recover the update before starting another canonical command"
+    )
 
 
 def execution_state_mutation(func):

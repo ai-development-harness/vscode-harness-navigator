@@ -137,6 +137,172 @@ def expect_code(code: str, fn) -> Exception:
     raise AssertionError(f"expected blocker {code}")
 
 
+HOOK_ADDS_FILE = "#!/bin/sh\necho hooked > hook-added.txt\ngit add hook-added.txt\n"
+HOOK_REWRITES_MESSAGE = "#!/bin/sh\nprintf 'rewritten by hook\\n\\nTicket: X-1\\n' > \"$1\"\n"
+HOOK_SWITCHES_BRANCH = (
+    "#!/bin/sh\n"
+    "git switch -q hook-target || exit 1\n"
+    "echo hooked > hook-added.txt\n"
+    "git add hook-added.txt\n"
+)
+
+
+def _hook_repo(base: Path, name: str, *, with_head: bool, commit_msg_hook: bool = False) -> Path:
+    repo = base / name
+    repo.mkdir()
+    run(repo, "git", "init", "-q", "-b", "main")
+    run(repo, "git", "config", "user.email", "hook@example.invalid")
+    run(repo, "git", "config", "user.name", "Hook Test")
+    write(repo, ".harness/manifest.yaml", manifest())
+    write(repo, ".harness/git-policy.toml", policy())
+    write(repo, ".harness/tools/validate.py", validator())
+    write(repo, ".github/pull_request_template.md", "# PR\n")
+    run(repo, "git", "add", ".")
+    if with_head:
+        run(repo, "git", "commit", "-qm", "initial")
+        run(repo, "git", "switch", "-qc", "feature/hooked")
+        write(repo, "change.txt", "validated\n")
+        run(repo, "git", "add", "change.txt")
+    hook = repo / ".git/hooks/pre-commit"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(HOOK_ADDS_FILE, encoding="utf-8")
+    hook.chmod(0o755)
+    if commit_msg_hook:
+        msg_hook = repo / ".git/hooks/commit-msg"
+        msg_hook.write_text(HOOK_REWRITES_MESSAGE, encoding="utf-8")
+        msg_hook.chmod(0o755)
+    write(repo, ".harness/local/git/msg.txt", "feat: hooked\n\nContext:\n- hook regression\n")
+    return repo
+
+
+def hook_scenarios(base: Path) -> None:
+    """Regression #131: hook, меняющий index, не оставляет непроверенный commit."""
+    if os.name != "posix":
+        return
+
+    # Обычный commit: ref CAS-возвращается, index = validated tree, hook-файл остаётся.
+    repo = _hook_repo(base, "hook-existing", with_head=True)
+    before = run(repo, "git", "rev-parse", "HEAD")
+    validated_tree = run(repo, "git", "write-tree")
+    exc = expect_code(
+        "COMMIT_POSTCONDITION_FAILED",
+        lambda: execute_commit(repo, commit_type="feat", slug="hooked", message_file=repo / ".harness/local/git/msg.txt"),
+    )
+    assert exc.details["compensation"]["status"] == "reverted", exc.details
+    assert run(repo, "git", "rev-parse", "HEAD") == before, "unvalidated commit left on branch"
+    assert run(repo, "git", "branch", "--show-current") == "feature/hooked"
+    assert run(repo, "git", "write-tree") == validated_tree, "index not restored to validated tree"
+    assert (repo / "hook-added.txt").read_text() == "hooked\n", "hook change destroyed"
+
+    # pre-commit меняет index, commit-msg меняет message: владение commit-ом
+    # доказывается reflog marker-ом, а не текстом message (#131 review).
+    for with_head in (True, False):
+        repo = _hook_repo(base, f"hook-message-{with_head}", with_head=with_head, commit_msg_hook=True)
+        if not with_head:
+            # Пользователь может отключить reflog глобальной/локальной config.
+            # Executor обязан принудительно создать reflog для своей commit
+            # mutation, иначе marker не докажет ownership первого commit.
+            run(repo, "git", "config", "core.logAllRefUpdates", "false")
+        validated_tree = run(repo, "git", "write-tree")
+        exc = expect_code(
+            "COMMIT_POSTCONDITION_FAILED",
+            lambda: execute_commit(repo, commit_type="feat", slug="hooked", message_file=repo / ".harness/local/git/msg.txt"),
+        )
+        assert exc.details["compensation"]["status"] == "reverted", exc.details
+        head = subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD^{tree}"], cwd=repo, capture_output=True, text=True)
+        if with_head:
+            assert head.stdout.strip() != exc.details["tree"], "branch points to unvalidated tree"
+            assert run(repo, "git", "log", "-1", "--pretty=%s") == "initial"
+        else:
+            assert head.returncode != 0, "initial unvalidated commit left as HEAD"
+        assert run(repo, "git", "write-tree") == validated_tree
+
+    # Hook переключает branch до primary commit. Marker должен быть найден в
+    # фактически обновлённом ref, а не только в validated branch (#131).
+    repo = _hook_repo(base, "hook-branch-switch", with_head=True)
+    before = run(repo, "git", "rev-parse", "HEAD")
+    run(repo, "git", "branch", "hook-target", before)
+    switch_hook = repo / ".git/hooks/pre-commit"
+    switch_hook.write_text(HOOK_SWITCHES_BRANCH, encoding="utf-8")
+    switch_hook.chmod(0o755)
+    exc = expect_code(
+        "COMMIT_POSTCONDITION_FAILED",
+        lambda: execute_commit(
+            repo,
+            commit_type="feat",
+            slug="hooked",
+            message_file=repo / ".harness/local/git/msg.txt",
+        ),
+    )
+    assert exc.details["compensation"]["status"] == "reverted", exc.details
+    assert exc.details["compensation"]["revertedRef"] == "refs/heads/hook-target", exc.details
+    assert run(repo, "git", "branch", "--show-current") == "hook-target"
+    assert run(repo, "git", "rev-parse", "HEAD") == before, "unvalidated commit left on switched branch"
+    staged = set(filter(None, run(repo, "git", "diff", "--cached", "--name-only").splitlines()))
+    assert {"change.txt", "hook-added.txt"} <= staged, staged
+
+    # Hook переводит HEAD в detached state: primary commit сдвигает сам HEAD,
+    # marker есть только в reflog HEAD — HEAD тоже не должен остаться на нём.
+    repo = _hook_repo(base, "hook-detach", with_head=True)
+    before = run(repo, "git", "rev-parse", "HEAD")
+    detach_hook = repo / ".git/hooks/pre-commit"
+    detach_hook.write_text(
+        HOOK_SWITCHES_BRANCH.replace("git switch -q hook-target", "git switch -q --detach"),
+        encoding="utf-8",
+    )
+    detach_hook.chmod(0o755)
+    exc = expect_code(
+        "COMMIT_POSTCONDITION_FAILED",
+        lambda: execute_commit(
+            repo,
+            commit_type="feat",
+            slug="hooked",
+            message_file=repo / ".harness/local/git/msg.txt",
+        ),
+    )
+    assert exc.details["compensation"]["status"] == "reverted", exc.details
+    assert exc.details["compensation"]["revertedRef"] == "HEAD", exc.details
+    assert run(repo, "git", "rev-parse", "HEAD") == before, "unvalidated commit left as detached HEAD"
+    assert run(repo, "git", "rev-parse", "refs/heads/feature/hooked") == before
+    staged = set(filter(None, run(repo, "git", "diff", "--cached", "--name-only").splitlines()))
+    assert {"change.txt", "hook-added.txt"} <= staged, staged
+
+    # Первый commit: branch возвращается в unborn состояние, index = validated tree.
+    repo = _hook_repo(base, "hook-initial", with_head=False)
+    validated_tree = run(repo, "git", "write-tree")
+    exc = expect_code(
+        "COMMIT_POSTCONDITION_FAILED",
+        lambda: execute_commit(repo, commit_type="feat", slug="hooked", message_file=repo / ".harness/local/git/msg.txt"),
+    )
+    assert exc.details["compensation"]["status"] == "reverted", exc.details
+    head = subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD"], cwd=repo, capture_output=True, text=True)
+    assert head.returncode != 0, "initial unvalidated commit left as HEAD"
+    assert run(repo, "git", "write-tree") == validated_tree
+
+    # Ref сдвинут конкурентно после commit: без CAS-совпадения ничего не трогаем.
+    repo = _hook_repo(base, "hook-moved", with_head=True)
+    before = run(repo, "git", "rev-parse", "HEAD")
+    original_run = git_action_module._run
+
+    def racing_run(action_root, argv, *, input_text=None, env=None):
+        result = original_run(action_root, argv, input_text=input_text, env=env)
+        if "commit" in argv:
+            other = run(repo, "git", "commit-tree", "-p", before, "-m", "concurrent", run(repo, "git", "write-tree"))
+            run(repo, "git", "update-ref", "refs/heads/feature/hooked", other)
+        return result
+
+    git_action_module._run = racing_run
+    try:
+        exc = expect_code(
+            "COMMIT_POSTCONDITION_FAILED",
+            lambda: execute_commit(repo, commit_type="feat", slug="hooked", message_file=repo / ".harness/local/git/msg.txt"),
+        )
+    finally:
+        git_action_module._run = original_run
+    assert exc.details["compensation"]["status"] == "not_compensated", exc.details
+    assert run(repo, "git", "log", "-1", "--pretty=%s") == "concurrent", "concurrent ref was overwritten"
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="harness-git-preflight-") as tmp:
         base = Path(tmp)
@@ -211,8 +377,9 @@ def main() -> int:
             argv: list[str],
             *,
             input_text: str | None = None,
+            env: dict[str, str] | None = None,
         ):
-            if argv[:2] == ["git", "commit"]:
+            if "commit" in argv:
                 snapshot_message.write_text(
                     "fix: raced message\n\nContext:\n- must not be committed\n",
                     encoding="utf-8",
@@ -222,6 +389,7 @@ def main() -> int:
                 action_root,
                 argv,
                 input_text=input_text,
+                env=env,
             )
 
         git_action_module._run = racing_commit_run
@@ -591,6 +759,8 @@ def main() -> int:
         cleanup_action = execute_pr_finish(finish_project, pr_data=merged_pr)
         assert cleanup_action["status"] == "SUCCESS", cleanup_action
         assert not (finish_project / ".harness/local/git/pr-state.json").exists()
+
+        hook_scenarios(base)
 
     print("GIT PREFLIGHT SELF-TEST: PASS")
     return 0

@@ -47,11 +47,12 @@ from update_recovery import (
     finish_journal,
     load_journal,
     prune_empty_parents,
-    record_created_report,
+    ReportLedger,
     recover_pending,
     rollback_journal,
     safe_relative_path,
     update_journal,
+    UPDATE_TRANSACTION_ENV,
 )
 
 
@@ -1051,7 +1052,7 @@ def _preflight_route(root: Path, route: list[Hop], source: GitSource) -> list[Ho
     return plans
 
 
-def _require_no_pending_journal(root: Path) -> None:
+def require_no_pending_journal(root: Path) -> None:
     try:
         journal = load_journal(root)
     except JournalError as exc:
@@ -1065,7 +1066,7 @@ def _require_no_pending_journal(root: Path) -> None:
 
 
 def check_update(root: Path, *, target: str | None = None, source_url: str | None = None) -> dict[str, Any]:
-    _require_no_pending_journal(root)
+    require_no_pending_journal(root)
     policy = load_update_policy(root)
     repository = get(policy, "source.repository")
     if not isinstance(repository, str) or not repository:
@@ -1116,6 +1117,15 @@ def _run_validator(root: Path, *, phase: str) -> None:
     if not validator.is_file():
         raise UpdateError("VALIDATOR_UNAVAILABLE", f"Harness validator missing during {phase}")
     code = "CURRENT_HARNESS_INVALID" if phase == "preflight" else "POSTCONDITION_FAILED"
+    env = os.environ.copy()
+    # Future/current target validator may legitimately read/migrate execution
+    # state inside this transaction. transactionId grants only that subprocess
+    # access; unrelated canonical sessions remain blocked by execution_status.
+    journal = load_journal(root)
+    if isinstance(journal, dict):
+        transaction_id = journal.get("transactionId")
+        if isinstance(transaction_id, str) and transaction_id:
+            env[UPDATE_TRANSACTION_ENV] = transaction_id
     try:
         proc = subprocess.run(
             [sys.executable, str(validator), "--mode", "manual"],
@@ -1124,6 +1134,7 @@ def _run_validator(root: Path, *, phase: str) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=VALIDATOR_TIMEOUT_SECONDS,
+            env=env,
         )
     except subprocess.TimeoutExpired as exc:
         raise UpdateError(code, f"Harness validation timed out during {phase}") from exc
@@ -1132,8 +1143,19 @@ def _run_validator(root: Path, *, phase: str) -> None:
         raise UpdateError(code, output or f"Harness validation failed during {phase}")
 
 
-def _write_report(root: Path, *, plan: HopPlan, requested: str, reload_required: bool) -> str:
-    """Durable report одного hop; пишется внутри транзакции hop."""
+def _write_report(
+    root: Path,
+    *,
+    plan: HopPlan,
+    requested: str,
+    reload_required: bool,
+    ledger: ReportLedger | None = None,
+) -> str:
+    """Durable report одного hop; пишется внутри транзакции hop после PASS validator.
+
+    `ledger` регистрирует report в journal до появления файла и хранит
+    доказательство владения: rollback удаляет только report этого hop (#130).
+    """
     directory = update_report_directory(root)
     route = [plan.hop.source, plan.hop.target]
     route_yaml = "\n".join(f"  - {item}" for item in route)
@@ -1186,6 +1208,7 @@ Reclassified:
         "UPDATE-",
         directory=directory,
         content_factory=report_content,
+        ledger=ledger,
     )
     return path.relative_to(root).as_posix()
 
@@ -1298,10 +1321,18 @@ def _apply_hop(
         # Lock участвует в target validator, поэтому обновляется внутри
         # транзакции до postcondition и откатывается вместе с файлами.
         _write_lock(root, plan.hop.target, source.resolve_tag(plan.hop.target))
-        report = _write_report(root, plan=plan, requested=requested, reload_required=plan.reload_required)
-        record_created_report(root, journal, report)
         update_journal(root, journal, state="verifying")
         _run_validator(root, phase="postcondition")
+        # Report утверждает validator PASS, поэтому создаётся только после
+        # фактического PASS; journal резервирует его до создания файла и
+        # хранит доказательство владения для rollback/recovery (#130).
+        report = _write_report(
+            root,
+            plan=plan,
+            requested=requested,
+            reload_required=plan.reload_required,
+            ledger=ReportLedger(root, journal),
+        )
     except BaseException:
         # BaseException: KeyboardInterrupt/SystemExit тоже откатываются.
         rollback_journal(root, journal)
@@ -1401,7 +1432,7 @@ def apply_update(root: Path, *, target: str | None = None, source_url: str | Non
 
 def adopt_legacy(root: Path, *, baseline: str, source_url: str | None = None) -> dict[str, Any]:
     """Создать первый pinned lock только для явно указанного immutable baseline."""
-    _require_no_pending_journal(root)
+    require_no_pending_journal(root)
     policy = load_update_policy(root)
     repository = get(policy, "source.repository")
     tag_pattern = get(policy, "source.tag_pattern")
@@ -1447,7 +1478,19 @@ def adopt_legacy(root: Path, *, baseline: str, source_url: str | None = None) ->
                 divergences.append(path + " (local-only under historical managed pattern)")
             elif base is not MISSING and ours != base:
                 divergences.append(path + " (differs from baseline)")
-        _write_lock(root, baseline, baseline_oid)
+        # Lock пишется транзакционно и принимается только после PASS того же
+        # postcondition validator, что и обычный hop (#133): ADOPTED означает
+        # валидное resulting state, а не просто «lock записался».
+        lock_rel = lock_path.relative_to(root).as_posix()
+        journal = _begin(root, operation="adopt", source=None, target=baseline, paths=[lock_rel])
+        try:
+            _write_lock(root, baseline, baseline_oid)
+            update_journal(root, journal, state="verifying")
+            _run_validator(root, phase="adoption postcondition")
+        except BaseException:
+            rollback_journal(root, journal)
+            raise
+        finish_journal(root)
         return {
             "status": "ADOPTED",
             "current": baseline,
