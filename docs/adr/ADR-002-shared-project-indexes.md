@@ -17,6 +17,7 @@ steps:
   - STEP-003
   - STEP-005
   - STEP-007
+  - STEP-016
 ---
 
 # ADR-002 — Общие Artifact и Reference indexes

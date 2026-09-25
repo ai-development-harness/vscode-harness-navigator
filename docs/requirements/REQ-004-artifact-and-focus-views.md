@@ -6,6 +6,7 @@ source: brief
 steps:
   - STEP-004
   - STEP-007
+  - STEP-016
 adrs:
   - ADR-004
 ---
@@ -27,3 +28,4 @@ adrs:
 - Click и context actions открывают или раскрывают canonical файл и позволяют скопировать ID либо relative path.
 - `Harness: Go to Artifact` открывает Quick Pick со всеми известными STEP, REQ, ADR и OQ, fuzzy-ищет по ID, title и kind и открывает выбранный canonical Markdown-файл.
 - Focus View показывает активные, заблокированные STEP и открытые OQ, но не назначает следующий STEP.
+- Только leaf-элементы Artifacts View получают семантические `ThemeIcon` и theme-aware `ThemeColor` из уже построенного Artifact Index: STEP — по `status`, REQ — по `metadata.priority`, ADR — по `status`. Для неизвестного, отсутствующего или некорректного значения остаётся нейтральная kind-иконка без цвета; Focus View, текстовые поля, действия, открытие, сортировка и фильтрация не изменяются.

@@ -12,6 +12,7 @@ import {
   type SortOrder,
 } from './artifactViewModel';
 import { buildArtifactTreeItem, type ArtifactLeafNode } from './artifactTreeItem';
+import { artifactPresentation } from './artifactPresentation';
 import { VIEW_MESSAGES } from './viewMessages';
 import type { Artifact, ArtifactKind } from '../projectModel/artifactIndex';
 import type { ProjectStateService } from '../projectModel/projectStateService';
@@ -57,7 +58,11 @@ export class ArtifactsTreeDataProvider
       case 'group':
         return buildGroupTreeItem(element.folder, element.kind);
       case 'artifact':
-        return buildArtifactTreeItem(element.folder, element.artifact);
+        return buildArtifactTreeItem(
+          element.folder,
+          element.artifact,
+          artifactPresentation(element.artifact),
+        );
     }
   }
 

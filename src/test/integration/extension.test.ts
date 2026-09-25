@@ -288,6 +288,14 @@ suite('extension lifecycle (Extension Host)', () => {
         folder: vscode.WorkspaceFolder;
         artifact: { id: string };
       }[];
+      getArtifactsViewArtifactItems: () => {
+        artifact: { id: string };
+        item: vscode.TreeItem;
+      }[];
+      getFocusViewArtifactItems: () => {
+        artifact: { id: string };
+        item: vscode.TreeItem;
+      }[];
     };
     const russianLocale = vscode.env.language.toLowerCase().startsWith('ru');
     const filteredEmptyMessage = russianLocale
@@ -345,7 +353,8 @@ suite('extension lifecycle (Extension Host)', () => {
       },
       {
         uri: vscode.Uri.joinPath(valid.uri, 'docs/requirements/REQ-910.md'),
-        content: '---\nschema: 1\nid: REQ-910\n---\n\n# REQ-910 — Requirement для views test\n',
+        content:
+          '---\nschema: 1\nid: REQ-910\npriority: high\n---\n\n# REQ-910 — Requirement для views test\n',
       },
       {
         uri: vscode.Uri.joinPath(valid.uri, 'docs/adr/ADR-910.md'),
@@ -402,6 +411,51 @@ suite('extension lifecycle (Extension Host)', () => {
       );
       assert.equal(extensionModule.getActiveTreeViewMessages().artifacts, '');
 
+      // STEP-016: проверяем real TreeItem, а не производный test snapshot.
+      // Все значения пришли из Artifact Index fixture; provider не читает Markdown.
+      const artifactItem = (id: string): vscode.TreeItem => {
+        const found = extensionModule
+          .getArtifactsViewArtifactItems()
+          .find((candidate) => candidate.artifact.id === id);
+        assert.ok(found, `Artifacts View item ${id} must exist`);
+        return found.item;
+      };
+      assertThemeIcon(artifactItem('STEP-910'), 'sync~spin', 'editorInfo.foreground');
+      assertThemeIcon(artifactItem('REQ-910'), 'arrow-up', 'editorWarning.foreground');
+      assertThemeIcon(artifactItem('ADR-910'), 'check', 'testing.iconPassed');
+      assertThemeIcon(artifactItem('OQ-910'), 'question');
+
+      // Refresh немедленно пересобирает presentation из обновлённого Index.
+      const req910 = files.find((file) => file.uri.path.endsWith('/REQ-910.md'));
+      assert.ok(req910);
+      await vscode.workspace.fs.writeFile(
+        req910.uri,
+        encoder.encode(req910.content.replace('priority: high', 'priority: low')),
+      );
+      await vscode.commands.executeCommand('harnessNavigator.refresh');
+      assertThemeIcon(artifactItem('REQ-910'), 'arrow-down', 'disabledForeground');
+
+      // Отдельно проверяем watcher-driven обновление обратно в high без restart.
+      const changeEventCountBeforeWatcher = extensionModule.getArtifactsViewChangeEventCount();
+      await vscode.workspace.fs.writeFile(req910.uri, encoder.encode(req910.content));
+      assert.ok(
+        await pollFor(
+          () => {
+            const icon = artifactItem('REQ-910').iconPath;
+            return (
+              icon instanceof vscode.ThemeIcon &&
+              icon.id === 'arrow-up' &&
+              icon.color instanceof vscode.ThemeColor &&
+              icon.color.id === 'editorWarning.foreground' &&
+              extensionModule.getArtifactsViewChangeEventCount() > changeEventCountBeforeWatcher
+            );
+          },
+          30,
+          100,
+        ),
+        'artifact watcher must refresh semantic REQ icon',
+      );
+
       // --- copyArtifactId/copyArtifactPath с реальным tree node (F-006a): ---
       // до этого теста только регистрация команд проверялась, не поведение.
       const step910Node = extensionModule
@@ -433,6 +487,15 @@ suite('extension lifecycle (Extension Host)', () => {
         focusTree[2]?.children.map((item) => item.label),
         ['OQ-910'],
       );
+      const focusItem = (id: string): vscode.TreeItem => {
+        const found = extensionModule
+          .getFocusViewArtifactItems()
+          .find((candidate) => candidate.artifact.id === id);
+        assert.ok(found, `Focus View item ${id} must exist`);
+        return found.item;
+      };
+      assertThemeIcon(focusItem('STEP-910'), 'checklist');
+      assertThemeIcon(focusItem('OQ-910'), 'question');
 
       // --- Sort order: изменение workspace-настройки наблюдаемо без restart ---
       // F-006f: доказываем, что `workspace.onDidChangeConfiguration` реально
@@ -730,6 +793,22 @@ suite('extension lifecycle (Extension Host)', () => {
     assert.equal(extensionModule.getActiveRegistrationCount(), registrationsBefore);
   });
 });
+
+/** Проверяет реальный ThemeIcon/ThemeColor TreeItem без обращения к snapshot. */
+function assertThemeIcon(
+  item: vscode.TreeItem,
+  expectedId: string,
+  expectedColorId?: string,
+): void {
+  assert.ok(item.iconPath instanceof vscode.ThemeIcon, 'leaf item must use ThemeIcon');
+  assert.equal(item.iconPath.id, expectedId);
+  if (expectedColorId === undefined) {
+    assert.equal(item.iconPath.color, undefined);
+    return;
+  }
+  assert.ok(item.iconPath.color instanceof vscode.ThemeColor, 'semantic icon must use ThemeColor');
+  assert.equal(item.iconPath.color.id, expectedColorId);
+}
 
 /** Опрашивает predicate ограниченное число раз и возвращает наблюдался ли он, не бросая исключение. */
 async function pollFor(

@@ -398,6 +398,42 @@ export function getArtifactsViewArtifactNodes(): readonly RawArtifactNode[] {
   return nodes;
 }
 
+/**
+ * Узкий read-only seam для integration-проверки реального `TreeItem`.
+ * Возвращает уже построенный leaf Artifacts View, чтобы test мог проверить
+ * `ThemeIcon`/`ThemeColor` без дублирования presentation-логики вне provider.
+ */
+export function getArtifactsViewArtifactItems(): readonly {
+  readonly artifact: Artifact;
+  readonly item: vscode.TreeItem;
+}[] {
+  const provider = activeArtifactsProvider;
+  if (provider === undefined) return [];
+  return getArtifactsViewArtifactNodes().map((node) => ({
+    artifact: node.artifact,
+    item: provider.getTreeItem({ type: 'artifact', folder: node.folder, artifact: node.artifact }),
+  }));
+}
+
+/** Read-only Focus counterpart: regression-тест проверяет отсутствие semantic override. */
+export function getFocusViewArtifactItems(): readonly {
+  readonly artifact: Artifact;
+  readonly item: vscode.TreeItem;
+}[] {
+  const provider = activeFocusProvider;
+  if (provider === undefined) return [];
+  const items: { artifact: Artifact; item: vscode.TreeItem }[] = [];
+  const walk = (node?: Parameters<FocusTreeDataProvider['getChildren']>[0]): void => {
+    for (const child of provider.getChildren(node)) {
+      if (child.type === 'artifact')
+        items.push({ artifact: child.artifact, item: provider.getTreeItem(child) });
+      else walk(child);
+    }
+  };
+  walk(undefined);
+  return items;
+}
+
 /** Test seam: число живых watchers root (manifest + artifact); 0 после removeRoot. */
 export function getWatcherCount(folder: vscode.WorkspaceFolder): number {
   return activeProjectStates?.getWatcherCount(folder) ?? 0;

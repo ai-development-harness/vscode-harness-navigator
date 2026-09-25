@@ -21,6 +21,7 @@ steps:
   - STEP-005
   - STEP-006
   - STEP-007
+  - STEP-016
 ---
 
 # ADR-004 — Нативный VS Code UI и локальный offline runtime
