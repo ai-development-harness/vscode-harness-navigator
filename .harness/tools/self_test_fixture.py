@@ -22,6 +22,7 @@ from harness_config import (
     update_report_directory,
 )
 from projection_contract import write_projections
+from template_contract import template_targets
 
 
 def _remove_files(directory: Path, pattern: str, *, keep: set[str] | None = None) -> None:
@@ -106,4 +107,8 @@ def isolate_project_artifacts(root: Path) -> None:
         _clear_generated_directory(directory)
 
     _reset_project_lifecycle(root)
+    # Pre-INIT validator сверяет templates с protocol baseline побайтно. В
+    # synthetic copy заменяем только её inherited project templates, не host project.
+    for path, content in template_targets(root).items():
+        atomic_write_text(path, content)
     write_projections(root)
