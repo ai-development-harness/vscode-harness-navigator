@@ -306,10 +306,11 @@ Reviewer независим и read-only относительно product code. 
 3. Выполнить полный pass по текущему revision до verdict; не останавливаться после первого material defect.
 4. Проверить acceptance/evidence, correctness, regressions, error handling, compatibility, architecture drift и meaningful test gaps.
 5. Запустить specialized reviewers согласно policy.
-6. Каждый finding классифицировать как `implementation`, `evidence` или `contract`; finding должен быть конкретным и воспроизводимым.
-7. `FAIL` — только implementation/evidence defects, исправимые в scope текущего STEP. `BLOCKED` — contract contradiction, impossible acceptance, stale planning context, missing decision/prerequisite, blocking evidence condition или иной дефект, который FIX не имеет права скрыто исправлять.
-8. Создать новый immutable report `REVIEW-<UTC timestamp>.md` в configured `.harness/manifest.yaml → protocol.reviewDirectory/STEP-NNN/`.
-9. Global wrapper записывает тот же verdict как command result. STEP после review не мутируется ради cache-полей: latest verdict/report выводятся из immutable review history.
+6. Каждый finding классифицировать как `implementation`, `evidence` или `contract`; finding должен быть конкретным и воспроизводимым. Review Contract v2 требует structured `location`, Given/When/Then scenario, `expected`, `observed`, `impact`, repair guidance, constraints и evidence.
+7. Writer присваивает `F-NNN` и stable fingerprint, сохраняет human-readable `## Findings` и canonical JSON `## Machine-readable findings`. Validator fail-closed сверяет обе формы. FIX использует `review_findings.py`, а не reparsing Markdown.
+8. `FAIL` — только implementation/evidence defects, исправимые в scope текущего STEP. `BLOCKED` — contract contradiction, impossible acceptance, stale planning context, missing decision/prerequisite, blocking evidence condition или иной дефект, который FIX не имеет права скрыто исправлять.
+9. Создать новый immutable report `REVIEW-<UTC timestamp>.md` в configured `.harness/manifest.yaml → protocol.reviewDirectory/STEP-NNN/`.
+10. Global wrapper записывает тот же verdict как command result. STEP после review не мутируется ради cache-полей: latest verdict/report выводятся из immutable review history.
 
 При старте command Execution Status запоминает предыдущий immutable review report. Если session оборвалась после создания нового report, resolver может восстановить verdict без повторного expensive review.
 
@@ -317,8 +318,8 @@ Single REVIEW после verdict останавливается. Внутри ch
 
 ## 11. `STEP FIX STEP-NNN`
 
-1. Найти последний применимый FAIL review.
-2. Исправлять только findings категорий `implementation`/`evidence` и необходимый supporting code в scope.
+1. Получить latest Review Contract v2 через `python3 .harness/tools/review_findings.py --step STEP-NNN --json`. Legacy/malformed report не reparsing-ить эвристически: deterministic FIX handoff в таком случае BLOCKED до свежего REVIEW.
+2. Исправлять только findings категорий `implementation`/`evidence` и необходимый supporting code в scope; identity между циклами отслеживать по stable `fingerprint`.
 3. Contract finding, изменение Acceptance/REQ/ADR/dependencies или missing prerequisite → `BLOCKED` + corrective STEP/RESEARCH/ADR; не превращать FIX в скрытый scope expansion.
 4. При `RESUME` сначала изучить существующий diff и продолжить незавершённые findings.
 5. После исправлений предложить `SUCCESS`; dispatcher сам повторно запускает canonical Verification и generated Evidence writer.
@@ -503,8 +504,8 @@ Dispatcher напрямую запускает deterministic Git preflight: tool
    ```
    При policy `title_from_commit=false` добавить `--title-file .harness/local/git/pr-title.txt`.
 3. Executor повторяет canonical PR preflight, использует только configured provider/tool/head/base/draft, находит exact open PR либо создаёт один согласно `reuse_existing`.
-4. SUCCESS требует provider `headRefOid == published HEAD`; local `.harness/local/git/pr-state.json` executor создаёт/обновляет сам. Ручной `gh pr create/list/view` и ручная запись state запрещены.
-5. Provider/tool blocker не ослаблять ручной командой; semantic title/body не имеют права подменять base/head/provider policy.
+4. SUCCESS требует normalized provider `headRefOid == published HEAD`; local `.harness/local/git/pr-state.json` executor создаёт/обновляет сам. Ручные provider-вызовы (`gh pr ...`, `tea pulls ...`, `tea api ...`) и ручная запись state запрещены.
+5. Provider/tool/login blocker не ослаблять ручной командой; semantic title/body не имеют права подменять base/head/provider/tool policy. Для Gitea self-hosted Tea login выбирается детерминированно по exact repository host.
 
 ## 22. `GIT PR FINISH`
 
@@ -569,3 +570,8 @@ STEP закрывается только если:
 - обязательный independent review = PASS;
 - affected docs/status projections синхронизированы;
 - внутри scope нет blocker.
+
+
+## Adaptive FIX ↔ REVIEW stopping
+
+После как минимум одного успешного FIX → REVIEW цикла новый `REVIEW=FAIL` может остановить orchestration раньше `maxFixReviewCycles` по deterministic delta двух Review Contract v2 reports. Поддерживаемые stop reasons: `NO_PROGRESS`, `REPEATED_FINDINGS`, `REGRESSION`. Hard cap `FIX_REVIEW_LIMIT_REACHED` сохраняет приоритет и абсолютную верхнюю границу. Подробности: [`ADAPTIVE_REPAIR_STOPPING.md`](ADAPTIVE_REPAIR_STOPPING.md).

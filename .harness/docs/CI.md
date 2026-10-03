@@ -38,7 +38,7 @@ Repository hardening self-test проверяет validator boundaries на synt
 
 Git policy self-test проверяет fail-closed schema boundary через публичный validator: неизвестный/опечаточный safety key не может быть молча проигнорирован.
 
-Git preflight self-test создаёт synthetic repository + bare remote и прогоняет machine gates для protected branch, bootstrap push, feature publish, exact PR head, remote-ahead blocker и clean ff-only sync. Он не использует GitHub/network и не создаёт реальные PR.
+Git preflight self-test создаёт synthetic repository + bare remote и прогоняет machine gates для protected branch, bootstrap push, feature publish, exact PR head, remote-ahead blocker и clean ff-only sync. `git-pr-action-self-test.py` сохраняет GitHub/`gh` create/reuse regression, а `pr-provider-self-test.py` отдельно проверяет Gitea/`tea`: self-hosted remote parsing, exact-host login selection, ambiguity/auth blockers, exact head/base lookup и secret redaction. Эти regressions не используют реальный GitHub/Gitea network и не создают внешние PR.
 
 Детерминированная самопроверка обновлятора создаёт локальные синтетические source/project Git-репозитории и прогоняет реальный механизм обновления: явное принятие старого проекта, фиксацию неизменяемых тегов, CHECK/APPLY, трёхстороннее слияние, сохранение marker-блоков, владение core/project skills и конфликт при попытке нового core slug занять пользовательский skill. Отдельный сценарий закрепляет поддерживаемую нижнюю границу: `v0.6.0 → v0.7.0 → обязательная перезагрузка → v0.8.0`, включая продолжение с файлами Harness, созданными первым переходом и ещё не добавленными в индекс Git.
 

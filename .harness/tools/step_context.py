@@ -16,6 +16,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from context_contracts import build_context_contract
+from execution_groups import implementation_plan_step_count, normalize_execution_groups
 from document_contract import parse_document
 from planning_contract import (
     adr_ids,
@@ -80,6 +82,10 @@ def build_step_context(
     task = read_task(root, step_id)
     meta = task["frontmatter"]
     plan = meta.get("plan") if isinstance(meta.get("plan"), dict) else {}
+    execution_groups = normalize_execution_groups(
+        plan.get("execution_groups"),
+        implementation_plan_step_count(task["sections"].get("Implementation plan", "")),
+    )
 
     dependencies: list[dict[str, Any]] = []
     for dependency_id in dependency_ids(task):
@@ -155,6 +161,7 @@ def build_step_context(
                 "status": plan.get("status"),
                 "revision": plan.get("revision"),
                 "reviewedReport": plan.get("reviewed_report"),
+                "executionGroups": execution_groups,
             },
         },
         "semanticInputs": {
@@ -165,6 +172,11 @@ def build_step_context(
             "openQuestions": oqs,
         },
         "readPaths": read_paths,
+        "contextContract": build_context_contract(
+            root,
+            step_id,
+            {"plan": "planner", "implement": "implementer", "review": "reviewer"}[phase],
+        ),
     }
 
     if phase == "plan":

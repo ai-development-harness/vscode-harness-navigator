@@ -19,7 +19,8 @@ description: Convert a short user request into a versioned, traceable, dependenc
 - Durable decision → ADR/RESEARCH prerequisite. Обновляй ADR↔STEP traceability.
 - Существенная неопределённость → отдельный canonical OQ schema v1 в configured `sources.openQuestions`; `affects` обязан ссылаться на существующие IDs либо `PROJECT`.
 - Заполни Goal, Context, Scope, Mutation policy (Allowed/Conditional/Forbidden), Out of scope, Acceptance criteria, Verification, Deliverables.
-- Перед handoff проверь linked contracts, ownership, dependencies, architecture refs и OQ. Не маскируй overlap новым STEP.
+- Перед handoff выполни Requirements Quality Gate по новому STEP и owning artifacts. Сначала ищи ответ в linked REQ/ADR/OQ/architecture/codebase; затем проверь schema-v1 semantic payload через `python3 .harness/tools/requirements-quality.py --payload-file '<local-json-or->'`. Blocking ambiguity нельзя превращать в executable STEP: задай только material targeted question, сохрани ответ в canonical owner и повтори gate. Non-blocking stylistic warning не блокирует STEP ADD.
+- После quality PASS проверь linked contracts, ownership, dependencies, architecture refs и OQ. Не маскируй overlap новым STEP.
 - Не редактируй PLAN/STATUS/requirements STATUS/OQ index вручную. Пересобери:
   ```bash
   python3 .harness/tools/sync-projections.py

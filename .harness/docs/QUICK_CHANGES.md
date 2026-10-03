@@ -48,6 +48,7 @@ GIT COMMIT
 - существенную test strategy;
 - несколько модулей/несвязанных файлов;
 - requirement/acceptance criteria;
+- REQ behavior intent, ADR decision/rationale, STEP Scope/Acceptance, OQ resolution или Project Principle;
 - риск регрессии, который требует отдельного review/evidence.
 
 Если во время PROJECT QUICK FIX выяснилось, что scope больше ожидаемого, агент **не расширяет его молча**: он останавливается и предлагает `STEP ADD: ...`.

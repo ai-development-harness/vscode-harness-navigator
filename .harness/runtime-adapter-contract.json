@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "contractId": "harness.runtime-adapter",
+  "methods": [
+    "getIdentity",
+    "getCapabilities",
+    "getAccount",
+    "start",
+    "resume",
+    "cancel",
+    "status"
+  ],
+  "capabilities": [
+    "runtimeIdentity",
+    "authenticatedAccount",
+    "modelEffort",
+    "interactiveInput",
+    "streaming",
+    "resume",
+    "cancel",
+    "subagents",
+    "structuredOutput",
+    "toolMcp",
+    "sessionExecutionIds"
+  ],
+  "events": [
+    "run.started",
+    "model.message.delta",
+    "model.message.completed",
+    "tool.started",
+    "tool.completed",
+    "input.required",
+    "auth.required",
+    "run.interrupted",
+    "run.completed",
+    "run.failed"
+  ],
+  "supportStates": [
+    "native",
+    "synthesized",
+    "unsupported"
+  ],
+  "invariants": {
+    "commandSemanticsOwnedBy": "harness-control-plane",
+    "providerMetadataOptional": true,
+    "secretsPersistence": "forbidden",
+    "unsupportedCapabilities": "explicit",
+    "versioning": "required"
+  },
+  "adapters": {
+    "codex": {
+      "adapterVersion": 1,
+      "account": {
+        "source": "app-server",
+        "operation": "account/read",
+        "persistence": "none"
+      },
+      "lifecycle": {
+        "start": "app-server/session",
+        "resume": "runtime-native-or-explicit-unsupported",
+        "cancel": "runtime-native-or-explicit-unsupported",
+        "status": "adapter-observed"
+      },
+      "capabilities": {
+        "runtimeIdentity": "native",
+        "authenticatedAccount": "native",
+        "modelEffort": "native",
+        "interactiveInput": "native",
+        "streaming": "native",
+        "resume": "native",
+        "cancel": "native",
+        "subagents": "native",
+        "structuredOutput": "native",
+        "toolMcp": "native",
+        "sessionExecutionIds": "native"
+      }
+    },
+    "claude": {
+      "adapterVersion": 1,
+      "account": {
+        "source": "cli",
+        "operation": "claude auth status",
+        "persistence": "none"
+      },
+      "lifecycle": {
+        "start": "cli-process",
+        "resume": "runtime-native-or-explicit-unsupported",
+        "cancel": "process-or-runtime-native",
+        "status": "adapter-observed"
+      },
+      "capabilities": {
+        "runtimeIdentity": "native",
+        "authenticatedAccount": "native",
+        "modelEffort": "native",
+        "interactiveInput": "native",
+        "streaming": "native",
+        "resume": "native",
+        "cancel": "native",
+        "subagents": "native",
+        "structuredOutput": "synthesized",
+        "toolMcp": "native",
+        "sessionExecutionIds": "synthesized"
+      }
+    }
+  }
+}

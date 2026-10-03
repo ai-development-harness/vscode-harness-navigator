@@ -1,10 +1,12 @@
 ---
 name: find-skill
-description: Search GitHub and the web for repository skills matching a natural-language need, inspect candidates, rank a configured shortlist, and save a durable selection report.
+description: Discover and inspect repository skills matching a natural-language need, rank a configured shortlist and save a durable report without installing any candidate.
 ---
 # find-skill
 
 Используй для `SKILL FIND: <описание>`.
+
+Это **discovery-only** workflow: допускается создать только configured durable search report; candidate bundles, product code, registry и routing не изменяются.
 
 1. Прочитай `.harness/manifest.yaml → skills.search.maxResults`. Допустимо только целое значение от 1 до 10; при отсутствующем/недопустимом значении остановись с configuration blocker без скрытого default. Затем считай описание intent, а не точным поисковым запросом, и сформируй несколько GitHub/web queries: технология/задача + `SKILL.md`, `agent skill`, `Codex skill`, близкие термины.
 2. Ищи преимущественно исходники на GitHub. Официальные/известные источники имеют преимущество, но не заменяют проверку содержимого.
@@ -14,4 +16,4 @@ description: Search GitHub and the web for repository skills matching a natural-
 6. Оцени кандидатов по: релевантности задаче, совместимости с Agent Skills/SKILL.md, качеству workflow, поддерживаемости/provenance, license и safety.
 7. Верни не более `skills.search.maxResults` кандидатов. Для каждого укажи: номер, название, owner/repo, точный путь, ссылку, краткое назначение, сильные стороны, ограничения/риски, license (если удалось определить), activity/provenance signal и итоговую рекомендацию.
 8. Сохрани schema-v1 результат как `SKILL-SEARCH-YYYYMMDDTHHMMSSZ.md` в configured `protocol.skillSearchDirectory` по template; не используй hardcoded `planning/skill-searches`. До завершения проверь конкретный файл: `python3 .harness/tools/report_contract.py --file '<report-path>' --kind skill_search`. Невалидный shortlist нельзя использовать для `SKILL INSTALL: #N`.
-9. Ничего не устанавливай. В конце предложи либо `SKILL INSTALL: #N`, либо `SKILL CREATE: <описание>`, если достойного кандидата нет.
+9. Ничего не устанавливай и не обновляй registry/routing. В конце предложи либо `SKILL INSTALL: #N`, либо `SKILL CREATE: <описание>`, если достойного кандидата нет.

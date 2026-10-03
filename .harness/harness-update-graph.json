@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "latest": "v0.8.6",
+  "latest": "v0.10.2",
   "transitions": [
     {
       "from": "v0.1.0",
@@ -168,6 +168,48 @@
       "to": "v0.8.6",
       "kind": "standard",
       "reloadRequired": true
+    },
+    {
+      "from": "v0.8.6",
+      "to": "v0.8.7",
+      "kind": "standard",
+      "reloadRequired": false
+    },
+    {
+      "from": "v0.8.7",
+      "to": "v0.8.8",
+      "kind": "standard",
+      "reloadRequired": false
+    },
+    {
+      "from": "v0.8.8",
+      "to": "v0.9.0",
+      "kind": "standard",
+      "reloadRequired": true
+    },
+    {
+      "from": "v0.9.0",
+      "to": "v0.9.1",
+      "kind": "standard",
+      "reloadRequired": false
+    },
+    {
+      "from": "v0.9.1",
+      "to": "v0.10.0",
+      "kind": "standard",
+      "reloadRequired": true
+    },
+    {
+      "from": "v0.10.0",
+      "to": "v0.10.1",
+      "kind": "standard",
+      "reloadRequired": false
+    },
+    {
+      "from": "v0.10.1",
+      "to": "v0.10.2",
+      "kind": "standard",
+      "reloadRequired": false
     }
   ]
 }

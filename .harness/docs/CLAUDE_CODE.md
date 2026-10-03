@@ -60,12 +60,12 @@ Deny rules — дополнительный runtime guard, а не security boun
 
 | Роль | Model alias | Effort | Permission mode |
 |---|---|---:|---|
-| initializer | opus | high | default |
-| architect | opus | high | plan |
-| planner | opus | high | plan |
+| initializer | opus | max | default |
+| architect | opus | max | plan |
+| planner | opus | max | plan |
 | implementer | sonnet | medium | default |
-| reviewer | opus | high | plan |
-| security-reviewer | opus | high | plan |
+| reviewer | opus | max | plan |
+| security-reviewer | opus | max | plan |
 | test-reviewer | sonnet | low | plan |
 | docs | sonnet | low | default |
 | mechanic | sonnet | low | default |
@@ -75,7 +75,7 @@ Deny rules — дополнительный runtime guard, а не security boun
 
 Используются family aliases (`opus`, `sonnet`), а не жёстко зафиксированные model IDs: Claude Code подставляет актуальную разрешённую модель семейства. При необходимости проект может заменить alias на конкретный model ID.
 
-`effort` каждого subagent переопределяет session effort для этой роли.
+`effort` каждого subagent переопределяет session effort для этой роли. Quality-first reasoning roles (initializer/architect/planner/reviewer/security-reviewer) используют `max`; implementer и механические роли сохраняют более экономичные профили.
 
 ### Read-only роли
 

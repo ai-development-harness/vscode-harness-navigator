@@ -239,22 +239,67 @@ class GitSource:
         cached = self._trees.get(oid)
         if cached is not None:
             return cached
-        proc = self._git("ls-tree", "-r", "-z", "--full-tree", oid)
         result: dict[str, tuple[str, str]] = {}
-        for raw in proc.stdout.split(b"\0"):
-            if not raw:
-                continue
-            header, sep, raw_path = raw.partition(b"\t")
-            parts = header.split()
-            if not sep or len(parts) < 3:
-                raise UpdateError("SOURCE_TREE_ERROR", f"cannot parse source tree entry for {ref}")
-            mode = parts[0].decode("ascii", errors="strict")
-            blob = parts[2].decode("ascii", errors="strict")
-            try:
-                path = raw_path.decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise UpdateError("UNSAFE_SOURCE_PATH", f"{ref}: non-UTF-8 path in source tree") from exc
-            result[_validated_source_path(path, ref=ref)] = (mode, blob)
+        format_proc = self._git("rev-parse", "--show-object-format")
+        object_format = format_proc.stdout.decode("ascii", errors="strict").strip()
+        oid_bytes = {"sha1": 20, "sha256": 32}.get(object_format)
+        if oid_bytes is None:
+            raise UpdateError(
+                "SOURCE_TREE_ERROR",
+                f"unsupported Git object format: {object_format}",
+            )
+        root_tree = self._git("rev-parse", f"{oid}^{{tree}}").stdout.decode(
+            "ascii", errors="strict"
+        ).strip()
+
+        def walk(tree_oid: str, prefix: str = "") -> None:
+            # Читаем raw tree object, а не `ls-tree -r`: malformed component
+            # должен попасть в Harness validation до platform-specific path
+            # flattening/normalization самим Git client.
+            raw_tree = self._git("cat-file", "tree", tree_oid).stdout
+            offset = 0
+            while offset < len(raw_tree):
+                nul = raw_tree.find(b"\0", offset)
+                if nul < 0:
+                    raise UpdateError(
+                        "SOURCE_TREE_ERROR",
+                        f"unterminated source tree entry for {ref}",
+                    )
+                header = raw_tree[offset:nul]
+                space = header.find(b" ")
+                if space <= 0:
+                    raise UpdateError(
+                        "SOURCE_TREE_ERROR",
+                        f"cannot parse source tree entry for {ref}",
+                    )
+                mode_raw = header[:space]
+                name_raw = header[space + 1 :]
+                oid_start = nul + 1
+                oid_end = oid_start + oid_bytes
+                if oid_end > len(raw_tree):
+                    raise UpdateError(
+                        "SOURCE_TREE_ERROR",
+                        f"truncated source tree object id for {ref}",
+                    )
+                object_id = raw_tree[oid_start:oid_end].hex()
+                offset = oid_end
+
+                try:
+                    mode = mode_raw.decode("ascii", errors="strict")
+                    name = name_raw.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise UpdateError(
+                        "UNSAFE_SOURCE_PATH",
+                        f"{ref}: non-UTF-8 path in source tree",
+                    ) from exc
+                candidate = f"{prefix}/{name}" if prefix else name
+                path = _validated_source_path(candidate, ref=ref)
+                if mode in {"40000", "040000"}:
+                    walk(object_id, path)
+                else:
+                    result[path] = (mode, object_id)
+
+        walk(root_tree)
         self._trees[oid] = result
         return result
 
@@ -359,15 +404,32 @@ class WorkingTree:
         atomic_write_bytes(target, content, mode=mode if mode is not None else 0o644)
 
 
+def _normalize_managed_text(value: bytes) -> bytes:
+    """Canonicalize Git checkout EOL without weakening substantive comparison."""
+    return value.replace(b"\r\n", b"\n")
+
+
+def _managed_content_equal(left: bytes | object, right: bytes | object) -> bool:
+    """Compare managed UTF-8 text independent of CRLF/LF checkout conversion."""
+    if left is MISSING or right is MISSING:
+        return left is right
+    if not isinstance(left, bytes) or not isinstance(right, bytes):
+        return False
+    return _normalize_managed_text(left) == _normalize_managed_text(right)
+
+
 def _run_merge_file(ours: bytes, base: bytes, theirs: bytes, *, path: str) -> bytes:
     with tempfile.TemporaryDirectory(prefix="harness-3way-") as tmp:
         tmp_root = Path(tmp)
         ours_path = tmp_root / "ours"
         base_path = tmp_root / "base"
         theirs_path = tmp_root / "theirs"
-        ours_path.write_bytes(ours)
-        base_path.write_bytes(base)
-        theirs_path.write_bytes(theirs)
+        # Git for Windows legitimately materializes text as CRLF while release
+        # blobs remain LF. Three-way merge must operate on canonical text,
+        # otherwise every line looks locally modified.
+        ours_path.write_bytes(_normalize_managed_text(ours))
+        base_path.write_bytes(_normalize_managed_text(base))
+        theirs_path.write_bytes(_normalize_managed_text(theirs))
         proc = _run_git(
             ["git", "merge-file", "-p", str(ours_path), str(base_path), str(theirs_path)],
             error_code="MERGE_CONFLICT",
@@ -387,20 +449,20 @@ def _three_way(ours: bytes | object, base: bytes | object, theirs: bytes | objec
             return None if theirs is MISSING else _as_bytes(theirs)
         if theirs is MISSING:
             return _as_bytes(ours)
-        if ours == theirs:
+        if _managed_content_equal(ours, theirs):
             return _as_bytes(ours)
         raise UpdateError("MANAGED_PATH_COLLISION", f"both project and target added managed path: {path}")
     if ours is MISSING:
-        if theirs == base:
+        if _managed_content_equal(theirs, base):
             return None
         raise UpdateError("MERGE_CONFLICT", f"project deleted path changed by target: {path}")
     if theirs is MISSING:
-        if ours == base:
+        if _managed_content_equal(ours, base):
             return None
         raise UpdateError("MERGE_CONFLICT", f"target deleted locally changed path: {path}")
-    if ours == base:
+    if _managed_content_equal(ours, base):
         return _as_bytes(theirs)
-    if theirs == base or ours == theirs:
+    if _managed_content_equal(theirs, base) or _managed_content_equal(ours, theirs):
         return _as_bytes(ours)
     return _run_merge_file(_as_bytes(ours), _as_bytes(base), _as_bytes(theirs), path=path)
 
@@ -525,9 +587,13 @@ def _preserve_markers(
     """
     if ours is MISSING or theirs is MISSING or not blocks:
         return theirs
-    ours_text = _as_bytes(ours).decode("utf-8")
-    base_text = _as_bytes(base).decode("utf-8") if base is not MISSING else ""
-    target_text = _as_bytes(theirs).decode("utf-8")
+    ours_text = _normalize_managed_text(_as_bytes(ours)).decode("utf-8")
+    base_text = (
+        _normalize_managed_text(_as_bytes(base)).decode("utf-8")
+        if base is not MISSING
+        else ""
+    )
+    target_text = _normalize_managed_text(_as_bytes(theirs)).decode("utf-8")
     for block in blocks:
         if _marker_count(ours_text, block) == (0, 0) and _marker_count(base_text, block) == (0, 0):
             if _marker_count(target_text, block) != (1, 1):
@@ -734,7 +800,7 @@ def _harness_owned_drift(
             drift.append(f"{path}: tracked Harness-owned path absent from pinned release")
         elif base is not MISSING and ours is MISSING:
             drift.append(f"{path}: pinned Harness-owned path is missing locally")
-        elif base != ours:
+        elif not _managed_content_equal(base, ours):
             drift.append(f"{path}: content differs from pinned release")
         elif compare_modes and base_mode != ours_mode:
             drift.append(
@@ -758,8 +824,9 @@ def verify_current_release_state(
     """Доказать, что Harness-owned OURS соответствует immutable release из lock.
 
     Shared/marker_merge paths специально не сравниваются byte-for-byte: они
-    могут содержать разрешённые project modifications. Но Harness-owned слой
-    обязан быть exact BASE, иначе lock больше не описывает текущий protocol.
+    могут содержать разрешённые project modifications. Harness-owned слой
+    обязан соответствовать BASE по Git text semantics: CRLF/LF checkout
+    conversion не является drift, любое содержательное отличие — является.
     """
     current = lock["source"]["ref"]
     base_policy = _load_toml_text(
@@ -824,14 +891,14 @@ def _path_plan(
 
     if target_class is None:
         if base_class == "harness_owned" and base is not MISSING:
-            if ours is not MISSING and ours != base:
+            if ours is not MISSING and not _managed_content_equal(ours, base):
                 raise UpdateError("LOCAL_HARNESS_MODIFICATION", f"locally modified retired Harness path: {path}")
             if handover is MISSING:
                 return PathPlan(path, base_class, None, "delete", None, None, "retired Harness path")
             # Path остаётся в target tree, но выходит из ownership: это
             # передача проекту (#99). Последнее managed-содержимое берётся из
             # target, дальше файл принадлежит проекту.
-            if ours is not MISSING and ours == handover:
+            if ours is not MISSING and _managed_content_equal(ours, handover):
                 return PathPlan(path, base_class, None, "preserve", None, None, "handed over to project ownership")
             return PathPlan(
                 path,
@@ -851,11 +918,11 @@ def _path_plan(
             return PathPlan(path, None, target_class, "preserve", None, None)
         return PathPlan(path, None, target_class, "write", _as_bytes(theirs), target_mode, "new managed path")
 
-    if base_class != target_class and ours != base:
+    if base_class != target_class and not _managed_content_equal(ours, base):
         raise UpdateError("OWNERSHIP_CLASS_CHANGE", f"locally changed path changes ownership class: {path}: {base_class} -> {target_class}")
 
     if target_class == "harness_owned":
-        if ours != base:
+        if not _managed_content_equal(ours, base):
             raise UpdateError("LOCAL_HARNESS_MODIFICATION", f"Harness-owned path differs from immutable BASE: {path}")
         if theirs is MISSING:
             return PathPlan(path, base_class, target_class, "delete", None, None)
@@ -1066,6 +1133,7 @@ def require_no_pending_journal(root: Path) -> None:
 
 
 def check_update(root: Path, *, target: str | None = None, source_url: str | None = None) -> dict[str, Any]:
+    root = root.resolve()
     require_no_pending_journal(root)
     policy = load_update_policy(root)
     repository = get(policy, "source.repository")
@@ -1349,6 +1417,7 @@ def _recover_before_apply(root: Path) -> dict[str, Any] | None:
 
 
 def apply_update(root: Path, *, target: str | None = None, source_url: str | None = None) -> dict[str, Any]:
+    root = root.resolve()
     # Прерванный предыдущий hop откатывается до любых новых решений: дальнейшая
     # проверка должна видеть согласованное состояние BASE.
     recovered = _recover_before_apply(root)
@@ -1431,6 +1500,7 @@ def apply_update(root: Path, *, target: str | None = None, source_url: str | Non
 
 
 def adopt_legacy(root: Path, *, baseline: str, source_url: str | None = None) -> dict[str, Any]:
+    root = root.resolve()
     """Создать первый pinned lock только для явно указанного immutable baseline."""
     require_no_pending_journal(root)
     policy = load_update_policy(root)

@@ -16,6 +16,8 @@ from pathlib import Path
 import hashlib
 from typing import Any
 
+from completion_gate import CompletionGateError, evaluate_completion, finalize_step_completion
+from execution_groups import ExecutionGroupError, execution_groups_to_storage, normalize_execution_groups
 from document_contract import (
     atomic_write_text,
     create_durable_report,
@@ -30,11 +32,10 @@ from execution_status import (
 )
 from harness_config import planning_review_directory, review_directory
 from planning_contract import (
+    generated_verification_status,
     plan_content_hash,
     planning_context_basis,
     read_task,
-    step_completion_proof,
-    task_path,
     validate_planning_review_report,
 )
 from review_contract import (
@@ -43,7 +44,12 @@ from review_contract import (
     repository_revision,
     validate_review_report,
 )
-from projection_contract import ProjectionDerivationError, write_projections
+from review_findings import (
+    FINDING_CONTRACT_VERSION,
+    FindingContractError,
+    normalize_finding,
+    render_machine_findings,
+)
 from review_gates import required_reviewers
 from verification import render_verification_entries, validate_verification_entries
 
@@ -148,6 +154,22 @@ def _render_implementation_plan(steps: list[dict[str, Any]]) -> str:
     return "\n".join(lines).strip()
 
 
+def _review_verification_basis(root: Path, step_id: str) -> str:
+    """Hash canonical Verification/Evidence snapshot without interpreting prose."""
+    task = read_task(root, step_id)
+    payload = {
+        "verification": task["sections"].get("Verification", ""),
+        "evidence": task["sections"].get("Evidence", ""),
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 def _replace_h2_section(body: str, title: str, value: str) -> str:
     """Replace one real H2 section while preserving all other body bytes semantically."""
     normalized = body.replace("\r\n", "\n")
@@ -172,9 +194,13 @@ def _replace_h2_section(body: str, title: str, value: str) -> str:
 def write_plan_draft(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
     """Persist semantic plan/Verification payload without letting model edit metadata."""
     data = _require_object(payload, "plan payload")
-    _exact_keys(data, {"implementationPlan", "verification"}, "plan payload")
+    _exact_keys(data, {"implementationPlan", "verification", "executionGroups"}, "plan payload")
     implementation_steps = _implementation_plan(data.get("implementationPlan"))
     implementation_plan = _render_implementation_plan(implementation_steps)
+    try:
+        execution_groups = normalize_execution_groups(data.get("executionGroups"), len(implementation_steps))
+    except ExecutionGroupError as exc:
+        raise SemanticArtifactError(str(exc)) from exc
     verification = validate_verification_entries(data.get("verification"))
     verification_text = render_verification_entries(verification)
 
@@ -196,6 +222,8 @@ def write_plan_draft(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
         "content_hash": None,
         "reviewed_report": None,
         "planned_at": None,
+        "execution_groups": execution_groups_to_storage(execution_groups),
+        "context_components": [],
     }
     atomic_write_text(task["path"], render_document(meta, body))
 
@@ -209,6 +237,7 @@ def write_plan_draft(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
         "contextBasis": planning_context_basis(root, step_id),
         "planContentHash": plan_content_hash(root, step_id),
         "implementationPlan": implementation_steps,
+        "executionGroups": execution_groups,
         "verification": verification,
     }
 
@@ -317,24 +346,17 @@ def write_planning_review(root: Path, step_id: str, payload: Any) -> dict[str, A
     return result
 
 
-def _finding(value: Any, index: int) -> dict[str, str]:
-    item = _require_object(value, f"findings[{index}]")
-    allowed = {
-        "title", "severity", "category", "location", "scenario",
-        "impact", "fixDirection",
-    }
-    _exact_keys(item, allowed, f"findings[{index}]")
-    result = {key: _text(item.get(key), f"findings[{index}].{key}") for key in allowed}
-    if result["severity"] not in SEVERITIES:
-        raise SemanticArtifactError(
-            f"findings[{index}].severity must be one of {sorted(SEVERITIES)}"
-        )
-    if result["category"] not in CATEGORIES:
-        raise SemanticArtifactError(
-            f"findings[{index}].category must be one of {sorted(CATEGORIES)}"
-        )
-    return result
+def _finding(value: Any, index: int) -> dict[str, Any]:
+    """Нормализовать semantic finding в Review Contract v2.
 
+    Старый compact payload остаётся допустимым transport-форматом для
+    совместимости existing agents/tests, но durable report всегда содержит
+    полный v2 object + deterministic fingerprint.
+    """
+    try:
+        return normalize_finding(value, index)
+    except FindingContractError as exc:
+        raise SemanticArtifactError(str(exc)) from exc
 
 def _specialized_payload(value: Any) -> dict[str, dict[str, str]]:
     if value is None:
@@ -363,7 +385,7 @@ def _step_review_payload(payload: Any) -> dict[str, Any]:
     data = _require_object(payload, "step review payload")
     _exact_keys(
         data,
-        {"verdict", "findings", "verificationObservations", "rationale", "specializedReviews"},
+        {"verdict", "findings", "verificationObservations", "rationale", "specializedReviews", "completion"},
         "step review payload",
     )
     verdict = data.get("verdict")
@@ -395,6 +417,7 @@ def _step_review_payload(payload: Any) -> dict[str, Any]:
         ),
         "rationale": _text(data.get("rationale"), "rationale"),
         "specializedReviews": _specialized_payload(data.get("specializedReviews")),
+        "completion": data.get("completion"),
     }
 
 
@@ -447,96 +470,45 @@ def _validate_specialized_verdict(
         )
 
 
-def _render_findings(findings: list[dict[str, str]]) -> str:
+def _render_findings(findings: list[dict[str, Any]]) -> str:
     if not findings:
         return "Material findings отсутствуют."
     chunks: list[str] = []
-    for index, item in enumerate(findings, 1):
+    for item in findings:
+        location = item["location"]["path"]
+        if item["location"].get("line") is not None:
+            location += f":{item['location']['line']}"
+        scenario = item["scenario"]
         chunks.extend(
             [
-                f"### F-{index:03d} — {item['title']}",
+                f"### {item['id']} — {item['title']}",
                 "",
                 f"**Severity:** {item['severity']}",
                 f"**Category:** {item['category']}",
-                f"**Location:** {item['location']}",
-                f"**Scenario:** {item['scenario']}",
+                f"**Location:** {location}",
+                f"**Scenario:** Given {scenario['given']} / When {scenario['when']} / Then {scenario['then']}",
+                f"**Expected:** {item['expected']}",
+                f"**Observed:** {item['observed']}",
                 f"**Impact:** {item['impact']}",
-                f"**Fix direction:** {item['fixDirection']}",
+                f"**Fix direction:** {item['repair']['direction']}",
+                f"**Fingerprint:** {item['fingerprint']}",
                 "",
             ]
         )
+        alternatives = item["repair"]["admissibleAlternatives"]
+        if alternatives:
+            chunks.append("**Admissible alternatives:**")
+            chunks.extend(f"- {value}" for value in alternatives)
+            chunks.append("")
+        if item["constraints"]:
+            chunks.append("**Constraints:**")
+            chunks.extend(f"- {value}" for value in item["constraints"])
+            chunks.append("")
+        if item["evidence"]:
+            chunks.append("**Evidence:**")
+            chunks.extend(f"- {value}" for value in item["evidence"])
+            chunks.append("")
     return "\n".join(chunks).strip()
-
-
-def _complete_step_after_pass(root: Path, step_id: str) -> dict[str, Any]:
-    """Close STEP only when the full type-specific completion proof is real.
-
-    The immutable PASS review is created first for the exact implementation
-    revision. Lifecycle metadata is then changed mechanically. If proof fails,
-    the STEP bytes are restored; the PASS report remains durable evidence, but
-    execution cannot claim completion.
-    """
-    path = task_path(root, step_id)
-    original = path.read_text(encoding="utf-8")
-    task = read_task(root, step_id)
-    previous_status = task["frontmatter"].get("status")
-    if previous_status == "completed":
-        proof = step_completion_proof(root, step_id)
-        return {
-            "completed": bool(proof["complete"]),
-            "previousStatus": previous_status,
-            "proof": proof,
-            "projections": [],
-        }
-
-    meta = deepcopy(task["frontmatter"])
-    meta["status"] = "completed"
-    atomic_write_text(path, render_document(meta, task["body"]))
-
-    try:
-        proof = step_completion_proof(root, step_id)
-    except (OSError, ValueError) as exc:
-        atomic_write_text(path, original)
-        return {
-            "completed": False,
-            "previousStatus": previous_status,
-            "reasonCode": "STEP_COMPLETION_PROOF_ERROR",
-            "message": str(exc),
-        }
-
-    if not proof["complete"]:
-        atomic_write_text(path, original)
-        return {
-            "completed": False,
-            "previousStatus": previous_status,
-            "reasonCode": "STEP_COMPLETION_PROOF_INCOMPLETE",
-            "proof": proof,
-        }
-
-    try:
-        projections = write_projections(root)
-    except (ProjectionDerivationError, OSError, ValueError) as exc:
-        atomic_write_text(path, original)
-        # Best-effort restore of projections to the restored canonical state.
-        try:
-            write_projections(root)
-        except (ProjectionDerivationError, OSError, ValueError):
-            pass
-        return {
-            "completed": False,
-            "previousStatus": previous_status,
-            "reasonCode": "STEP_COMPLETION_PROJECTION_FAILED",
-            "message": str(exc),
-            "proof": proof,
-        }
-
-    return {
-        "completed": True,
-        "previousStatus": previous_status,
-        "proof": proof,
-        "projections": projections,
-    }
-
 
 def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
     """Create one validated immutable implementation review for exact revision."""
@@ -581,6 +553,12 @@ def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
 
     specialized = _specialized_meta(gate, data["specializedReviews"])
     _validate_specialized_verdict(data["verdict"], specialized)
+    convergence: dict[str, Any] | None = None
+    if data["verdict"] == "pass":
+        try:
+            convergence = evaluate_completion(root, step_id, data.get("completion"))
+        except CompletionGateError as exc:
+            raise SemanticArtifactError(str(exc)) from exc
     directory = review_directory(root) / step_id
 
     def content_factory(created_at: str) -> str:
@@ -588,13 +566,34 @@ def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
         frontmatter = {
             "schema": 1,
             "kind": "step_review",
+            "finding_contract": FINDING_CONTRACT_VERSION,
             "step_id": step_id,
             "verdict": data["verdict"],
             "reviewer_role": "reviewer",
             "created_at": created_at,
             "reviewed_revision": revision,
+            "contract_basis": planning_context_basis(root, step_id),
+            "verification_basis": _review_verification_basis(root, step_id),
+            "verification_status": generated_verification_status(read_task(root, step_id)),
             "specialized_reviews": specialized,
         }
+        if convergence is not None:
+            frontmatter["completion_contract"] = 1
+            frontmatter["completion_result"] = str(
+                convergence["completionResult"]
+            ).lower()
+        completion_section = (
+            "\n## Completion convergence\n\n```json\n"
+            + json.dumps(
+                convergence,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n```\n"
+            if convergence is not None
+            else ""
+        )
         body = f"""# STEP REVIEW {step_id} — {display}
 
 ## Scope checked
@@ -609,6 +608,12 @@ def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
 
 {_render_findings(data["findings"])}
 
+## Machine-readable findings
+
+```json
+{render_machine_findings(data["findings"])}
+```
+
 ## Verification observations
 
 {data["verificationObservations"]}
@@ -616,7 +621,7 @@ def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
 ## Verdict rationale
 
 {data["rationale"]}
-"""
+{completion_section}"""
         return render_document(frontmatter, body)
 
     path, _created_at = create_durable_report(
@@ -652,6 +657,7 @@ def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
         provenance_recorded = False
     result = {
         "schemaVersion": 1,
+        "reviewContractVersion": FINDING_CONTRACT_VERSION,
         "status": data["verdict"].upper(),
         "provenanceRecorded": provenance_recorded,
         "completionResult": data["verdict"].upper(),
@@ -667,15 +673,20 @@ def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
             "changedPathsHash": gate["changedPathsHash"],
         },
     }
-    if data["verdict"] == "pass":
-        completion = _complete_step_after_pass(root, step_id)
-        result["stepCompletion"] = completion
-        if not completion.get("completed"):
-            result["completionResult"] = "BLOCKED"
-            result["reasonCode"] = completion.get(
-                "reasonCode",
-                "STEP_COMPLETION_PROOF_INCOMPLETE",
-            )
+    if convergence is not None:
+        result["completionGate"] = convergence
+        result["completionResult"] = convergence["completionResult"]
+        if convergence["completionResult"] == "PASS":
+            completion = finalize_step_completion(root, step_id)
+            result["stepCompletion"] = completion
+            if not completion.get("completed"):
+                result["completionResult"] = "BLOCKED"
+                result["reasonCode"] = completion.get(
+                    "reasonCode",
+                    "STEP_COMPLETION_PROOF_INCOMPLETE",
+                )
+        else:
+            result["reasonCode"] = convergence.get("reasonCode")
     return result
 
 

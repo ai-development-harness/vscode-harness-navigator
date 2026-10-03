@@ -426,6 +426,12 @@ Releases до v0.8.2 поставляют engine без журнала. Прое
 
 Опубликованный `v0.8.1` вышел из `main` без нового engine. Поэтому bridge — `v0.8.2` (`v0.8.1` + только update engine, tests и docs; `kind: bridge`, `reloadRequired: true`): он не меняет template definitions, marker blocks, ownership policy и формат local state. Маршрут проекта на v0.8.0 — `v0.8.0 → v0.8.1 → v0.8.2`; все последующие hops выполняет уже транзакционный engine. `update-migration-self-test.py` (`REQUIRED_BRIDGES`) блокирует любое другое ребро из `v0.8.0` и `v0.8.1`.
 
+## Multi-project target semantics
+
+Accepted architecture contract для будущих multiple Harness project contexts: [`MULTI_PROJECT_CONTEXTS.md`](MULTI_PROJECT_CONTEXTS.md).
+
+До реализации #188 текущий updater остаётся single-root. Будущая реализация обязана выбирать explicit project target, использовать policy/lock/report selected member, не писать в sibling project и не присваивать nested member ownership repository-global surfaces автоматически. Mixed releases допустимы только для независимых project-local protocol layers.
+
 ## Regression check
 
 Dependency-free regressions:

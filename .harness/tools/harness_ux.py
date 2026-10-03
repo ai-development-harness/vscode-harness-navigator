@@ -15,6 +15,7 @@ import sys
 from typing import Any
 
 from execution_status import load_status, resolve_execution, unresolved_executions
+from impact_analysis import plan_staleness
 from harness_config import (
     ConfigError,
     get,
@@ -27,6 +28,7 @@ from planning_contract import read_task
 from projection_contract import write_projections
 from review_contract import latest_review
 from step_next import resolve_step_next
+from pr_provider import ProviderError, provider_context
 
 
 def _run(root: Path, *args: str, timeout: int = 15) -> dict[str, Any]:
@@ -78,8 +80,10 @@ def _pr_capability(root: Path) -> dict[str, Any]:
     try:
         policy = load_git_policy(root)
         pr = policy.get("pull_request", {})
+        push = policy.get("push", {})
         provider = pr.get("provider")
         tool = pr.get("preferred_tool")
+        remote = push.get("remote")
     except (ConfigError, OSError, ValueError) as exc:
         return {
             "provider": None,
@@ -92,22 +96,31 @@ def _pr_capability(root: Path) -> dict[str, Any]:
     installed = isinstance(tool, str) and shutil.which(tool) is not None
     authenticated: bool | None = None
     reason: str | None = None
+    details: dict[str, Any] | None = None
 
-    if provider == "github" and tool == "gh":
-        if installed:
-            auth = _run(root, "gh", "auth", "status")
-            authenticated = auth["ok"]
-            if not authenticated:
-                reason = "gh is installed but not authenticated"
-        else:
-            reason = "gh is not installed"
-    elif installed:
-        reason = "configured provider/tool is not implemented by current PR integration"
+    if installed:
+        try:
+            provider_context(
+                root,
+                {
+                    "provider": provider,
+                    "preferredTool": tool,
+                    "remote": remote,
+                    "branch": "",
+                    "base": pr.get("base"),
+                },
+            )
+            authenticated = True
+        except ProviderError as exc:
+            authenticated = False
+            reason = str(exc)
+            details = {"reasonCode": exc.code, **exc.details}
     else:
-        reason = "configured PR tool is not installed"
+        authenticated = False
+        reason = f"{tool} is not installed" if isinstance(tool, str) else "PR tool is not configured"
 
-    available = provider == "github" and tool == "gh" and installed and authenticated is True
-    return {
+    available = installed and authenticated is True
+    result = {
         "provider": provider,
         "tool": tool,
         "installed": installed,
@@ -117,10 +130,14 @@ def _pr_capability(root: Path) -> dict[str, Any]:
         "requiredForCommands": ["GIT PR", "GIT PR FINISH"],
         "reason": None if available else reason,
     }
+    if details is not None:
+        result["details"] = details
+    return result
 
 
 def harness_status(root: Path) -> dict[str, Any]:
     manifest = load_manifest(root)
+    pr_capability = _pr_capability(root)
     return {
         "status": "PASS",
         "harness": {
@@ -133,7 +150,11 @@ def harness_status(root: Path) -> dict[str, Any]:
         },
         "git": _git_snapshot(root),
         "executions": _resolved_unfinished(root),
-        "capabilities": {"githubPullRequests": _pr_capability(root)},
+        "capabilities": {
+            "pullRequests": pr_capability,
+            # Backward-compatible alias for clients that still read the old key.
+            "githubPullRequests": pr_capability,
+        },
     }
 
 
@@ -333,6 +354,10 @@ def project_status(root: Path) -> dict[str, Any]:
         groups.setdefault(str(item.get("status")), []).append(item)
 
     next_work = resolve_step_next(root)
+    stale_plans = [
+        item for item in listed["steps"]
+        if item.get("planFreshness") == "stale"
+    ]
     return {
         "status": "PASS",
         "changedProjections": changed,
@@ -342,9 +367,11 @@ def project_status(root: Path) -> dict[str, Any]:
                 name: len(items)
                 for name, items in sorted(groups.items())
             },
+            "stalePlans": len(stale_plans),
         },
         "inProgress": groups.get("in_progress", []),
         "blocked": groups.get("blocked", []),
+        "stalePlans": stale_plans,
         "completed": [
             str(item["id"])
             for item in groups.get("completed", [])
@@ -371,6 +398,19 @@ def step_list(root: Path) -> dict[str, Any]:
             errors.append(f"{step_id}: {exc}")
             continue
         meta = document["frontmatter"]
+        try:
+            freshness = plan_staleness(root, step_id)
+        except (OSError, UnicodeError, ValueError) as exc:
+            freshness = {
+                "status": "blocked",
+                "causes": [
+                    {
+                        "component": "PLANNING_CONTEXT",
+                        "change": str(exc),
+                    }
+                ],
+                "action": f"STEP PLAN {step_id}",
+            }
         rows.append({
             "id": step_id,
             "title": _step_title(document, step_id),
@@ -379,6 +419,9 @@ def step_list(root: Path) -> dict[str, Any]:
             "type": meta.get("type"),
             "phase": meta.get("phase"),
             "planStatus": (meta.get("plan") or {}).get("status") if isinstance(meta.get("plan"), dict) else None,
+            "planFreshness": freshness.get("status"),
+            "planStaleCauses": freshness.get("causes", []),
+            "planRemediation": freshness.get("action"),
             "path": path.relative_to(root).as_posix(),
         })
     rows.sort(key=lambda item: int(str(item["id"]).split("-")[1]))

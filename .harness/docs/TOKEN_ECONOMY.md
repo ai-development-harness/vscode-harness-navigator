@@ -79,7 +79,7 @@ Machine-readable config должен читать deterministic tool, когда
 
 Подробная документация хранится pull-based в `.harness/docs/**` и читается по необходимости. Always-on bootstrap должен оставаться картой/routing surface, а не полным manual.
 
-Для STEP workflow навигация тоже выполняется pull-based: `step-context.py STEP-NNN --phase plan|implement|review --json` разрешает exact canonical `readPaths` и deterministic phase facts. Tool намеренно не генерирует semantic summary — модель получает исходное evidence, но не сканирует unrelated project docs/manifest directories.
+Для STEP workflow навигация тоже выполняется pull-based: `step-context.py STEP-NNN --phase plan|implement|review --json` разрешает deterministic phase facts и включает `contextContract` — exact role-specific artifacts/sections. Legacy `readPaths` остаётся compatibility surface; semantic role не обязана читать файл целиком. Context Contract публикует tokenizer-neutral `artifactCount`, `sectionCount`, `manifestChars` и `fullRepositoryPreload=false`, а дополнительный context допускается только через explicit expansion reason. Tool source `.harness/tools/**` не является normal semantic input.
 
 Command bootstrap также не является reasoning-задачей. `harness-dispatch.py` объединяет CTS validation, execution state, continuation и routing. Deterministic commands, включая `PROJECT STATUS` и `HARNESS UPDATE CHECK/APPLY`, выполняются внутри dispatcher; semantic command возвращает только exact skill/context handoff. Root-модель не должна отдельно читать transition graph, выбирать skill или вызывать resolver по playbook.
 

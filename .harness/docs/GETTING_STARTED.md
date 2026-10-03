@@ -116,17 +116,18 @@ Initializer должен:
 5. создать ADR только для устойчивых решений;
 6. создать canonical OQ для существенных неизвестных;
 7. выполнить independent requirements semantic review и сохранить immutable INIT report с exact basis;
-8. создать canonical schema-v1 STEP roadmap;
-9. заполнить explicit dependencies, `architecture_refs`, `risk_flags`, mutation policy, acceptance и verification;
-10. выполнить independent roadmap semantic review и сохранить второй immutable INIT report;
-11. обеспечить REQ↔STEP и ADR↔STEP traceability;
-12. пересобрать tracked projections через `sync-projections.py`;
-13. запустить `validate.py --mode manual`;
-14. завершить bootstrap только через:
+8. выполнить architecture completeness pass; для architecture-sensitive baseline привлечь отдельного read-only architect, а missing durable decisions оформить ADR/OQ/prerequisite;
+9. создать canonical schema-v1 STEP roadmap;
+10. заполнить explicit dependencies, `architecture_refs`, `risk_flags`, mutation policy, acceptance и verification;
+11. выполнить independent roadmap semantic review и сохранить второй immutable INIT report;
+12. обеспечить REQ↔STEP и ADR↔STEP traceability;
+13. пересобрать tracked projections через `sync-projections.py`;
+14. запустить `validate.py --mode manual`;
+15. завершить bootstrap только через:
     ```bash
     python3 .harness/tools/finalize-project-init.py --name '<project-name>'
     ```
-15. не создавать production code.
+16. не создавать production code.
 
 Ручное `project.initialized=true` не является валидным INIT completion.
 
@@ -167,7 +168,7 @@ Planning:
 STEP PLAN STEP-001
 ```
 
-Каждый PLAN проходит independent planning-review. Только matching semantic PASS + exact `context_basis` + `plan_content_hash` позволяют сделать plan Ready.
+Каждый PLAN после contract consistency выполняет architecture completeness pass. Architecture-sensitive STEP обязан пройти отдельный read-only architect pass до сохранения draft. Затем independent planning-review adversarially проверяет plan. Только matching semantic PASS + exact `context_basis` + `plan_content_hash` позволяют сделать plan Ready.
 
 Реализация:
 

@@ -233,17 +233,53 @@ def _write_journal(root: Path, data: dict[str, Any]) -> None:
     atomic_write_bytes(journal_dir(root) / JOURNAL_FILE, payload.encode("utf-8"), mode=0o644)
 
 
+def _windows_process_alive(pid: int) -> bool:
+    """Проверить PID через WinAPI; неизвестная ошибка остаётся fail-closed."""
+    import ctypes
+    from ctypes import wintypes
+
+    process_query_limited_information = 0x1000
+    still_active = 259
+    error_invalid_parameter = 87
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+    get_exit_code = kernel32.GetExitCodeProcess
+    get_exit_code.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    get_exit_code.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    handle = open_process(process_query_limited_information, False, pid)
+    if not handle:
+        # ERROR_INVALID_PARAMETER означает, что такого PID сейчас нет.
+        # ACCESS_DENIED/прочие ошибки не доказывают смерть процесса.
+        return ctypes.get_last_error() != error_invalid_parameter
+    try:
+        exit_code = wintypes.DWORD()
+        if not get_exit_code(handle, ctypes.byref(exit_code)):
+            return True
+        return exit_code.value == still_active
+    finally:
+        close_handle(handle)
+
+
 def owner_alive(journal: dict[str, Any]) -> bool:
-    """Жив ли процесс, создавший журнал, на этом же host (POSIX)."""
+    """Жив ли процесс, создавший журнал, на этом же host."""
     owner = journal.get("owner")
     if not isinstance(owner, dict) or owner.get("host") != socket.gethostname():
         return False
     pid = owner.get("pid")
     if not isinstance(pid, int) or pid <= 0 or pid == os.getpid():
         return False
+    if os.name == "nt":
+        return _windows_process_alive(pid)
     if os.name != "posix":
-        # Без надёжной проверки процесса считаем владельца живым: автоматический
-        # rollback чужого идущего hop опаснее, чем ручной `recover --force`.
+        # На неизвестной платформе отсутствие надёжного probe остаётся
+        # fail-closed: автоматический rollback живого hop опаснее.
         return True
     try:
         os.kill(pid, 0)

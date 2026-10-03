@@ -1,6 +1,6 @@
 # Настройка моделей и reasoning effort
 
-Цель — тратить дорогой reasoning там, где он действительно повышает качество, а не на механические изменения.
+Цель — тратить дорогой reasoning там, где он действительно повышает качество, а не на механические изменения. Текущий template использует quality-first default для bootstrap/architecture/planning/review: ошибки здесь размножаются по последующим STEP и обходятся дороже дополнительного reasoning.
 
 Harness отделяет **роль** от конкретного AI runtime. Канонические responsibilities задаются protocol/role instructions, а выбор model/effort хранится в adapter-конфигурации:
 
@@ -15,29 +15,29 @@ Harness отделяет **роль** от конкретного AI runtime. К
 
 | Роль | Модель | Effort | Когда |
 |---|---|---|---|
-| initializer | GPT-5.6 Sol | high | только bootstrap/re-bootstrap analysis |
-| architect | GPT-5.6 Sol | high | архитектурные решения |
-| planner | GPT-5.6 Sol | high | сложный анализ перед реализацией |
+| initializer | GPT-6.1 Sol | max | bootstrap/re-bootstrap и architecture baseline |
+| architect | GPT-6.1 Sol | max | architecture completeness и долговечные решения |
+| planner | GPT-6.1 Sol | max | contract + architecture analysis перед реализацией |
 | implementer | GPT-5.6 Terra | medium | основной coding volume |
-| reviewer | GPT-5.6 Sol | high | независимый поиск дефектов |
-| security-reviewer | GPT-5.6 Sol | high | условно, security-sensitive changes |
+| reviewer | GPT-6.1 Sol | max | независимый adversarial review |
+| security-reviewer | GPT-6.1 Sol | max | условно, security-sensitive changes |
 | test-reviewer | GPT-5.6 Terra | low | условно, сложная test surface |
 | docs | GPT-5.6 Terra | low | синхронизация документации |
 | mechanic | GPT-5.6 Terra | low | локальная механическая работа |
-| skill-curator | GPT-5.6 Sol | medium | внешние skills требуют careful inspection/provenance |
+| skill-curator | GPT-6.1 Sol | medium | внешние skills требуют careful inspection/provenance |
 | git-operator | GPT-5.6 Terra | medium | diff classification, commit/branch/PR safety |
-| harness-updater | GPT-5.6 Sol | high | BASE/OURS/THEIRS reconciliation и ownership conflicts |
+| harness-updater | GPT-6.1 Sol | high | BASE/OURS/THEIRS reconciliation и ownership conflicts |
 
 ### Claude Code
 
 | Роль | Модель | Effort | Permission |
 |---|---|---|---|
-| initializer | opus | high | default |
-| architect | opus | high | plan |
-| planner | opus | high | plan |
+| initializer | opus | max | default |
+| architect | opus | max | plan |
+| planner | opus | max | plan |
 | implementer | sonnet | medium | default |
-| reviewer | opus | high | plan |
-| security-reviewer | opus | high | plan |
+| reviewer | opus | max | plan |
+| security-reviewer | opus | max | plan |
 | test-reviewer | sonnet | low | plan |
 | docs | sonnet | low | default |
 | mechanic | sonnet | low | default |
@@ -216,12 +216,14 @@ Harness не вводит искусственный `.codex/config.local.toml` 
 
 ### Quality-first
 
-- reasoning roles: сильная модель + high;
+- initializer/architect/planner/reviewer/security-reviewer: сильнейшая настроенная модель + `max`;
+- `max` используется здесь намеренно: эти роли принимают или проверяют решения, которые определяют scope и архитектурные границы до дорогой product mutation;
+- повышение effort **не заменяет** semantic gates, architect escalation и independent review; оно усиливает reasoning внутри уже ограниченного contract;
 - implementer: сильная/balanced модель, Medium или High для critical STEP;
 - test-reviewer: Medium при сложной test surface;
 - harness-updater: High, потому что запускается редко и ошибка может повредить protocol layer.
 
-### Balanced (default)
+### Balanced
 
 - reasoning roles: сильная модель + High;
 - implementer: balanced model + Medium;

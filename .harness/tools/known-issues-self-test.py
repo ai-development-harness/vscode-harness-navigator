@@ -20,6 +20,9 @@ import tempfile
 from typing import Callable
 
 
+from self_test_fixture import isolate_project_artifacts
+
+
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -64,6 +67,7 @@ def copy_tracked(target: Path) -> None:
         destination = target / rel
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+    isolate_project_artifacts(target)
 
 
 # #110 (setext heading) исправлен и перенесён в repository-hardening-self-test.py.
@@ -91,7 +95,11 @@ def main() -> int:
             "regression suite and remove it and its release freeze from known-issues-self-test.py"
         )
 
-    print(f"KNOWN ISSUES SELF-TEST: {'FAIL' if failed else 'PASS'}")
+    count = len(KNOWN_ISSUES)
+    print(
+        f"KNOWN ISSUES SELF-TEST: {'FAIL' if failed else 'PASS'} "
+        f"({count} known issue{'s' if count != 1 else ''})"
+    )
     return 1 if failed else 0
 
 

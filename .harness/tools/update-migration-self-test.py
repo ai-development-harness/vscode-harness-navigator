@@ -209,8 +209,9 @@ def test_ownership_contract(root: Path) -> None:
     with (root / ".harness/harness-policy.toml").open("rb") as fh:
         harness_policy = tomllib.load(fh)
     for skill in harness_policy.get("required_skills", []):
-        path = f".agents/skills/{skill}/SKILL.md"
-        require(matches_any(path, harness_owned), f"required core skill is not updater-managed: {path}")
+        for filename in ("SKILL.md", "UPSTREAM.md"):
+            path = f".agents/skills/{skill}/{filename}"
+            require(matches_any(path, harness_owned), f"required core skill is not updater-managed: {path}")
     require(
         not matches_any(".agents/skills/project-native/SKILL.md", harness_owned),
         "project/third-party skill must stay outside Harness update ownership",
