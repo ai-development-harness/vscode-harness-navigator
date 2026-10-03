@@ -9,7 +9,6 @@ import tempfile
 
 
 from self_test_fixture import isolate_project_artifacts
-from template_contract import template_targets
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -104,6 +103,7 @@ def test_initialized_project_fixture_isolation(root: Path) -> None:
     (root / "docs/requirements/REQ-001-template.md").unlink(missing_ok=True)
 
     principles = root / "docs/principles"
+    template_before = (principles / "TEMPLATE.md").read_bytes()
     principle = principles / "PRN-999-fixture.md"
     principle.write_text(
         """---
@@ -147,9 +147,7 @@ None.
     assert "  name: null" in normalized
     assert "  initializedAt: null" in normalized
     assert not list(principles.glob("PRN-*.md"))
-    assert (principles / "TEMPLATE.md").read_text(encoding="utf-8") == template_targets(
-        root
-    )[principles / "TEMPLATE.md"]
+    assert (principles / "TEMPLATE.md").read_bytes() == template_before
 
     init_git(root)
     baseline = validate(root)

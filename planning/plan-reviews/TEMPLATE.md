@@ -15,7 +15,7 @@ created_at: YYYY-MM-DDTHH:MM:SSZ
 ## Scope checked
 
 - STEP contract
-- Dependencies/completion proofs
+- Semantic dependency contracts (completion proof проверяется перед IMPLEMENT)
 - Linked REQ/Accepted ADR/Open Questions
 - Architecture refs
 - Proposed Implementation plan
