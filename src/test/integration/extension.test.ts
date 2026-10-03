@@ -247,7 +247,7 @@ suite('extension lifecycle (Extension Host)', () => {
       );
       await vscode.workspace.fs.writeFile(
         manifest,
-        encoder.encode(decoder.decode(originalManifest).replace('banana', '0.6.0')),
+        encoder.encode(decoder.decode(originalManifest).replace('banana', '0.10.3')),
       );
       await waitFor(async () =>
         (
@@ -783,7 +783,7 @@ suite('extension lifecycle (Extension Host)', () => {
     try {
       await vscode.workspace.fs.writeFile(
         manifest,
-        encoder.encode(decoder.decode(originalManifest).replace('0.6.0', 'banana')),
+        encoder.encode(decoder.decode(originalManifest).replace('0.10.3', 'banana')),
       );
       await vscode.commands.executeCommand('harnessNavigator.refresh');
       assert.deepEqual(extensionModule.getArtifactsViewSnapshot(), []);

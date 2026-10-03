@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
+import * as path from 'node:path';
 import { createLifecycleRegistry, LifecycleRegistry } from './lifecycle/disposableRegistry';
 import { ProjectStateService } from './projectModel/projectStateService';
+import { detectProject } from './projectModel/manifestService';
 import type { ProjectState } from './projectModel/projectState';
 import type { Artifact, ArtifactSnapshot } from './projectModel/artifactIndex';
 import {
@@ -34,6 +36,16 @@ import { registerCopyCommand } from './commandCatalog/copyCommand';
 import { registerOpenCommandDocumentation } from './commandCatalog/openCommandDocumentation';
 import { registerFindCommand } from './commandCatalog/findCommand';
 import type { CatalogState } from './commandCatalog/commandGraph';
+import { ProjectGraphService } from './projectGraph/projectStateService';
+import { registerShowDependencyGraph } from './commands/showDependencyGraph';
+import {
+  PROJECT_STATE_ERROR_MESSAGES,
+  PROJECT_STATE_ERROR_CATEGORIES,
+} from './projectGraph/dependencyGraphPanel';
+export {
+  getDependencyGraphPanelSnapshot,
+  dispatchDependencyGraphMessage,
+} from './commands/showDependencyGraph';
 
 /**
  * Минимальный, test-observable результат активации. Намеренно ограничен
@@ -62,6 +74,7 @@ let activeStatusBar: HarnessStatusBar | undefined;
 let activeCatalogs: CommandCatalogService | undefined;
 let activeCommandsProvider: CommandsTreeDataProvider | undefined;
 let activeCommandsTreeView: vscode.TreeView<unknown> | undefined;
+let activeProjectGraphs: ProjectGraphService | undefined;
 let artifactsTreeDataChangeCount = 0;
 
 /**
@@ -83,23 +96,82 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
   const projectStates = registry.register(
     new ProjectStateService(vscode.workspace.workspaceFolders, output),
   );
+  const projectGraphs = registry.register(
+    new ProjectGraphService({
+      isTrusted: () => vscode.workspace.isTrusted,
+      // Используем общий detector без перестроения ArtifactIndex на каждом запросе API.
+      // Свежая проверка закрывает refresh открытого panel до доставки manifest watcher event.
+      configurationError: (folder) => {
+        if (
+          !vscode.workspace.workspaceFolders?.some(
+            (f) => f.uri.toString() === folder.uri.toString(),
+          )
+        )
+          return 'unavailable';
+        const state = detectProject(folder.uri.fsPath);
+        return state.kind === 'valid'
+          ? undefined
+          : state.kind === 'unsupportedVersion'
+            ? 'unsupportedHarness'
+            : 'unavailable';
+      },
+    }),
+  );
   // STEP-007: root добавляется/удаляется без restart Extension Host.
   registry.register(
     vscode.workspace.onDidChangeWorkspaceFolders((event) => {
       for (const folder of event.removed) projectStates.removeRoot(folder);
+      for (const folder of event.removed) projectGraphs.removeRoot(folder);
       for (const folder of event.added) projectStates.addRoot(folder);
     }),
   );
   registry.register(
-    vscode.commands.registerCommand('harnessNavigator.showDiagnostics', () =>
-      projectStates.showDiagnostics(),
-    ),
+    vscode.commands.registerCommand('harnessNavigator.showDiagnostics', () => {
+      const report = projectStates.showDiagnostics();
+      const graphDiagnostics = (vscode.workspace.workspaceFolders ?? []).flatMap((folder) => {
+        const snapshot = projectGraphs.get(folder);
+        if (!snapshot) return [];
+        if (snapshot.kind !== 'ready')
+          return [
+            {
+              workspaceRoot: folder.uri.fsPath,
+              category:
+                PROJECT_STATE_ERROR_CATEGORIES[snapshot.error ?? ''] ?? 'ProjectStateReadError',
+              message: vscode.l10n.t(
+                PROJECT_STATE_ERROR_MESSAGES[snapshot.error ?? ''] ??
+                  'Project State API process failed.',
+              ),
+            },
+          ];
+        return (snapshot.payload?.diagnostics ?? []).map((d) => ({
+          workspaceRoot: folder.uri.fsPath,
+          category: 'ProjectStateDiagnostic',
+          message: JSON.stringify(d),
+        }));
+      });
+      const graphLines = graphDiagnostics.map(
+        (d) => `[${d.workspaceRoot}] ${d.category}: ${d.message}`,
+      );
+      for (const line of graphLines) output.appendLine(line);
+      return { ...report, lines: [...report.lines, ...graphLines], graphDiagnostics };
+    }),
   );
   registry.register(
-    vscode.commands.registerCommand('harnessNavigator.refresh', () => {
+    vscode.commands.registerCommand('harnessNavigator.refresh', async () => {
+      const requests: Promise<unknown>[] = [];
       for (const folder of vscode.workspace.workspaceFolders ?? []) {
         projectStates.refreshRoot(folder);
+        if (projectStates.getState(folder)?.kind === 'valid')
+          requests.push(projectGraphs.refresh(folder));
+        else if (projectGraphs.get(folder))
+          projectGraphs.blockRoot(
+            folder,
+            projectStates.getState(folder)?.kind === 'unsupportedVersion'
+              ? 'unsupportedHarness'
+              : 'unavailable',
+          );
       }
+      await Promise.all(requests);
     }),
   );
 
@@ -237,6 +309,81 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
   );
   registry.register(registerFindAllReferencesCommand(navigation));
   registry.register(registerShowRelationsCommand(navigation));
+  registry.register(registerShowDependencyGraph(projectGraphs, projectStates));
+  // Graph имеет собственный cache и owning-root watchers; ArtifactIndex не служит fallback.
+  registry.register(
+    vscode.workspace.onDidGrantWorkspaceTrust(() => {
+      for (const folder of vscode.workspace.workspaceFolders ?? [])
+        if (projectStates.getState(folder)?.kind === 'valid') projectGraphs.invalidate(folder);
+    }),
+  );
+  const graphWatchers = new Map<string, vscode.Disposable>();
+  const watchGraphRoot = (folder: vscode.WorkspaceFolder) => {
+    const key = folder.uri.toString();
+    if (graphWatchers.has(key)) return;
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(folder, '**/*'),
+    );
+    const changed = (uri: vscode.Uri) => {
+      const state = projectStates.getState(folder);
+      if (state?.kind !== 'valid') {
+        if (projectGraphs.get(folder))
+          projectGraphs.blockRoot(
+            folder,
+            state?.kind === 'unsupportedVersion' ? 'unsupportedHarness' : 'unavailable',
+          );
+        return;
+      }
+      const relative = path.relative(folder.uri.fsPath, uri.fsPath).replace(/\\/gu, '/');
+      const configured = [
+        state.configuredPaths.taskDirectory,
+        state.configuredPaths.requirements,
+        state.configuredPaths.adrDirectory,
+        state.configuredPaths.openQuestions,
+      ];
+      const supplied = Object.values(projectGraphs.get(folder)?.payload?.sources ?? {}).filter(
+        (v): v is string => typeof v === 'string',
+      );
+      if (
+        relative.startsWith('.harness/') ||
+        [...configured, ...supplied].some((p) => {
+          const prefix = path
+            .relative(folder.uri.fsPath, path.resolve(folder.uri.fsPath, p))
+            .replace(/\\/gu, '/');
+          return relative === prefix || relative.startsWith(prefix + '/');
+        })
+      )
+        projectGraphs.invalidate(folder);
+    };
+    const subscriptions = [
+      watcher.onDidChange(changed),
+      watcher.onDidCreate(changed),
+      watcher.onDidDelete(changed),
+    ];
+    graphWatchers.set(key, {
+      dispose: () => {
+        for (const subscription of subscriptions) subscription.dispose();
+        watcher.dispose();
+      },
+    });
+  };
+  for (const folder of vscode.workspace.workspaceFolders ?? []) watchGraphRoot(folder);
+  registry.register(
+    vscode.workspace.onDidChangeWorkspaceFolders((e) => {
+      for (const folder of e.removed) {
+        const key = folder.uri.toString();
+        graphWatchers.get(key)?.dispose();
+        graphWatchers.delete(key);
+      }
+      for (const folder of e.added) watchGraphRoot(folder);
+    }),
+  );
+  registry.register({
+    dispose: () => {
+      for (const watcher of graphWatchers.values()) watcher.dispose();
+      graphWatchers.clear();
+    },
+  });
   // STEP-014: menu-only алиасы для editor/context (заголовок с префиксом «Harness:»);
   // тонкие обёртки над оригиналами, литеральные id нужны для inspect:package.
   registry.register(
@@ -264,6 +411,7 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
   activeCatalogs = catalogs;
   activeCommandsProvider = commandsProvider;
   activeCommandsTreeView = commandsTreeView;
+  activeProjectGraphs = projectGraphs;
 
   const activatedLogMessage = vscode.l10n.t('Harness Navigator extension activated.');
   const fallbackLogMessage = vscode.l10n.t('Harness Navigator localization fallback is active.');
@@ -291,6 +439,15 @@ export function getActiveArtifactSnapshot(
   folder: vscode.WorkspaceFolder,
 ): ArtifactSnapshot | undefined {
   return activeProjectStates?.getIndex(folder)?.snapshot();
+}
+
+/** Read-only seam: tests inspect API state without exposing process ownership. */
+export function getActiveDependencyGraphState(folder: vscode.WorkspaceFolder): string | undefined {
+  return activeProjectGraphs?.get(folder)?.kind;
+}
+
+export function getActiveDependencyGraphSnapshot(folder: vscode.WorkspaceFolder) {
+  return activeProjectGraphs?.get(folder);
 }
 
 /**
@@ -551,6 +708,7 @@ export function deactivate(): void {
     activeSummaryProvider = undefined;
     activeStatusBar = undefined;
     activeCatalogs = undefined;
+    activeProjectGraphs = undefined;
     activeCommandsProvider = undefined;
     activeCommandsTreeView = undefined;
     artifactsTreeDataChangeCount = 0;

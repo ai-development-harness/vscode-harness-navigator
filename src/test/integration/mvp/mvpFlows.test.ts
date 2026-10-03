@@ -161,7 +161,7 @@ suite('MVP flows (Extension Host)', () => {
       (item) => item.workspaceRoot === folderByName('mvp-old-release').uri.fsPath,
     );
     assert.equal(old?.detectedRelease, '0.5.0');
-    assert.equal(old?.minimumRelease, '0.6.0');
+    assert.equal(old?.minimumRelease, '0.10.3');
   });
 
   test('containment e2e: traversal, absolute, symlink и manifest-symlink блокируются на каждой platform', async function () {
@@ -426,7 +426,7 @@ suite('MVP flows (Extension Host)', () => {
       validGroup?.children.find(
         (child) => child.label === (isRussian() ? 'Релиз Harness' : 'Harness release'),
       )?.description,
-      '0.6.0',
+      '0.10.3',
     );
     assert.ok(flatten(seams.getSummaryViewSnapshot()).every((node) => node.hasCommand !== true));
   });

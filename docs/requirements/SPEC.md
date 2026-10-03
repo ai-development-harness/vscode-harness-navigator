@@ -14,3 +14,4 @@
 | [REQ-008](REQ-008-localization-and-diagnostics.md) | Локализация и диагностируемая деградация | medium | brief |
 | [REQ-009](REQ-009-incremental-offline-operation.md) | Incremental и offline работа | medium | brief |
 | [REQ-010](REQ-010-quality-and-testability.md) | Качество реализации и проверяемость | high | brief |
+| [REQ-011](REQ-011-project-state-dependency-graph.md) | Граф зависимостей из Project State API | high | brief |

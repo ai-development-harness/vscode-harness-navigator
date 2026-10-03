@@ -46,10 +46,16 @@ const FORBIDDEN_ENTRY_PATTERNS: readonly [RegExp, string][] = [
   [/(^|\/)id_(rsa|dsa|ecdsa|ed25519)/u, 'ssh key'],
 ];
 
-const ALLOWED_REQUIRES: ReadonlySet<string> = new Set(['vscode', 'node:fs', 'node:path']);
+// ADR-008 допускает узкий Project State API. Runtime spies отдельно проверяют
+// fixed spawn, а shell helpers и network modules остаются запрещены.
+const ALLOWED_REQUIRES: ReadonlySet<string> = new Set([
+  'vscode',
+  'node:fs',
+  'node:path',
+  'node:child_process',
+]);
 
 const FORBIDDEN_BUNDLE_MODULES = [
-  'child_process',
   'http',
   'https',
   'http2',
@@ -65,7 +71,6 @@ const FORBIDDEN_BUNDLE_MODULES = [
 const FORBIDDEN_BUNDLE_TOKENS: readonly [RegExp, string][] = [
   [/\bcreateTerminal\b/u, 'createTerminal'],
   [/\bexecuteTask\b/u, 'executeTask'],
-  [/\bcreateWebviewPanel\b/u, 'createWebviewPanel'],
   [/\bregisterWebviewViewProvider\b/u, 'registerWebviewViewProvider'],
   [/\bfetch\(/u, 'fetch('],
   [/\bXMLHttpRequest\b/u, 'XMLHttpRequest'],
@@ -100,6 +105,7 @@ const FORBIDDEN_BUNDLE_TOKENS: readonly [RegExp, string][] = [
   [/\bopenSync\([^,()]+,\s*["'`]/u, 'openSync with string flags'],
   [/\bprocess\.(binding|dlopen)\b|\bcreateRequire\b/u, 'process.binding/dlopen/createRequire'],
   [/\brequire\(\s*["'][^"']*["']\s*\+/u, 'concatenated require'],
+  [/\.(execSync|execFile|execFileSync|spawnSync|fork)\b/u, 'unsafe child process API'],
 ];
 
 const ALLOWED_COMMAND_IDS: readonly RegExp[] = [

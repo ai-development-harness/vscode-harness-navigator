@@ -17,6 +17,13 @@ export type ProjectDiagnosticCategory =
   | 'ProjectionReadError'
   | 'CommandGraphReadError'
   | 'CommandGraphUnsupportedSchema'
+  | 'ProjectStateUnavailable'
+  | 'ProjectStateBlocked'
+  | 'ProjectStateReadError'
+  | 'ProjectStateUnsupportedSchema'
+  | 'ProjectStateTimeout'
+  | 'ProjectStateOutputTooLarge'
+  | 'ProjectStatePythonUnavailable'
   | 'UnexpectedInternalError';
 
 export interface ProjectDiagnostic {
@@ -56,7 +63,7 @@ export interface InvalidManifestState extends BaseProjectState {
 export interface UnsupportedVersionState extends BaseProjectState {
   readonly kind: 'unsupportedVersion';
   readonly detectedRelease: string;
-  readonly minimumRelease: '0.6.0';
+  readonly minimumRelease: '0.10.3';
 }
 
 export interface UnsupportedSchemaState extends BaseProjectState {
