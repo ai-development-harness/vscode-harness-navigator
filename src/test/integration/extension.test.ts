@@ -296,6 +296,7 @@ suite('extension lifecycle (Extension Host)', () => {
         artifact: { id: string };
         item: vscode.TreeItem;
       }[];
+      getArtifactsViewPriorityDecoration: (id: string) => vscode.FileDecoration | undefined;
     };
     const russianLocale = vscode.env.language.toLowerCase().startsWith('ru');
     const filteredEmptyMessage = russianLocale
@@ -355,6 +356,16 @@ suite('extension lifecycle (Extension Host)', () => {
         uri: vscode.Uri.joinPath(valid.uri, 'docs/requirements/REQ-910.md'),
         content:
           '---\nschema: 1\nid: REQ-910\npriority: high\n---\n\n# REQ-910 — Requirement для views test\n',
+      },
+      {
+        uri: vscode.Uri.joinPath(valid.uri, 'docs/requirements/REQ-911.md'),
+        content:
+          '---\nschema: 1\nid: REQ-911\npriority: critical\n---\n\n# REQ-911 — Critical priority для decoration test\n',
+      },
+      {
+        uri: vscode.Uri.joinPath(valid.uri, 'docs/requirements/REQ-912.md'),
+        content:
+          '---\nschema: 1\nid: REQ-912\npriority: unexpected\n---\n\n# REQ-912 — Invalid priority для decoration test\n',
       },
       {
         uri: vscode.Uri.joinPath(valid.uri, 'docs/adr/ADR-910.md'),
@@ -425,6 +436,41 @@ suite('extension lifecycle (Extension Host)', () => {
       assertThemeIcon(artifactItem('ADR-910'), 'check', 'testing.iconPassed');
       assertThemeIcon(artifactItem('OQ-910'), 'question');
 
+      // STEP-017: primary icon остаётся матрицей STEP-016, а FileDecoration
+      // добавляет отдельный badge только к resourceUri Artifacts View.
+      const priorityLabel = russianLocale ? 'Приоритет' : 'Priority';
+      assertDecoration(
+        extensionModule.getArtifactsViewPriorityDecoration('STEP-910'),
+        'H',
+        'editorWarning.foreground',
+        `${priorityLabel}: ${russianLocale ? 'Высокий' : 'High'}`,
+      );
+      assertDecoration(
+        extensionModule.getArtifactsViewPriorityDecoration('STEP-911'),
+        'L',
+        'disabledForeground',
+        `${priorityLabel}: ${russianLocale ? 'Низкий' : 'Low'}`,
+      );
+      assertDecoration(
+        extensionModule.getArtifactsViewPriorityDecoration('STEP-912'),
+        'M',
+        'editorInfo.foreground',
+        `${priorityLabel}: ${russianLocale ? 'Средний' : 'Medium'}`,
+      );
+      assertDecoration(
+        extensionModule.getArtifactsViewPriorityDecoration('REQ-911'),
+        '!',
+        'editorError.foreground',
+        `${priorityLabel}: ${russianLocale ? 'Критический' : 'Critical'}`,
+      );
+      assert.equal(extensionModule.getArtifactsViewPriorityDecoration('REQ-912'), undefined);
+      assert.equal(extensionModule.getArtifactsViewPriorityDecoration('OQ-910'), undefined);
+      assert.ok(
+        (artifactItem('REQ-910').tooltip as string).includes(
+          `${priorityLabel}: ${russianLocale ? 'Высокий' : 'High'}`,
+        ),
+      );
+
       // Refresh немедленно пересобирает presentation из обновлённого Index.
       const req910 = files.find((file) => file.uri.path.endsWith('/REQ-910.md'));
       assert.ok(req910);
@@ -434,6 +480,12 @@ suite('extension lifecycle (Extension Host)', () => {
       );
       await vscode.commands.executeCommand('harnessNavigator.refresh');
       assertThemeIcon(artifactItem('REQ-910'), 'arrow-down', 'disabledForeground');
+      assertDecoration(
+        extensionModule.getArtifactsViewPriorityDecoration('REQ-910'),
+        'L',
+        'disabledForeground',
+        `${priorityLabel}: ${russianLocale ? 'Низкий' : 'Low'}`,
+      );
 
       // Отдельно проверяем watcher-driven обновление обратно в high без restart.
       const changeEventCountBeforeWatcher = extensionModule.getArtifactsViewChangeEventCount();
@@ -447,6 +499,7 @@ suite('extension lifecycle (Extension Host)', () => {
               icon.id === 'arrow-up' &&
               icon.color instanceof vscode.ThemeColor &&
               icon.color.id === 'editorWarning.foreground' &&
+              extensionModule.getArtifactsViewPriorityDecoration('REQ-910')?.badge === 'H' &&
               extensionModule.getArtifactsViewChangeEventCount() > changeEventCountBeforeWatcher
             );
           },
@@ -808,6 +861,21 @@ function assertThemeIcon(
   }
   assert.ok(item.iconPath.color instanceof vscode.ThemeColor, 'semantic icon must use ThemeColor');
   assert.equal(item.iconPath.color.id, expectedColorId);
+}
+
+/** Проверяет нативный FileDecoration без подмены ThemeColor фиксированным RGB. */
+function assertDecoration(
+  decoration: vscode.FileDecoration | undefined,
+  badge: string,
+  colorId: string,
+  tooltip: string,
+): void {
+  assert.ok(decoration, `priority decoration ${badge} must exist`);
+  assert.equal(decoration.badge, badge);
+  assert.equal(decoration.tooltip, tooltip);
+  assert.equal(decoration.propagate, false);
+  assert.ok(decoration.color instanceof vscode.ThemeColor);
+  assert.equal(decoration.color.id, colorId);
 }
 
 /** Опрашивает predicate ограниченное число раз и возвращает наблюдался ли он, не бросая исключение. */

@@ -11,7 +11,11 @@ import {
   type FilterField,
   type SortOrder,
 } from './artifactViewModel';
-import { buildArtifactTreeItem, type ArtifactLeafNode } from './artifactTreeItem';
+import {
+  artifactPriorityResourceUri,
+  buildArtifactTreeItem,
+  type ArtifactLeafNode,
+} from './artifactTreeItem';
 import { artifactPresentation } from './artifactPresentation';
 import { VIEW_MESSAGES } from './viewMessages';
 import type { Artifact, ArtifactKind } from '../projectModel/artifactIndex';
@@ -62,6 +66,8 @@ export class ArtifactsTreeDataProvider
           element.folder,
           element.artifact,
           artifactPresentation(element.artifact),
+          artifactPriorityResourceUri(element.folder, element.artifact),
+          true,
         );
     }
   }
