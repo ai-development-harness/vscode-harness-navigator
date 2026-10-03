@@ -38,12 +38,14 @@ from harness_config import (
     load_update_policy,
     project_overview_path,
     requirements_directory,
+    principles_directory,
     skill_registry_path,
     task_directory,
     update_lock_path,
     update_report_directory,
     open_questions_directory,
 )
+from principles import validate_principles
 from planning_contract import (
     adr_ids,
     dependency_ids,
@@ -55,6 +57,7 @@ from planning_contract import (
 from projection_contract import validate_projections
 from report_contract import validate_all_operational_reports
 from review_contract import validate_all_review_reports
+from runtime_adapter_contract import load_contract, validate_contract
 from template_contract import validate_project_templates
 
 
@@ -361,6 +364,8 @@ def validate_configured_artifacts(root: Path) -> list[str]:
         (skill_registry_path(root), "skill registry"),
         (update_report_directory(root) / "README.md", "Harness update report README"),
     ]
+    if get(load_manifest(root), "sources.principles") is not None:
+        checks.append((principles_directory(root) / "TEMPLATE.md", "Project Principle template"))
     for path, label in checks:
         if not path.is_file():
             errors.append(f"configured artifact missing ({label}): {path.relative_to(root)}")
@@ -476,6 +481,7 @@ def validate_project_integrity(
     if not allow_legacy:
         errors.extend(validate_requirements(root))
         errors.extend(validate_adrs(root))
+        errors.extend(validate_principles(root))
         errors.extend(validate_all_review_reports(root, ci_mode=ci_mode))
         errors.extend(validate_all_operational_reports(root))
         errors.extend(validate_projections(root))
@@ -491,4 +497,13 @@ def validate_project_integrity(
     except ConfigError as exc:
         errors.append(f"configured artifacts: {exc}")
     errors.extend(validate_update_lock(root))
+    try:
+        runtime_contract = load_contract(root)
+    except ValueError as exc:
+        errors.append(f"runtime-adapter-contract: {exc}")
+    else:
+        errors.extend(
+            f"runtime-adapter-contract: {issue}"
+            for issue in validate_contract(runtime_contract)
+        )
     return errors

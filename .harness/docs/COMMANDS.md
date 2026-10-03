@@ -146,7 +146,7 @@ python3 .harness/tools/harness-ux.py step-show --step STEP-024 --json
 <a id="command-step-plan"></a>
 ## `STEP PLAN STEP-NNN`
 
-Сначала валидирует semantic task/dependency contracts, linked REQ/ADR, explicit `architecture_refs` и relevant OQ. Завершение dependencies для PLAN не требуется. Planner возвращает structured Implementation plan/Verification payload, а `semantic-writer.py` сам рендерит STEP draft. Independent reviewer также возвращает только structured verdict/findings/rationale; writer вычисляет exact schema-v4 `context_basis`/`plan_content_hash`, создаёт immutable planning-review и при PASS выполняет Ready stamp. Reverse traceability/priority/phase/completion state dependency не stale-ят plan; изменение semantic input — stale-ит.
+Сначала валидирует semantic task/dependency contracts, linked REQ/ADR, explicit `architecture_refs` и relevant OQ. Завершение dependencies для PLAN не требуется. После contract PASS выполняется architecture completeness pass по применимым boundaries/persistence/API/security/async/extensions/recovery/compatibility concerns. Для architecture-sensitive STEP обязателен отдельный read-only architect; unresolved durable decision блокирует PLAN через ADR/OQ/prerequisite. Planner возвращает structured Implementation plan/Verification payload, а `semantic-writer.py` сам рендерит STEP draft. Independent reviewer adversarially проверяет architecture coverage, hidden decisions/dependencies и Verification↔Acceptance, затем возвращает только structured verdict/findings/rationale; writer вычисляет exact schema-v4 `context_basis`/`plan_content_hash`, создаёт immutable planning-review и при PASS выполняет Ready stamp. Reverse traceability/priority/phase/completion state dependency не stale-ят plan; изменение semantic input — stale-ит.
 
 <a id="command-step-implement"></a>
 ## `STEP IMPLEMENT STEP-NNN`
@@ -192,7 +192,7 @@ PLAN (если актуального плана нет)
 <a id="command-project-status"></a>
 ## `PROJECT STATUS`
 
-Deterministic команда без model call. Пересобирает tracked projections из canonical state, запускает manual Harness integrity и возвращает structured snapshot: summary по lifecycle, in-progress, blocked, completed и deterministic `STEP NEXT`. Не пишет product code и не интерпретирует project intent.
+Deterministic команда без model call. Пересобирает tracked projections из canonical state, запускает manual Harness integrity и возвращает structured snapshot: summary по lifecycle, in-progress, blocked, completed, `stalePlans` и deterministic `STEP NEXT`. Для stale Ready plan result содержит `planStaleCauses` и exact `planRemediation: STEP PLAN STEP-NNN`. Не пишет product code и не интерпретирует project intent.
 
 <a id="command-step-next"></a>
 ## `STEP NEXT`
@@ -259,7 +259,7 @@ Read-only deterministic Git preflight без model call: dispatcher возвра
 <a id="command-git-pr"></a>
 ## `GIT PR`
 
-Semantic worker готовит только PR prose. `git-action.py pr` детерминированно повторяет preflight, ищет/переиспользует либо создаёт GitHub PR, сверяет exact provider head OID и сам сохраняет local PR lifecycle state. Base/head/provider/draft policy модель не выбирает.
+Semantic worker готовит только PR prose. `git-action.py pr` детерминированно повторяет preflight, выбирает configured adapter (`github→gh` или `gitea→tea`), ищет/переиспользует либо создаёт PR, сверяет exact normalized provider head OID и сам сохраняет local PR lifecycle state. Self-hosted Gitea host берётся из configured remote, а Tea login выбирается по exact host. Base/head/provider/tool/draft policy модель не выбирает.
 
 <a id="command-git-pr-finish"></a>
 ## `GIT PR FINISH`

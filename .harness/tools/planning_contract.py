@@ -22,6 +22,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from execution_groups import ExecutionGroupError, implementation_plan_step_count, normalize_execution_groups
 from harness_config import (
     ConfigError,
     adr_directory,
@@ -35,6 +36,7 @@ from harness_config import (
     review_directory,
     task_directory,
 )
+from principles import active_blocking_principles
 from document_contract import (
     ADR_ID_RE,
     ADR_STATUSES,
@@ -103,12 +105,17 @@ ADR_SECTIONS = (
 )
 
 
+def _repo_relative(root: Path, path: Path) -> str:
+    """Canonical repository-relative path, устойчивый к Windows 8.3 aliases."""
+    return path.resolve().relative_to(root.resolve()).as_posix()
+
+
 def task_path(root: Path, step_id: str) -> Path:
     if STEP_ID_RE.fullmatch(step_id) is None:
         raise ValueError(f"invalid STEP id: {step_id}")
     path = task_directory(root) / f"{step_id}.md"
     if not path.is_file():
-        raise FileNotFoundError(f"task file not found: {path.relative_to(root)}")
+        raise FileNotFoundError(f"task file not found: {_repo_relative(root, path)}")
     return path
 
 
@@ -319,7 +326,7 @@ _GENERATED_EVIDENCE = re.compile(
 )
 
 
-def _generated_verification_status(task: dict[str, Any]) -> str | None:
+def generated_verification_status(task: dict[str, Any]) -> str | None:
     """Status generated Verification block или None, если block отсутствует."""
     match = _GENERATED_EVIDENCE.search(task["sections"].get("Evidence", ""))
     if match is None:
@@ -356,7 +363,7 @@ def step_completion_proof(
     evidence = _evidence_present(task)
     # Generated Verification block — deterministic факт, а не prose: FAIL или
     # PENDING в нём не может считаться доказательством completion (#113).
-    verification_status = _generated_verification_status(task)
+    verification_status = generated_verification_status(task)
     if verification_status is not None and verification_status != "PASS":
         reasons.append(f"generated Verification evidence status is {verification_status}")
     if step_type in {"research"}:
@@ -415,7 +422,7 @@ def step_completion_proof(
         elif trusted.get("verdict") != "PASS":
             reasons.append("latest trusted review verdict is not PASS")
         else:
-            review_path = trusted["path"].relative_to(root).as_posix()
+            review_path = _repo_relative(root, trusted["path"])
             review_snapshot = {
                 "path": review_path,
                 "verdict": trusted["verdict"],
@@ -482,7 +489,7 @@ def planning_context_snapshot(root: Path, step_id: str) -> dict[str, Any]:
             "hash": content_hash(item["document"]["text"]),
         }
 
-    return {
+    snapshot = {
         "schema": 4,
         "step": task_contract_snapshot(root, step_id),
         "requirements": requirements,
@@ -491,6 +498,37 @@ def planning_context_snapshot(root: Path, step_id: str) -> dict[str, Any]:
         "architecture_refs": architecture,
         "open_questions": oqs,
     }
+    principles = active_blocking_principles(root)
+    if principles:
+        snapshot["principles"] = principles
+    return snapshot
+
+def planning_context_components(root: Path, step_id: str) -> list[str]:
+    """Разложить authoritative planning context на stable component fingerprints.
+
+    Это диагностическая проекция того же schema-v4 snapshot, который уже
+    образует planning_context_basis. Она не создаёт второй staleness engine.
+    """
+    snapshot = planning_context_snapshot(root, step_id)
+    entries: list[str] = [
+        f"STEP@{step_id}={stable_hash(snapshot['step'])}"
+    ]
+    for req_id, value in sorted(snapshot["requirements"].items()):
+        entries.append(f"REQ@{req_id}={stable_hash(value)}")
+    for adr_id, value in sorted(snapshot["adrs"].items()):
+        entries.append(f"ADR@{adr_id}={stable_hash(value)}")
+    for dependency_id, value in sorted(snapshot["dependencies"].items()):
+        entries.append(f"STEP@{dependency_id}={stable_hash(value)}")
+    for item in snapshot["architecture_refs"]:
+        entries.append(f"ARCH@{item['ref']}={stable_hash(item)}")
+    for oq_id, value in sorted(snapshot["open_questions"].items()):
+        entries.append(f"OQ@{oq_id}={stable_hash(value)}")
+    principles = snapshot.get("principles")
+    if isinstance(principles, dict):
+        for principle_id, value in sorted(principles.items()):
+            entries.append(f"PRN@{principle_id}={stable_hash(value)}")
+    return sorted(entries)
+
 
 def planning_context_basis(root: Path, step_id: str) -> str:
     """Hash exact planning context, от которого зависит корректность плана."""
@@ -499,7 +537,13 @@ def planning_context_basis(root: Path, step_id: str) -> str:
 
 def plan_content_hash(root: Path, step_id: str) -> str:
     task = read_task(root, step_id)
-    return content_hash(task["sections"].get("Implementation plan", ""))
+    body = task["sections"].get("Implementation plan", "")
+    plan = task["frontmatter"].get("plan")
+    groups_value = plan.get("execution_groups") if isinstance(plan, dict) else None
+    if not groups_value:
+        return content_hash(body)
+    groups = normalize_execution_groups(groups_value, implementation_plan_step_count(body))
+    return stable_hash({"implementationPlan": body, "executionGroups": groups})
 
 
 def implementation_prerequisite_failures(root: Path, step_id: str) -> list[str]:
@@ -537,7 +581,7 @@ def implementation_prerequisite_failures(root: Path, step_id: str) -> list[str]:
             if matched is None:
                 failures.append("matching-planning-review-pass-is-missing")
             else:
-                report = matched["path"].relative_to(root).as_posix()
+                report = _repo_relative(root, matched["path"])
                 if plan.get("reviewed_report") != report:
                     failures.append("reviewed-report-does-not-match-pass")
         else:
@@ -756,14 +800,14 @@ def _validate_semantic_review_reports(root: Path, errors: list[str]) -> None:
                 expected_step_id=expected,
             ):
                 errors.append(
-                    f"planning-review: {path.relative_to(root)}: {issue}"
+                    f"planning-review: {_repo_relative(root, path)}: {issue}"
                 )
 
     init_root = init_review_directory(root)
     if init_root.is_dir():
         for path in sorted(init_root.glob("INIT-REVIEW-*.md")):
             for issue in validate_init_review_report(root, path):
-                errors.append(f"init-review: {path.relative_to(root)}: {issue}")
+                errors.append(f"init-review: {_repo_relative(root, path)}: {issue}")
 
 
 # ---------------------------------------------------------------------------
@@ -858,6 +902,46 @@ def _validate_task(root: Path, step_id: str, task: dict[str, Any], errors: list[
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
         errors.append(f"{prefix}: plan.revision must be a non-negative integer")
 
+    context_components = plan.get("context_components")
+    if context_components is not None:
+        if not isinstance(context_components, list):
+            errors.append(f"{prefix}: plan.context_components must be a string array")
+        else:
+            seen_components: set[str] = set()
+            for index, component in enumerate(context_components):
+                if not isinstance(component, str) or "=" not in component:
+                    errors.append(
+                        f"{prefix}: plan.context_components[{index}] must be COMPONENT=sha256"
+                    )
+                    continue
+                key, digest = component.rsplit("=", 1)
+                if not (
+                    key.startswith("STEP@")
+                    or key.startswith("REQ@")
+                    or key.startswith("ADR@")
+                    or key.startswith("ARCH@")
+                    or key.startswith("OQ@")
+                    or key.startswith("PRN@")
+                ):
+                    errors.append(
+                        f"{prefix}: plan.context_components[{index}] has unsupported component key"
+                    )
+                if not _valid_sha256(digest):
+                    errors.append(
+                        f"{prefix}: plan.context_components[{index}] must end with sha256"
+                    )
+                if key in seen_components:
+                    errors.append(
+                        f"{prefix}: duplicate plan.context_components key {key}"
+                    )
+                seen_components.add(key)
+
+    if "execution_groups" in plan:
+        try:
+            normalize_execution_groups(plan.get("execution_groups"), implementation_plan_step_count(task["sections"].get("Implementation plan", "")))
+        except ExecutionGroupError as exc:
+            errors.append(f"{prefix}: {exc}")
+
     if plan.get("status") == "ready":
         for issue in require_nonempty_sections(task, CONTRACT_SECTIONS + ("Implementation plan",)):
             errors.append(f"{prefix}: {issue}")
@@ -875,7 +959,11 @@ def _validate_task(root: Path, step_id: str, task: dict[str, Any], errors: list[
             expected_basis = planning_context_basis(root, step_id)
         except (DocumentError, ConfigError, OSError, ValueError) as exc:
             errors.append(f"{prefix}: cannot compute context basis: {exc}")
-        expected_content = plan_content_hash(root, step_id)
+        try:
+            expected_content = plan_content_hash(root, step_id)
+        except (ExecutionGroupError, OSError, ValueError) as exc:
+            errors.append(f"{prefix}: cannot compute plan content hash: {exc}")
+            expected_content = None
         stored_basis = plan.get("context_basis")
         stored_content = plan.get("content_hash")
         if expected_basis is not None and stored_basis != expected_basis:
@@ -884,7 +972,7 @@ def _validate_task(root: Path, step_id: str, task: dict[str, Any], errors: list[
                 errors.append(message)
             else:
                 warnings.append(message)
-        if stored_content != expected_content:
+        if expected_content is not None and stored_content != expected_content:
             errors.append(f"{prefix}: ready plan content_hash is stale")
         if not isinstance(plan.get("reviewed_report"), str) or not plan.get("reviewed_report"):
             errors.append(f"{prefix}: ready plan missing reviewed_report")
@@ -911,7 +999,7 @@ def _validate_task(root: Path, step_id: str, task: dict[str, Any], errors: list[
                     f"{prefix}: ready plan has no PASS planning-review for stored basis/content"
                 )
             else:
-                actual = matched["path"].relative_to(root).as_posix()
+                actual = _repo_relative(root, matched["path"])
                 if plan.get("reviewed_report") != actual:
                     errors.append(
                         f"{prefix}: plan.reviewed_report does not point to matching PASS report"
@@ -955,7 +1043,7 @@ def _validate_open_questions(root: Path, errors: list[str]) -> None:
         document = item["document"]
         meta = document["frontmatter"]
         oq_id = meta.get("id")
-        prefix = f"planning: {path.relative_to(root)}"
+        prefix = f"planning: {_repo_relative(root, path)}"
         for issue in require_schema(document):
             errors.append(f"{prefix}: {issue}")
         if not isinstance(oq_id, str) or OQ_ID_RE.fullmatch(oq_id) is None:
@@ -1016,16 +1104,16 @@ def validate_planning_contracts(
     tasks: dict[str, dict[str, Any]] = {}
     for path in sorted(directory.glob("STEP-*.md")):
         if STEP_ID_RE.fullmatch(path.stem) is None:
-            errors.append(f"planning: invalid STEP filename: {path.relative_to(root)}")
+            errors.append(f"planning: invalid STEP filename: {_repo_relative(root, path)}")
             continue
         try:
             task = parse_document(path)
         except DocumentError as exc:
             if allow_legacy and "legacy document" in str(exc):
                 if warnings is not None:
-                    warnings.append(f"planning: legacy active STEP pending PROJECT RECONCILE: {path.relative_to(root)}")
+                    warnings.append(f"planning: legacy active STEP pending PROJECT RECONCILE: {_repo_relative(root, path)}")
                 continue
-            errors.append(f"planning: {path.relative_to(root)}: {exc}")
+            errors.append(f"planning: {_repo_relative(root, path)}: {exc}")
             continue
         tasks[path.stem] = task
         _validate_task(root, path.stem, task, errors, warnings)

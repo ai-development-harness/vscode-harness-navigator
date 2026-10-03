@@ -1,6 +1,6 @@
 # Модель, используемая этой ролью.
-# Пример: "gpt-5.6-sol". Self-update требует аккуратного анализа ownership, BASE/OURS/THEIRS и конфликтов.
-model = "gpt-5.6-sol"
+# Пример: "gpt-6.1-sol". Self-update требует аккуратного анализа ownership, BASE/OURS/THEIRS и конфликтов.
+model = "gpt-6.1-sol"
 
 # Reasoning effort роли.
 # Пример: "high" для безопасного reconciliation protocol layer.

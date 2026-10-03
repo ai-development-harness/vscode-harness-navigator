@@ -8,6 +8,9 @@ import subprocess
 import tempfile
 
 
+from self_test_fixture import isolate_project_artifacts
+
+
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -26,7 +29,8 @@ def run(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
     return proc
 
 
-def copy_tracked(target: Path) -> None:
+def copy_tracked_files(target: Path) -> None:
+    """Скопировать tracked checkout без изменения project-owned state."""
     raw = subprocess.run(
         ["git", "ls-files", "-z"],
         cwd=SOURCE_ROOT,
@@ -46,11 +50,20 @@ def copy_tracked(target: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
 
+
+def init_git(target: Path) -> None:
+    """Подготовить isolated fixture как самостоятельный Git repository."""
     run(target, "git", "init", "-q", "-b", "main")
     run(target, "git", "config", "user.email", "hardening@example.invalid")
     run(target, "git", "config", "user.name", "Hardening Test")
     run(target, "git", "add", ".")
     run(target, "git", "commit", "-qm", "baseline")
+
+
+def copy_tracked(target: Path) -> None:
+    copy_tracked_files(target)
+    isolate_project_artifacts(target)
+    init_git(target)
 
 
 def validate(root: Path) -> subprocess.CompletedProcess[str]:
@@ -70,9 +83,87 @@ def require_failure(proc: subprocess.CompletedProcess[str], needle: str) -> None
     assert needle in combined, combined
 
 
+def test_initialized_project_fixture_isolation(root: Path) -> None:
+    """Regression #191: post-INIT project state не протекает в synthetic fixture."""
+    copy_tracked_files(root)
+
+    manifest_path = root / ".harness/manifest.yaml"
+    manifest = manifest_path.read_text(encoding="utf-8")
+    manifest = manifest.replace("  initialized: false", "  initialized: true", 1)
+    manifest = manifest.replace("  name: null", '  name: "fixture-project"', 1)
+    manifest = manifest.replace(
+        "  initializedAt: null",
+        '  initializedAt: "2026-10-02T00:00:00+00:00"',
+        1,
+    )
+    manifest_path.write_text(manifest, encoding="utf-8")
+
+    # PROJECT INIT удаляет placeholder REQ. Это важно воспроизвести: fixture
+    # должен оставаться валидным и для реального initialized downstream checkout.
+    (root / "docs/requirements/REQ-001-template.md").unlink(missing_ok=True)
+
+    principles = root / "docs/principles"
+    template_before = (principles / "TEMPLATE.md").read_bytes()
+    principle = principles / "PRN-999-fixture.md"
+    principle.write_text(
+        """---
+schema: 1
+id: PRN-999
+status: active
+severity: blocking
+scope: project
+superseded_by: null
+requirements:
+  - REQ-999
+adrs:
+  - ADR-999
+---
+
+# PRN-999 — Synthetic fixture principle
+
+## Rule
+
+Synthetic rule.
+
+## Rationale
+
+Regression fixture.
+
+## Applies to
+
+Synthetic project.
+
+## Exceptions / approved deviation
+
+None.
+""",
+        encoding="utf-8",
+    )
+
+    isolate_project_artifacts(root)
+
+    normalized = manifest_path.read_text(encoding="utf-8")
+    assert "  initialized: false" in normalized
+    assert "  name: null" in normalized
+    assert "  initializedAt: null" in normalized
+    assert not list(principles.glob("PRN-*.md"))
+    assert (principles / "TEMPLATE.md").read_bytes() == template_before
+
+    init_git(root)
+    baseline = validate(root)
+    assert baseline.returncode == 0, baseline.stdout + baseline.stderr
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="harness-repository-hardening-") as tmp:
-        root = Path(tmp)
+        base = Path(tmp)
+
+        regression_root = base / "post-init-regression"
+        regression_root.mkdir()
+        test_initialized_project_fixture_isolation(regression_root)
+
+        root = base / "baseline"
+        root.mkdir()
         copy_tracked(root)
 
         baseline = validate(root)
@@ -161,22 +252,23 @@ def main() -> int:
         assert doc_result.returncode == 0, doc_result.stdout + doc_result.stderr
         run(root, "git", "rm", "-q", "-f", "docs/aws-example.md")
 
-        # Комментарий с текстом ignore pattern не является действующим правилом.
+        # Проверки ignore semantics используют собственный deterministic fixture:
+        # project .gitignore может законно выражать те же правила другим glob-ом.
         gitignore_path = root / ".gitignore"
         original_ignore = gitignore_path.read_text(encoding="utf-8")
-        assert "AGENTS.local.md" in original_ignore
-        gitignore_path.write_text(
-            original_ignore.replace("AGENTS.local.md", "# AGENTS.local.md", 1),
-            encoding="utf-8",
+
+        # Последнее negation-rule гарантированно снимает любой inherited ignore
+        # для AGENTS.local.md независимо от исходных project glob patterns.
+        unignored_fixture = (
+            original_ignore.rstrip("\n")
+            + "\n!AGENTS.local.md\n# AGENTS.local.md\n"
         )
+        gitignore_path.write_text(unignored_fixture, encoding="utf-8")
         require_failure(validate(root), ".gitignore must ignore AGENTS.local.md")
 
-        # Эквивалентный glob должен приниматься: проверяется Git semantics, а не substring.
-        semantic_ignore = original_ignore
-        semantic_ignore = semantic_ignore.replace("AGENTS.local.md\n", "", 1)
-        semantic_ignore = semantic_ignore.replace("CLAUDE.local.md\n", "", 1)
-        semantic_ignore = semantic_ignore.replace("PROJECT_BRIEF.local.md\n", "", 1)
-        semantic_ignore += "\n*.local.md\n"
+        # Более поздний эквивалентный glob снова игнорирует все *.local.md:
+        # validator проверяет Git semantics, а не literal substring.
+        semantic_ignore = unignored_fixture + "*.local.md\n"
         gitignore_path.write_text(semantic_ignore, encoding="utf-8")
         semantic = validate(root)
         assert semantic.returncode == 0, semantic.stdout + semantic.stderr

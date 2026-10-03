@@ -896,9 +896,25 @@ def validate_runtime_surface(
     # runtime routing не ссылался на исчезнувший/безымянный playbook.
     seen_skill_names: dict[str, str] = {}
     for skill in policy.get("required_skills", []):
-        p = root / ".agents" / "skills" / skill / "SKILL.md"
+        skill_dir = root / ".agents" / "skills" / skill
+        p = skill_dir / "SKILL.md"
         if not p.is_file():
             errors.append(f"required skill missing: {skill}")
+
+        provenance = skill_dir / "UPSTREAM.md"
+        if not provenance.is_file():
+            errors.append(f"required skill provenance missing: {skill}/UPSTREAM.md")
+        else:
+            try:
+                provenance_lines = provenance.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeError) as exc:
+                errors.append(f"required skill provenance unreadable: {skill}/UPSTREAM.md: {exc}")
+            else:
+                if not any(line.strip() == "Source: project-native" for line in provenance_lines):
+                    errors.append(
+                        f"required core skill provenance must declare Source: project-native: "
+                        f"{skill}/UPSTREAM.md"
+                    )
     skills_root = root / ".agents" / "skills"
     if skills_root.exists():
         for p in sorted(skills_root.glob("*/SKILL.md")):
@@ -1457,6 +1473,20 @@ def validate_repository_surface(
                 value = pull_request.get(key)
                 if not isinstance(value, str) or not value.strip():
                     errors.append(f"git-policy: pull_request.{key} must be a non-empty string")
+            provider = pull_request.get("provider")
+            preferred_tool = pull_request.get("preferred_tool")
+            expected_tools = {"github": "gh", "gitea": "tea"}
+            if isinstance(provider, str) and provider.strip():
+                expected_tool = expected_tools.get(provider)
+                if expected_tool is None:
+                    errors.append(
+                        "git-policy: pull_request.provider must be one of: github, gitea"
+                    )
+                elif preferred_tool != expected_tool:
+                    errors.append(
+                        "git-policy: incompatible pull_request provider/tool pair: "
+                        f"{provider} requires {expected_tool}"
+                    )
             body_template = pull_request.get("body_template")
             if isinstance(body_template, str) and body_template.strip():
                 try:

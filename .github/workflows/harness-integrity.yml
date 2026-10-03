@@ -181,3 +181,131 @@ jobs:
         # Runner продолжает suite после отдельного failure и печатает PASS/FAIL каждого файла.
         # Пример: итоговый HARNESS SELF-TESTS: PASS (14).
         run: python3 .harness/tools/run-self-tests.py
+
+  # Targeted Windows coverage platform-specific safety boundaries.
+  # Пример: msvcrt locking и taskkill не исполняются Linux job-ом.
+  validate-windows-boundaries:
+    # Отображаемое имя отдельного Windows compatibility job.
+    # Пример: "Validate Windows boundaries".
+    name: Validate Windows boundaries
+    # Зафиксированный Windows runner для platform-specific Python branches.
+    # Пример: windows-2025 вместо floating windows-latest.
+    runs-on: windows-2025
+    # Targeted suite обычно короткий; timeout защищает от зависших process tests.
+    # Пример: 10 минут оставляет запас для update-engine fixtures.
+    timeout-minutes: 10
+
+    # Последовательность Windows-specific проверок.
+    # Пример: checkout → Python → python3 shim → targeted self-tests.
+    steps:
+      # Получить exact commit/PR без сохранения push credentials.
+      # Пример: checkout текущего PR commit.
+      - name: Checkout repository
+        # Официальный pinned checkout action.
+        # Пример: actions/checkout@v7.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        # Параметры checkout для read-only validation.
+        # Пример: credentials=false, full history.
+        with:
+          # Windows tests не выполняют provider mutation.
+          # Пример: false.
+          persist-credentials: false
+          # Update/review regressions используют Git history.
+          # Пример: 0 означает полную историю.
+          fetch-depth: 0
+
+      # Установить основной поддерживаемый Python runtime Windows.
+      # Пример: Python 3.13.
+      - name: Setup Python
+        # Официальный pinned setup-python action.
+        # Пример: actions/setup-python@v7.
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        # Параметры runtime setup.
+        # Пример: python-version=3.13.
+        with:
+          # Версия targeted Windows runtime.
+          # Пример: "3.13".
+          python-version: "3.13"
+
+      # Canonical Harness examples используют executable name python3.
+      # Пример: создать shim к interpreter из setup-python.
+      - name: Provide python3 command
+        # Явный shell нужен для создания cmd shim на Windows.
+        # Пример: pwsh.
+        shell: pwsh
+        # Создать python3.cmd и добавить каталог в PATH следующих steps.
+        # Пример: python3 перенаправляется в exact pythonLocation.
+        run: |
+          $shim = Join-Path $env:RUNNER_TEMP "python3.cmd"
+          $line = '@"{0}\python.exe" %*' -f $env:pythonLocation
+          Set-Content -Path $shim -Value $line -Encoding ascii
+          Add-Content -Path $env:GITHUB_PATH -Value $env:RUNNER_TEMP
+
+      # Исполнить только branches, где Windows behavior отличается от POSIX.
+      # Пример: locking/recovery/process termination/atomic writes.
+      - name: Validate Windows-specific Harness boundaries
+        # Явный shell стабилизирует Windows command semantics.
+        # Пример: pwsh.
+        shell: pwsh
+        # Targeted regression set platform-sensitive tools.
+        # Пример: execution, verification и update engine.
+        run: |
+          python .harness/tools/harness-config-self-test.py
+          python .harness/tools/document-contract-self-test.py
+          python .harness/tools/execution-self-test.py
+          python .harness/tools/verification-self-test.py
+          python .harness/tools/update-engine-self-test.py
+
+  # Проверить нижнюю документированную границу Python отдельно от основного 3.13 job.
+  # Пример: использование API, появившегося только в 3.12+, должно ломать этот job.
+  validate-python-minimum:
+    # Человекочитаемое имя compatibility gate.
+    # Пример: "Validate Python 3.11 compatibility".
+    name: Validate Python 3.11 compatibility
+    # Linux runner совпадает с основным job, чтобы различалась только версия Python.
+    # Пример: ubuntu-24.04.
+    runs-on: ubuntu-24.04
+    # Полный synthetic suite обычно укладывается существенно быстрее.
+    # Пример: 5 минут защищают от regression/hang.
+    timeout-minutes: 5
+
+    # Последовательность minimum-version validation.
+    # Пример: checkout → Python 3.11 → validator → discoverable self-tests.
+    steps:
+      # Получить exact commit и полную Git history для immutable report checks.
+      # Пример: checkout текущего PR commit.
+      - name: Checkout repository
+        # Официальный pinned checkout action.
+        # Пример: actions/checkout@v7.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        # Параметры read-only checkout.
+        # Пример: credentials=false, full history.
+        with:
+          # Compatibility job не публикует изменения.
+          # Пример: false.
+          persist-credentials: false
+          # Validator/review regressions используют commit ancestry.
+          # Пример: 0.
+          fetch-depth: 0
+
+      # Установить минимальную поддерживаемую версию из DEPENDENCIES.md.
+      # Пример: Python 3.11.
+      - name: Setup minimum Python
+        # Официальный pinned setup-python action.
+        # Пример: actions/setup-python@v7.
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        # Параметры minimum runtime.
+        # Пример: python-version=3.11.
+        with:
+          # Нижняя граница compatibility contract.
+          # Пример: "3.11".
+          python-version: "3.11"
+
+      # Проверить dependency-free deterministic surface на minimum runtime.
+      # Пример: validator + все discoverable synthetic self-tests.
+      - name: Validate minimum Python compatibility
+        # Выполнить тот же validator и regression runner на Python 3.11.
+        # Пример: обе команды должны завершиться с exit code 0.
+        run: |
+          python3 .harness/tools/validate.py --mode ci
+          python3 .harness/tools/run-self-tests.py

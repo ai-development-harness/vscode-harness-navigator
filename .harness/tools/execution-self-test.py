@@ -20,6 +20,7 @@ from execution_status import (
     implementation_baseline_for_step,
     load_status,
     resolve_root,
+    save_status,
     stamp_plan,
     start_execution,
     unresolved_executions,
@@ -59,6 +60,8 @@ sources:
   architecture: docs/architecture.md
   openQuestions: docs/open-questions
   openQuestionsIndex: docs/OPEN_QUESTIONS.md
+  roadmap: planning/PLAN.md
+  status: planning/STATUS.md
 protocol:
   taskDirectory: planning/tasks
   reviewDirectory: planning/reviews
@@ -225,7 +228,7 @@ PASS.
 """
 
 
-def review_report(root: Path, verdict: str, name: str) -> str:
+def review_report(root: Path, verdict: str, name: str, completion_result: str | None = None) -> str:
     revision = repository_revision(root)
     match = re.fullmatch(r"REVIEW-(\d{8}T\d{6}Z)\.md", name)
     if match is None:
@@ -255,6 +258,45 @@ def review_report(root: Path, verdict: str, name: str) -> str:
 """
     else:
         findings = "No material findings.\n"
+    completion_frontmatter = ""
+    completion_section = ""
+    if completion_result is not None:
+        completion_frontmatter = (
+            "completion_contract: 1\n"
+            f"completion_result: {completion_result.lower()}\n"
+        )
+        status = (
+            "PASS" if completion_result == "PASS"
+            else "INCOMPLETE" if completion_result == "FAIL"
+            else "BLOCKED"
+        )
+        route = (
+            "FIX" if completion_result == "FAIL"
+            else "BLOCKED" if completion_result == "BLOCKED"
+            else None
+        )
+        findings = [] if route is None else [{
+            "id": "COMP-001",
+            "kind": "missing_acceptance_coverage" if route == "FIX" else "contract_gap",
+            "criterion": "recovery deterministic." if route == "FIX" else None,
+            "route": route,
+            "message": "Synthetic durable completion result.",
+        }]
+        completion_section = (
+            "\n## Completion convergence\n\n```json\n"
+            + json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "status": status,
+                    "completionResult": completion_result,
+                    "findings": findings,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n```\n"
+        )
+
     rel = f"planning/reviews/STEP-001/{name}"
     write(
         root / rel,
@@ -265,7 +307,7 @@ step_id: STEP-001
 verdict: {verdict.lower()}
 reviewer_role: reviewer
 created_at: {created_at}
-reviewed_revision:
+{completion_frontmatter}reviewed_revision:
   git_head: {revision["git_head"] or "null"}
   worktree_hash: {revision["worktree_hash"] or "null"}
 specialized_reviews:
@@ -296,7 +338,7 @@ Self-test verification.
 ## Verdict rationale
 
 {verdict}.
-""",
+{completion_section}""",
     )
     return rel
 
@@ -712,7 +754,7 @@ def main() -> int:
         complete_command(root, run_root, "STEP IMPLEMENT STEP-001", "SUCCESS")
         run_review = begin_command(root, run_root, "STEP REVIEW STEP-001")
         assert run_review["implementationBaseline"] == run_baseline, run_review
-        review_report(root, "FAIL", "REVIEW-20260921T010000Z.md")
+        review_report(root, "PASS", "REVIEW-20260921T010000Z.md", completion_result="FAIL")
         invalid_role = root / "planning/reviews/STEP-001/REVIEW-20260921T005000Z.md"
         valid_text = (root / "planning/reviews/STEP-001/REVIEW-20260921T010000Z.md").read_text(encoding="utf-8")
         write(invalid_role, valid_text.replace("reviewer_role: reviewer", "reviewer_role: implementer"))
@@ -773,15 +815,38 @@ def main() -> int:
         assert (
             run_review_after_fix["implementationBaseline"] == run_baseline
         ), run_review_after_fix
-        review_report(root, "PASS", "REVIEW-20260921T020000Z.md")
+        step_text = (root / "planning/tasks/STEP-001.md").read_text(encoding="utf-8")
+        write(
+            root / "planning/tasks/STEP-001.md",
+            step_text.replace("## Evidence\n\n—", "## Evidence\n\nRecovery completion evidence."),
+        )
+        review_report(
+            root,
+            "PASS",
+            "REVIEW-20260921T020000Z.md",
+            completion_result="PASS",
+        )
+        recovered_completion = resolve_root(root, run_root)
         assert_resolved(
-            resolve_root(root, run_root),
+            recovered_completion,
             "RESUME",
             "STEP RUN STEP-001",
             "ORCHESTRATION_CONTINUE",
         )
+        recovered_proof = step_completion_proof(root, "STEP-001")
+        assert recovered_proof["complete"] is True, recovered_proof
 
-        # Exact revision invalidation: product mutation after report prevents recovery.
+        # Exact revision invalidation is an independent recovery scenario.
+        # Previous scenario intentionally completed STEP-001, so reset only the
+        # synthetic lifecycle state before starting a new root execution.
+        completed_text = (root / "planning/tasks/STEP-001.md").read_text(encoding="utf-8")
+        write(
+            root / "planning/tasks/STEP-001.md",
+            completed_text.replace("status: completed", "status: planned", 1),
+        )
+
+        # Product mutation after durable REVIEW+completion PASS must invalidate
+        # exact reviewed revision and keep REVIEW resumable instead of auto-closing.
         other_root = "STEP RUN STEP-001"
         existing = resolve_root(root, run_root)
         if existing["status"] == "RESUME":
@@ -791,7 +856,7 @@ def main() -> int:
         begin_command(root, other_root, "STEP IMPLEMENT STEP-001")
         complete_command(root, other_root, "STEP IMPLEMENT STEP-001", "SUCCESS")
         begin_command(root, other_root, "STEP REVIEW STEP-001")
-        review_report(root, "PASS", "REVIEW-20260921T030000Z.md")
+        review_report(root, "PASS", "REVIEW-20260921T030000Z.md", completion_result="PASS")
         write(root / "src/product.txt", "changed after review\n")
         unresolved = resolve_root(root, other_root)
         assert unresolved["status"] == "RESUME" and unresolved["command"] == "STEP REVIEW STEP-001", unresolved
@@ -815,6 +880,55 @@ def main() -> int:
         exhausted = resolve_root(root, run_root)
         assert_resolved(exhausted, "BLOCKED", None, "FIX_REVIEW_LIMIT_REACHED")
         assert exhausted["fixReviewCycles"] == 1
+
+        # Adaptive stop is earlier than hard cap and survives a state reload.
+        # Telemetry здесь инжектируется как уже доказанный output comparator-а:
+        # policy math отдельно покрывает repair-cycle-self-test.py.
+        manifest_path = root / ".harness/manifest.yaml"
+        original_manifest_text = manifest_path.read_text(encoding="utf-8")
+        write(
+            manifest_path,
+            original_manifest_text.replace("maxFixReviewCycles: 1", "maxFixReviewCycles: 3"),
+        )
+        adaptive_chain = (
+            "STEP REVIEW STEP-001 > STEP FIX STEP-001 > STEP REVIEW STEP-001"
+            " > STEP FIX STEP-001"
+        )
+        start_execution(root, adaptive_chain)
+        complete_command(root, adaptive_chain, "STEP REVIEW STEP-001", "FAIL")
+        begin_command(root, adaptive_chain, "STEP FIX STEP-001")
+        complete_command(root, adaptive_chain, "STEP FIX STEP-001", "SUCCESS")
+        begin_command(root, adaptive_chain, "STEP REVIEW STEP-001")
+        complete_command(root, adaptive_chain, "STEP REVIEW STEP-001", "FAIL")
+
+        adaptive_state = load_status(root)
+        adaptive_execution = next(
+            item
+            for item in adaptive_state["executions"]
+            if item.get("rootCommand") == adaptive_chain
+        )
+        adaptive_execution["repairTelemetry"] = {
+            "cycle": 1,
+            "stopDecision": "REPEATED_FINDINGS",
+            "reasonCode": "REPEATED_FINDINGS",
+            "message": "same canonical findings remain after FIX",
+        }
+        save_status(root, adaptive_state)
+
+        adaptive_stopped = resolve_root(root, adaptive_chain)
+        assert_resolved(
+            adaptive_stopped,
+            "BLOCKED",
+            None,
+            "REPEATED_FINDINGS",
+        )
+        assert adaptive_stopped["fixReviewCycles"] == 1, adaptive_stopped
+        assert adaptive_stopped["maxFixReviewCycles"] == 3, adaptive_stopped
+
+        # Restart reads the same bounded decision; no chat history/recomputation.
+        adaptive_reloaded = resolve_root(root, adaptive_chain)
+        assert adaptive_reloaded["reasonCode"] == "REPEATED_FINDINGS", adaptive_reloaded
+        write(manifest_path, original_manifest_text)
 
         # Regression #116: chain с повторяющейся командой продвигает позицию,
         # а не возвращается к первому вхождению. Второй REVIEW FAIL завершает

@@ -2,6 +2,9 @@
 
 Harness skills описывают **workflow**, а не конкретный technology stack.
 
+Каждый skill bundle хранит provenance в соседнем `UPSTREAM.md`. Для встроенных core skills это `Source: project-native`: внешний upstream отсутствует, а references/rationale фиксируют, почему workflow существует и на какие canonical Harness contracts опирается.
+
+
 Основные:
 
 - `init-project`

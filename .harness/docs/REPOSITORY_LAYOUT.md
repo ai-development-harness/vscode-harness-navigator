@@ -39,6 +39,7 @@ Local state не является единым типом данных: executio
 │   ├── harness-update-graph.json
 │   ├── command-transitions.json
 │   ├── reasoning-boundaries.json        # generated projection
+│   ├── runtime-adapter-contract.json     # provider-neutral runtime contract
 │   ├── harness-update.toml
 │   ├── harness-policy.toml
 │   ├── git-policy.toml
@@ -46,17 +47,26 @@ Local state не является единым типом данных: executio
 │   │   ├── README.md
 │   │   ├── VALIDATORS.md
 │   │   ├── REASONING_BOUNDARIES.md      # generated table/diagrams
+│   │   ├── PROJECT_STATE.md              # JSON graph contract для UI/Navigator
 │   │   └── ...
 │   ├── tools/
 │   │   ├── harness_config.py
 │   │   ├── document_contract.py
 │   │   ├── planning_contract.py
 │   │   ├── review_contract.py
+│   │   ├── review_findings.py
+│   │   ├── repair_cycle.py
 │   │   ├── review_gates.py
+│   │   ├── side_effect_recovery.py
+│   │   ├── runtime_adapter_conformance.py
+│   │   ├── scripted_runtime.py
+│   │   ├── runtime_adapter_contract.py
 │   │   ├── reasoning_boundaries.py
 │   │   ├── project_integrity.py
 │   │   ├── project_migration.py
 │   │   ├── projection_contract.py
+│   │   ├── project_state.py              # read-only normalized project graph
+│   │   ├── project-state.py              # CLI wrapper
 │   │   ├── template_contract.py
 │   │   ├── validate.py
 │   │   ├── execution_status.py
@@ -109,6 +119,8 @@ Local state не является единым типом данных: executio
 ```
 
 Это **defaults нового template**, а не hard-coded runtime topology.
+
+Accepted expansion contract для нескольких Harness project roots в одном Git worktree описан в [`MULTI_PROJECT_CONTEXTS.md`](MULTI_PROJECT_CONTEXTS.md). До реализации #188 runtime остаётся single-root; этот раздел не следует трактовать как уже доступный nearest-root resolver.
 
 ## Manifest-driven project topology
 

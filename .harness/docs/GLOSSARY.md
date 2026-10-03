@@ -80,7 +80,7 @@ Schema-v4 fingerprint включает semantic STEP/dependency contracts, seman
 
 ### Plan content hash
 
-Отдельный SHA-256 fingerprint нормализованного текста `Implementation plan`. Он нужен потому, что изменение самого плана должно делать Ready stale даже при неизменном product contract.
+Отдельный SHA-256 fingerprint содержимого Implementation plan. Для plan без execution groups сохраняется исторический hash текста `Implementation plan`; если groups заданы, fingerprint включает и canonical `plan.execution_groups`. Поэтому изменение DAG, mutation surface или group responsibilities делает Ready stale даже при неизменном product contract.
 
 ### Project Knowledge Base
 
@@ -137,6 +137,10 @@ Canonical machine priority использует closed enum `critical | high | m
 ### Phase
 
 Логическая стадия roadmap, объединяющая несколько STEP по продуктовой/архитектурной цели. Phase помогает навигации, но не заменяет dependency graph.
+
+### Execution Group
+
+Optional machine-readable часть STEP Implementation plan, объединяющая один или несколько numbered plan steps в execution unit с stable ID, purpose, dependencies, declared mutation surface и verification responsibilities. Execution Group не является STEP, CTS state или отдельным lifecycle artifact. `parallel=true` означает только candidate для потенциального параллельного scheduling; v1 executor остаётся sequential.
 
 ### Severity
 

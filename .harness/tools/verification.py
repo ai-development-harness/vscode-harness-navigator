@@ -163,6 +163,83 @@ def _revision_equal(left: dict[str, Any], right: dict[str, Any]) -> bool:
     )
 
 
+def verification_contract_basis(root: Path, step_id: str) -> str:
+    """Stable hash exact Verification entries; independent from generated Evidence."""
+    entries = parse_verification(root, step_id)
+    encoded = json.dumps(
+        entries,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def verification_subject_revision(root: Path, step_id: str) -> dict[str, str | None]:
+    """Revision product/config surface without mutable STEP Evidence container."""
+    rel = task_path(root, step_id).resolve().relative_to(root.resolve()).as_posix()
+    return repository_revision(root, ignored_paths={rel})
+
+
+def verification_freshness(root: Path, step_id: str) -> dict[str, Any]:
+    """Prove generated PASS evidence still belongs to current contract/subject."""
+    task_value = read_task(root, step_id)
+    section = task_value["sections"].get("Evidence", "")
+    match = re.search(
+        r"<!-- VERIFICATION-EVIDENCE:START -->(.*?)<!-- VERIFICATION-EVIDENCE:END -->",
+        section,
+        re.S,
+    )
+    if match is None:
+        return {"status": "MISSING", "fresh": False, "reasonCode": "VERIFICATION_EVIDENCE_MISSING"}
+    block = match.group(1)
+
+    def field(label: str) -> str | None:
+        found = re.search(rf"(?m)^- {re.escape(label)}: (.+?)\s*$", block)
+        return found.group(1).strip() if found else None
+
+    status = field("Status") or "UNKNOWN"
+    stored_basis = field("Verification contract basis")
+    stored_head = field("Subject git head")
+    stored_worktree = field("Subject worktree hash")
+    if stored_basis is None or stored_head is None or stored_worktree is None:
+        return {
+            "status": status,
+            "fresh": False,
+            "reasonCode": "VERIFICATION_FRESHNESS_UNKNOWN",
+        }
+
+    current_basis = verification_contract_basis(root, step_id)
+    current_subject = verification_subject_revision(root, step_id)
+    stored_subject = {
+        "git_head": None if stored_head == "none" else stored_head,
+        "worktree_hash": None if stored_worktree == "clean" else stored_worktree,
+    }
+    if stored_basis != current_basis:
+        return {
+            "status": status,
+            "fresh": False,
+            "reasonCode": "VERIFICATION_CONTRACT_STALE",
+            "storedContractBasis": stored_basis,
+            "currentContractBasis": current_basis,
+        }
+    if stored_subject != current_subject:
+        return {
+            "status": status,
+            "fresh": False,
+            "reasonCode": "VERIFICATION_SUBJECT_STALE",
+            "storedSubjectRevision": stored_subject,
+            "currentSubjectRevision": current_subject,
+        }
+    return {
+        "status": status,
+        "fresh": status == "PASS",
+        "reasonCode": None if status == "PASS" else "VERIFICATION_NOT_PASS",
+        "contractBasis": current_basis,
+        "subjectRevision": current_subject,
+    }
+
+
 # Сколько последних bytes каждого потока держать в памяти для diagnostic tail.
 # Hash и byte count считаются по всему выводу потоково.
 CAPTURE_TAIL_BYTES = 64 * 1024
@@ -368,6 +445,9 @@ def _evidence_block(result: dict[str, Any]) -> str:
         f"- Status: {result['status']}",
         f"- Git head: {revision.get('git_head') or 'none'}",
         f"- Worktree hash: {revision.get('worktree_hash') or 'clean'}",
+        f"- Verification contract basis: {result['contractBasis']}",
+        f"- Subject git head: {result['subjectRevision'].get('git_head') or 'none'}",
+        f"- Subject worktree hash: {result['subjectRevision'].get('worktree_hash') or 'clean'}",
         "",
         "### Automated verification",
     ]
@@ -465,6 +545,8 @@ def run_step_verification(
         timeout = verification_command_timeout_seconds(root)
         manual, pending = _manual_results(entries, manual_results)
         revision = repository_revision(root)
+        contract_basis = verification_contract_basis(root, step_id)
+        subject_revision = verification_subject_revision(root, step_id)
     except (OSError, ValueError) as exc:
         return {
             "schemaVersion": 1,
@@ -550,6 +632,8 @@ def run_step_verification(
         "stepId": step_id,
         "runAt": utc_now(),
         "revision": revision,
+        "contractBasis": contract_basis,
+        "subjectRevision": subject_revision,
         "timeoutSeconds": timeout,
         "commands": commands,
         "manual": manual,
@@ -573,5 +657,8 @@ __all__ = [
     "parse_verification",
     "render_verification_entries",
     "run_step_verification",
+    "verification_contract_basis",
+    "verification_freshness",
+    "verification_subject_revision",
     "validate_verification_entries",
 ]

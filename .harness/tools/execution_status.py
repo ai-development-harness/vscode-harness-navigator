@@ -47,6 +47,7 @@ from command_transitions import (
     parse_canonical_command,
     validate_command_text,
 )
+from completion_gate import finalize_step_completion
 from document_contract import render_document
 from harness_config import ConfigError, get, load_git_policy, update_lock_path
 from planning_contract import (
@@ -55,12 +56,17 @@ from planning_contract import (
     max_fix_review_cycles,
     plan_content_hash,
     planning_context_basis,
+    planning_context_components,
     read_task as read_planning_task,
     step_completion_proof,
     task_contract_snapshot,
     task_path as configured_task_path,
 )
+from repair_cycle import RepairCycleError, compare_review_reports
+from review_findings import FindingContractError, latest_structured_findings
 from review_contract import latest_review as latest_valid_review
+from side_effect_recovery import checkpoint as build_side_effect_checkpoint
+from side_effect_recovery import validate_checkpoint as validate_side_effect_checkpoint
 
 # Фиксированный project-level operational state. Один файл намеренно покрывает
 # STEP, Git, Harness update и остальные namespaces.
@@ -384,9 +390,40 @@ def _validate_execution_record(
             enforce_budget=enforce_details_budget,
         )
     )
+    context = current.get("context")
+    if context is not None:
+        if not isinstance(context, dict):
+            errors.append(f"{prefix}: current.context must be an object")
+        else:
+            errors.extend(
+                validate_side_effect_checkpoint(
+                    context.get("sideEffect"),
+                    prefix=f"{prefix}: current.context.sideEffect",
+                )
+            )
+
     attempt = current.get("attempt")
     if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
         errors.append(f"{prefix}: current.attempt must be >= 1")
+
+    repair_telemetry = execution.get("repairTelemetry")
+    if repair_telemetry is not None:
+        if not isinstance(repair_telemetry, dict):
+            errors.append(f"{prefix}: repairTelemetry must be an object")
+        else:
+            errors.extend(
+                _details_errors(
+                    repair_telemetry,
+                    prefix=f"{prefix}: repairTelemetry",
+                    enforce_budget=True,
+                )
+            )
+            decision = repair_telemetry.get("stopDecision")
+            if decision not in {"continue", "NO_PROGRESS", "REPEATED_FINDINGS", "REGRESSION"}:
+                errors.append(f"{prefix}: repairTelemetry.stopDecision is invalid")
+            cycle = repair_telemetry.get("cycle")
+            if not isinstance(cycle, int) or isinstance(cycle, bool) or cycle < 1:
+                errors.append(f"{prefix}: repairTelemetry.cycle must be >= 1")
 
     fix_review_cycles = execution.get("fixReviewCycles", 0)
     if (
@@ -981,6 +1018,113 @@ def _git_head(root: Path) -> str | None:
     return value or None
 
 
+def _active_execution_for_command(
+    status: dict[str, Any],
+    normalized_command: str,
+) -> dict[str, Any] | None:
+    """Найти единственную running execution для exact canonical command."""
+    matches = [
+        execution
+        for execution in status.get("executions", [])
+        if isinstance(execution, dict)
+        and execution.get("status") == "running"
+        and isinstance(execution.get("current"), dict)
+        and execution["current"].get("status") == "running"
+        and execution["current"].get("command") == normalized_command
+    ]
+    if len(matches) > 1:
+        raise ValueError(
+            f"multiple active executions own side effect for {normalized_command}"
+        )
+    return matches[0] if matches else None
+
+
+def read_side_effect_checkpoint(
+    root: Path,
+    command: str,
+) -> dict[str, Any] | None:
+    """Прочитать durable checkpoint active command без изменения state.
+
+    git_action используется и standalone в deterministic tests/tools. Если
+    execution-status отсутствует, side-effect layer прозрачно отключён и не
+    требует CTS/bootstrap files от такого минимального Git fixture.
+    """
+    if not status_path(root).is_file():
+        return None
+    normalized = command.strip()
+    status = load_status(root)
+    execution = _active_execution_for_command(status, normalized)
+    if execution is None:
+        return None
+    current = execution["current"]
+    context = current.get("context")
+    if not isinstance(context, dict):
+        return None
+    value = context.get("sideEffect")
+    if value is None:
+        return None
+    errors = validate_side_effect_checkpoint(
+        value,
+        prefix="current.context.sideEffect",
+    )
+    if errors:
+        raise ValueError("; ".join(errors))
+    return deepcopy(value)
+
+
+def write_side_effect_checkpoint(
+    root: Path,
+    command: str,
+    *,
+    kind: str,
+    phase: str,
+    proof: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Атомарно записать bounded checkpoint для active command.
+
+    Direct invocation git-action.py вне Harness execution остаётся допустимым:
+    если active execution отсутствует, checkpoint не создаётся и возвращается
+    None. При Harness orchestration запись обязательна фактически потому, что
+    current command существует и однозначно владеет mutation boundary.
+    """
+    if not status_path(root).is_file():
+        return None
+    with execution_state_lock(root):
+        # Повторяем проверку уже под lock: другой process мог завершить/удалить
+        # active state между cheap precheck и acquire.
+        if not status_path(root).is_file():
+            return None
+        normalized = command.strip()
+        status = load_status(root)
+        execution = _active_execution_for_command(status, normalized)
+        if execution is None:
+            return None
+        current = execution["current"]
+        context = current.setdefault("context", {})
+        if not isinstance(context, dict):
+            raise ValueError("current.context must be an object")
+        previous = context.get("sideEffect")
+        # phase после restart может подтверждать side effect предыдущей попытки:
+        # current.attempt уже увеличен dispatcher-ом, но identity самого side effect
+        # остаётся у исходного attempt. Новый attempt начинается только с prepared.
+        checkpoint_attempt = int(current.get("attempt", 1))
+        if isinstance(previous, dict) and phase != "prepared":
+            previous_attempt = previous.get("attempt")
+            if isinstance(previous_attempt, int) and not isinstance(previous_attempt, bool):
+                checkpoint_attempt = previous_attempt
+        value = build_side_effect_checkpoint(
+            kind=kind,
+            phase=phase,
+            attempt=checkpoint_attempt,
+            proof=proof,
+            previous=previous if isinstance(previous, dict) else None,
+        )
+        context["sideEffect"] = value
+        execution["updatedAt"] = utc_now()
+        save_status(root, status)
+        return deepcopy(value)
+
+
 def git_commit_completion_proven(
     root: Path,
     execution: dict[str, Any],
@@ -1506,6 +1650,10 @@ def complete_command(
         current["details"] = details
     execution["updatedAt"] = utc_now()
 
+    repair_telemetry = _capture_repair_telemetry(root, execution, current, result)
+    if repair_telemetry is not None:
+        execution["repairTelemetry"] = repair_telemetry
+
     # BLOCKED всегда терминален для автоматического продолжения root execution.
     # Уже выполненные side effects при этом не откатываются.
     if result == "BLOCKED":
@@ -1717,6 +1865,91 @@ def running_command_for(root: Path, root_command: str) -> str | None:
     return command if isinstance(command, str) else None
 
 
+def _capture_repair_telemetry(
+    root: Path,
+    execution: dict[str, Any],
+    current: dict[str, Any],
+    result: str,
+) -> dict[str, Any] | None:
+    """Снять deterministic delta только после REVIEW=FAIL и хотя бы одного FIX."""
+    if result != "FAIL" or int(execution.get("fixReviewCycles", 0)) < 1:
+        return None
+    try:
+        parsed = normalize_single_command(root, str(current.get("command") or ""))
+    except ValueError:
+        return None
+    if parsed.get("domain") != "STEP" or parsed.get("operation") != "REVIEW":
+        return None
+    step_id = parsed.get("target")
+    context = current.get("context")
+    before = context.get("reviewReportBefore") if isinstance(context, dict) else None
+    if not isinstance(step_id, str) or not isinstance(before, str) or not before:
+        return None
+    try:
+        latest = latest_structured_findings(root, step_id)
+    except (FindingContractError, OSError, ValueError):
+        return None
+    after = latest.get("report")
+    if not isinstance(after, str) or not after or after == before:
+        return None
+    try:
+        return compare_review_reports(
+            root,
+            step_id,
+            before,
+            after,
+            cycle=int(execution.get("fixReviewCycles", 0)),
+        )
+    except (RepairCycleError, FindingContractError, OSError, ValueError):
+        # Legacy/missing comparison metadata may disable adaptive stop, but must
+        # never create a false blocker. The existing hard cap remains active.
+        return None
+
+
+def _adaptive_fix_review_stop(
+    root: Path,
+    execution: dict[str, Any],
+    current_command: str,
+    next_command: str,
+    result: str,
+) -> dict[str, Any] | None:
+    """Hard cap first, then stored adaptive decision for REVIEW FAIL -> FIX."""
+    limited = _fix_review_limit(root, execution, current_command, next_command, result)
+    if limited is not None:
+        return limited
+
+    current_parsed = normalize_single_command(root, current_command)
+    next_parsed = normalize_single_command(root, next_command)
+    if not (
+        current_parsed.get("domain") == "STEP"
+        and current_parsed.get("operation") == "REVIEW"
+        and result == "FAIL"
+        and next_parsed.get("operation") == "FIX"
+        and int(execution.get("fixReviewCycles", 0)) >= 1
+    ):
+        return None
+
+    telemetry = execution.get("repairTelemetry")
+    if not isinstance(telemetry, dict):
+        return None
+    reason = telemetry.get("reasonCode")
+    if reason not in {"NO_PROGRESS", "REPEATED_FINDINGS", "REGRESSION"}:
+        return None
+    if telemetry.get("cycle") != int(execution.get("fixReviewCycles", 0)):
+        return None
+    return {
+        "status": "BLOCKED",
+        "executionId": execution["executionId"],
+        "rootCommand": execution["rootCommand"],
+        "command": None,
+        "reasonCode": reason,
+        "message": telemetry.get("message"),
+        "repairTelemetry": telemetry,
+        "fixReviewCycles": int(execution.get("fixReviewCycles", 0)),
+        "maxFixReviewCycles": max_fix_review_cycles(root),
+    }
+
+
 def _fix_review_limit(
     root: Path,
     execution: dict[str, Any],
@@ -1792,6 +2025,11 @@ def block_execution(
 
 
 
+def _repo_relative(root: Path, path: Path) -> str:
+    """Canonical repository-relative path, устойчивый к Windows 8.3 aliases."""
+    return path.resolve().relative_to(root.resolve()).as_posix()
+
+
 # Разрешить STEP id через manifest-driven config layer.
 def task_path(root: Path, step_id: str) -> Path:
     return configured_task_path(root, step_id)
@@ -1827,7 +2065,7 @@ def plan_info(root: Path, step_id: str) -> dict[str, Any]:
     current_content = plan_content_hash(root, step_id)
     matched = latest_matching_planning_review(root, step_id)
     report_path = (
-        matched["path"].relative_to(root).as_posix()
+        _repo_relative(root, matched["path"])
         if matched is not None
         else None
     )
@@ -1872,7 +2110,7 @@ def stamp_plan(root: Path, step_id: str) -> dict[str, Any]:
 
     basis = planning_context_basis(root, step_id)
     content = plan_content_hash(root, step_id)
-    report_path = review["path"].relative_to(root).as_posix()
+    report_path = _repo_relative(root, review["path"])
     meta["plan"] = {
         "status": "ready",
         "revision": revision + 1,
@@ -1880,6 +2118,8 @@ def stamp_plan(root: Path, step_id: str) -> dict[str, Any]:
         "content_hash": content,
         "reviewed_report": report_path,
         "planned_at": utc_now(),
+        "execution_groups": current_plan.get("execution_groups", {}),
+        "context_components": planning_context_components(root, step_id),
     }
     updated = render_document(meta, task["body"])
     fd, tmp_name = tempfile.mkstemp(
@@ -1903,6 +2143,7 @@ def stamp_plan(root: Path, step_id: str) -> dict[str, Any]:
         "planRevision": revision + 1,
         "planBasis": basis,
         "planContentHash": content,
+        "planContextComponents": meta["plan"]["context_components"],
         "planningReview": report_path,
     }
 
@@ -1915,7 +2156,7 @@ def review_reports(root: Path, step_id: str) -> list[dict[str, Any]]:
     values: list[dict[str, Any]] = []
     for item in valid_reports(root, step_id):
         values.append({
-            "path": item["path"].relative_to(root).as_posix(),
+            "path": _repo_relative(root, item["path"]),
             "verdict": item["verdict"],
         })
     return values
@@ -1930,8 +2171,9 @@ def latest_review(root: Path, step_id: str, *, require_current_revision: bool = 
     if item is None:
         return None
     return {
-        "path": item["path"].relative_to(root).as_posix(),
+        "path": _repo_relative(root, item["path"]),
         "verdict": item["verdict"],
+        "completionResult": item.get("completionResult"),
     }
 
 
@@ -1956,12 +2198,10 @@ def _durable_recovery_result(
             except (OSError, ValueError, FileNotFoundError):
                 return None
 
-    # REVIEW можно восстановить по новому immutable report, появившемуся после
-    # reviewReportBefore. FAIL/BLOCKED не меняют STEP lifecycle и потому требуют
-    # exact current revision. PASS writer после валидного report может выполнить
-    # единственную post-review mutation status->completed; тогда exact revision
-    # закономерно меняется, а recovery использует более сильный combined proof:
-    # новый PASS report + completed STEP + type-specific completion proof.
+    # REVIEW recovery использует durable code verdict + Completion Contract.
+    # PASS report сам по себе больше не означает completion PASS: immutable report
+    # хранит completion_result=pass|fail|blocked. Это закрывает crash-window между
+    # созданием report, lifecycle close и local execution checkpoint.
     if parsed.get("domain") == "STEP" and parsed.get("operation") == "REVIEW":
         target = parsed.get("target")
         baseline = current.get("context", {}).get("reviewReportBefore")
@@ -1969,14 +2209,24 @@ def _durable_recovery_result(
             review = latest_review(root, target, require_current_revision=True)
             if review is not None and review.get("path") != baseline:
                 verdict = review.get("verdict")
-                if verdict in {"PASS", "FAIL", "BLOCKED"}:
+                if verdict in {"FAIL", "BLOCKED"}:
                     return verdict
+                if verdict == "PASS":
+                    completion_result = review.get("completionResult")
+                    if completion_result in {"FAIL", "BLOCKED"}:
+                        return completion_result
+                    if completion_result == "PASS":
+                        finalized = finalize_step_completion(root, target)
+                        return "PASS" if finalized.get("completed") else "BLOCKED"
+                    # Historical PASS без Completion Contract автоматически
+                    # завершается только если lifecycle уже доказан ниже.
 
             latest = latest_review(root, target, require_current_revision=False)
             if (
                 latest is not None
                 and latest.get("path") != baseline
                 and latest.get("verdict") == "PASS"
+                and latest.get("completionResult") in {None, "PASS"}
             ):
                 try:
                     task = read_planning_task(root, target)
@@ -1987,7 +2237,8 @@ def _durable_recovery_result(
                     task["frontmatter"].get("status") == "completed"
                     and proof.get("complete") is True
                 ):
-                    return "PASS"
+                    finalized = finalize_step_completion(root, target)
+                    return "PASS" if finalized.get("completed") else "BLOCKED"
 
     if (
         parsed.get("domain") == "GIT"
@@ -2124,7 +2375,7 @@ def resolve_execution(
                 "notExecuted": sequence[index + 1 :],
             }
         # Ручная chain подчиняется тому же FIX↔REVIEW budget, что и STEP RUN.
-        limited = _fix_review_limit(root, execution, current["command"], next_command, result)
+        limited = _adaptive_fix_review_stop(root, execution, current["command"], next_command, result)
         if limited is not None:
             return limited
         return {
@@ -2164,7 +2415,7 @@ def resolve_execution(
             # а не рекомендация агенту. После исчерпания лимита REVIEW FAIL не
             # может открыть ещё один FIX даже при повторной session.
             next_command = _build_next_from_edge(root, current["command"], candidates[0])
-            limited = _fix_review_limit(root, execution, current["command"], next_command, result)
+            limited = _adaptive_fix_review_stop(root, execution, current["command"], next_command, result)
             if limited is not None:
                 return limited
             return {

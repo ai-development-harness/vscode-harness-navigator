@@ -147,10 +147,17 @@ def _fresh_command(
     review = latest_review(root, step_id, require_current_revision=True)
     if review is not None:
         verdict = review.get("verdict")
+        completion_result = review.get("completionResult")
         if verdict == "FAIL":
             return f"STEP FIX {step_id}", []
         if verdict == "PASS":
-            return None, ["current-review-pass-but-step-not-completed"]
+            if completion_result == "FAIL":
+                return f"STEP FIX {step_id}", []
+            if completion_result == "BLOCKED":
+                return None, ["current-review-completion-blocked"]
+            if completion_result == "PASS":
+                return None, ["current-review-completion-pass-but-step-not-completed"]
+            return None, ["current-review-pass-but-completion-pending"]
         if verdict == "BLOCKED":
             return None, ["current-review-blocked"]
 

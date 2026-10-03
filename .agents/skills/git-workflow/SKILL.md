@@ -58,8 +58,23 @@ python3 .harness/tools/git-action.py pr --body-file .harness/local/git/pr-body.m
 
 При требовании title повтори с `--title-file`.
 
-Не вызывай `gh pr create/list/view`, не выбирай head/base/provider/draft и не записывай `pr-state.json` вручную. Executor сам find/reuse/create-ит exact PR, сверяет provider head OID и сохраняет lifecycle state.
+Не вызывай provider CLI вручную (`gh pr create/list/view`, `tea pulls ...`, `tea api ...`), не выбирай head/base/provider/tool/draft и не записывай `pr-state.json` вручную. Executor сам разрешает configured GitHub/Gitea adapter, find/reuse/create-ит exact PR, сверяет provider head OID и сохраняет lifecycle state.
 
 ## Failure policy
 
 Любой deterministic `BLOCKED` останавливает segment. Не обходи blocker ручной Git/provider командой с более слабыми параметрами.
+
+
+## Recovery после interruption
+
+Повторный запуск semantic segment не означает повтор external mutation.
+
+`git-action.py` сохраняет bounded side-effect checkpoint в active execution и перед новой mutation сначала reconciles repository/provider facts:
+
+- COMMIT — reflog marker + HEAD/parent/tree;
+- PUSH — live remote branch HEAD;
+- PR — exact matching provider object по head/base/head SHA.
+
+Если side effect уже доказан, executor возвращает `SUCCESS` с `recovered: true` и не повторяет mutation. Если исходное состояние не изменилось, разрешается новая попытка. Если outcome неоднозначен, executor возвращает `SIDE_EFFECT_RECOVERY_AMBIGUOUS`.
+
+Не удаляй и не редактируй `.harness/local/execution/execution-status.json` ради retry и не обходи recovery ручным Git/provider CLI.

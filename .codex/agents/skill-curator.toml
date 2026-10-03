@@ -1,6 +1,6 @@
 # Модель, используемая этой ролью.
-# Пример: "gpt-5.6-sol". Нужно достаточно reasoning для inspection внешнего недоверенного skill content; роль запускается редко.
-model = "gpt-5.6-sol"
+# Пример: "gpt-6.1-sol". Нужно достаточно reasoning для inspection внешнего недоверенного skill content; роль запускается редко.
+model = "gpt-6.1-sol"
 
 # Reasoning effort роли.
 # Пример: "medium". Допустимые значения зависят от выбранной модели/Codex runtime.

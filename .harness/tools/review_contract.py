@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+import json
 import hashlib
 from pathlib import Path
 import re
@@ -46,6 +47,11 @@ from harness_config import (
 )
 from planning_contract import read_task
 from review_gates import required_reviewers
+from review_findings import (
+    FINDING_CONTRACT_VERSION,
+    FindingContractError,
+    parse_machine_findings,
+)
 
 
 SEVERITIES = {"critical", "high", "medium", "low"}
@@ -53,6 +59,7 @@ CATEGORIES = {"implementation", "evidence", "contract"}
 SPECIALIZED_STATUSES = {"pass", "fail", "blocked", "not_required"}
 SURFACE_MODES = {"implementation-baseline", "worktree", "clean-tree-fallback"}
 BASELINE_STATUSES = {"valid", "missing", "invalid", "legacy-auto"}
+VERIFICATION_STATUSES = {"PASS", "FAIL", "MANUAL_REQUIRED", "BLOCKED", "UNKNOWN"}
 
 
 def _valid_sha256(value: Any) -> bool:
@@ -148,7 +155,7 @@ def legacy_review_pins(root: Path) -> dict[str, str]:
         issues = validate_migration_report(root, report)
         if issues:
             raise ValueError(
-                f"{report.relative_to(root)}: " + "; ".join(issues)
+                f"{_repo_relative(root, report)}: " + "; ".join(issues)
             )
         document = parse_document(report)
         meta = document["frontmatter"]
@@ -156,16 +163,16 @@ def legacy_review_pins(root: Path) -> dict[str, str]:
         for token in values:
             digest, sep, rel = token.partition(" ")
             if not sep or not _valid_sha256(digest) or not rel:
-                raise ValueError(f"{report.relative_to(root)}: invalid legacy review pin {token!r}")
+                raise ValueError(f"{_repo_relative(root, report)}: invalid legacy review pin {token!r}")
             candidate = root / rel
             review_root_rel = _configured_rel(root, review_directory(root))
             if _under_git_path(rel, review_root_rel) is None:
                 raise ValueError(
-                    f"{report.relative_to(root)}: legacy review pin escapes configured review directory: {rel}"
+                    f"{_repo_relative(root, report)}: legacy review pin escapes configured review directory: {rel}"
                 )
             if candidate.is_symlink():
                 raise ValueError(
-                    f"{report.relative_to(root)}: legacy review pin must not reference a symlink: {rel}"
+                    f"{_repo_relative(root, report)}: legacy review pin must not reference a symlink: {rel}"
                 )
             previous = pins.get(rel)
             if previous is not None and previous != digest:
@@ -201,10 +208,10 @@ def legacy_completed_steps(root: Path) -> dict[str, str]:
         for report in sorted(directory.glob("MIGRATION-*.md")):
             issues = validate_migration_report(root, report)
             if issues:
-                raise ValueError(f"{report.relative_to(root)}: " + "; ".join(issues))
+                raise ValueError(f"{_repo_relative(root, report)}: " + "; ".join(issues))
             values = parse_document(report)["frontmatter"].get("legacy_completed_steps", [])
             for step_id in values:
-                result.setdefault(step_id, report.relative_to(root).as_posix())
+                result.setdefault(step_id, _repo_relative(root, report))
     for step_id in _PENDING_LEGACY_COMPLETIONS.get():
         result.setdefault(step_id, "pending migration report")
     return result
@@ -225,7 +232,7 @@ def current_legacy_review_snapshots(root: Path) -> dict[str, str]:
         except (OSError, UnicodeDecodeError, DocumentError):
             continue
         if frontmatter is None:
-            snapshots[path.relative_to(root).as_posix()] = content_hash(text)
+            snapshots[_repo_relative(root, path)] = content_hash(text)
     return snapshots
 
 
@@ -255,7 +262,19 @@ def trusted_review_reports(
     транзакции: projections могут вычислить final state до публикации migration
     report, который затем делает те же pins durable.
     """
-    result = review_reports(root, step_id)
+    result = []
+    for item in review_reports(root, step_id):
+        document = item.get("document")
+        meta = document.get("frontmatter", {}) if isinstance(document, dict) else {}
+        # Новый Completion Contract не позволяет REVIEW PASS с completion FAIL/BLOCKED
+        # становиться type-specific completion proof. Historical reports без поля
+        # сохраняют прежнюю migration-compatible semantics.
+        if (
+            meta.get("completion_contract") == 1
+            and str(meta.get("completion_result") or "").lower() != "pass"
+        ):
+            continue
+        result.append(item)
     try:
         pins = legacy_review_pins(root)
     except ValueError:
@@ -271,7 +290,7 @@ def trusted_review_reports(
         for path in sorted(directory.glob("REVIEW-*.md")):
             if path.is_symlink():
                 continue
-            rel = path.relative_to(root).as_posix()
+            rel = _repo_relative(root, path)
             expected = pins.get(rel)
             if expected is None:
                 continue
@@ -329,6 +348,11 @@ def _git(root: Path, *args: str) -> tuple[int, bytes]:
     except OSError:
         return 127, b""
     return proc.returncode, proc.stdout
+
+
+def _repo_relative(root: Path, path: Path) -> str:
+    """Canonical repository-relative path, устойчивый к Windows 8.3 aliases."""
+    return path.resolve().relative_to(root.resolve()).as_posix()
 
 
 def _configured_rel(root: Path, directory: Path) -> str:
@@ -423,7 +447,11 @@ def _submodule_head(path: Path) -> str | None:
     value = proc.stdout.strip()
     return value or None
 
-def repository_revision(root: Path) -> dict[str, str | None]:
+def repository_revision(
+    root: Path,
+    *,
+    ignored_paths: set[str] | frozenset[str] | None = None,
+) -> dict[str, str | None]:
     """Fingerprint exact review target, excluding report/state written by review itself.
 
     STEP REVIEW сначала фиксирует product/config worktree, затем создаёт immutable
@@ -435,6 +463,13 @@ def repository_revision(root: Path) -> dict[str, str | None]:
     code, status = _git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
     if code != 0:
         raise ValueError("cannot read git worktree state")
+
+    ignored: set[str] = set()
+    for value in ignored_paths or set():
+        normalized = _normalize_git_rel(value)
+        if normalized is None:
+            raise ValueError(f"invalid ignored repository path: {value}")
+        ignored.add(normalized)
 
     def local_operational(rel: str) -> bool:
         normalized = _normalize_git_rel(rel)
@@ -467,6 +502,16 @@ def repository_revision(root: Path) -> dict[str, str | None]:
                 raise ValueError("malformed git status rename/copy entry")
             source_rel = entries[index].decode("utf-8", errors="surrogateescape")
             index += 1
+
+        normalized_rel = _normalize_git_rel(rel)
+        normalized_source = (
+            _normalize_git_rel(source_rel) if source_rel is not None else None
+        )
+        if (
+            normalized_rel in ignored
+            and (source_rel is None or normalized_source in ignored)
+        ):
+            continue
 
         path = root / rel
 
@@ -636,6 +681,113 @@ def validate_review_report(
         )
     )
 
+    contract_basis = meta.get("contract_basis")
+    if contract_basis is not None and not _valid_sha256(contract_basis):
+        errors.append("contract_basis must be sha256 when present")
+
+    verification_basis = meta.get("verification_basis")
+    if verification_basis is not None and not _valid_sha256(verification_basis):
+        errors.append("verification_basis must be sha256 when present")
+
+    verification_status = meta.get("verification_status")
+    if verification_status is not None and verification_status not in VERIFICATION_STATUSES:
+        errors.append(
+            "verification_status must be PASS|FAIL|MANUAL_REQUIRED|BLOCKED|UNKNOWN when present"
+        )
+
+    completion_contract = meta.get("completion_contract")
+    if completion_contract is not None:
+        if verdict != "pass":
+            errors.append("completion_contract is allowed only for PASS review")
+        if completion_contract != 1:
+            errors.append("completion_contract must be 1 when present")
+        completion_result = meta.get("completion_result")
+        if completion_result not in {"pass", "fail", "blocked"}:
+            errors.append("completion_result must be pass|fail|blocked")
+        section = document["sections"].get("Completion convergence")
+        if not isinstance(section, str) or not section.strip():
+            errors.append("completion_contract requires '## Completion convergence'")
+        else:
+            match = re.fullmatch(r"\s*```json\s*(\{.*\})\s*```\s*", section, re.S)
+            if match is None:
+                errors.append("Completion convergence must contain one JSON object")
+            else:
+                try:
+                    completion_payload = json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    errors.append("Completion convergence JSON is invalid")
+                else:
+                    if not isinstance(completion_payload, dict):
+                        errors.append("Completion convergence JSON must be an object")
+                    else:
+                        if completion_payload.get("schemaVersion") != 1:
+                            errors.append("Completion convergence schemaVersion must be 1")
+                        durable_result = completion_payload.get("completionResult")
+                        if (
+                            isinstance(completion_result, str)
+                            and durable_result != completion_result.upper()
+                        ):
+                            errors.append(
+                                "Completion convergence result differs from frontmatter"
+                            )
+                        expected_status = {
+                            "pass": "PASS",
+                            "fail": "INCOMPLETE",
+                            "blocked": "BLOCKED",
+                        }.get(completion_result)
+                        if (
+                            expected_status is not None
+                            and completion_payload.get("status") != expected_status
+                        ):
+                            errors.append(
+                                "Completion convergence status differs from result"
+                            )
+                        findings = completion_payload.get("findings")
+                        if not isinstance(findings, list):
+                            errors.append("Completion convergence findings must be an array")
+                        else:
+                            if completion_result == "pass" and findings:
+                                errors.append(
+                                    "Completion convergence PASS must not contain findings"
+                                )
+                            if completion_result in {"fail", "blocked"} and not findings:
+                                errors.append(
+                                    "Completion convergence FAIL/BLOCKED requires findings"
+                                )
+                            if completion_result == "fail" and any(
+                                isinstance(item, dict)
+                                and item.get("kind") == "contract_gap"
+                                for item in findings
+                            ):
+                                errors.append(
+                                    "Completion convergence contract_gap cannot route to FIX"
+                                )
+                            expected_ids = [
+                                f"COMP-{index:03d}"
+                                for index in range(1, len(findings) + 1)
+                            ]
+                            actual_ids = [
+                                item.get("id") if isinstance(item, dict) else None
+                                for item in findings
+                            ]
+                            if actual_ids != expected_ids:
+                                errors.append(
+                                    "Completion convergence finding IDs must be COMP-001..."
+                                )
+                            route = (
+                                "FIX" if completion_result == "fail"
+                                else "BLOCKED" if completion_result == "blocked"
+                                else None
+                            )
+                            if route is not None and any(
+                                not isinstance(item, dict)
+                                or item.get("route") != route
+                                for item in findings
+                            ):
+                                errors.append(
+                                    "Completion convergence finding route differs from result"
+                                )
+
     revision = meta.get("reviewed_revision")
     if not isinstance(revision, dict):
         errors.append("reviewed_revision must be a mapping")
@@ -660,33 +812,70 @@ def validate_review_report(
                 if revision != current:
                     errors.append("reviewed_revision does not match current repository state")
 
-    findings = _parse_findings(document)
-    for index, finding in enumerate(findings, 1):
-        prefix = f"finding F-{index:03d}"
-        if finding.get("Severity") not in SEVERITIES:
-            errors.append(f"{prefix}: invalid or missing Severity")
-        if finding.get("Category") not in CATEGORIES:
-            errors.append(f"{prefix}: invalid or missing Category")
-        for field in ("Location", "Scenario", "Impact", "Fix direction"):
-            if not finding.get(field):
-                errors.append(f"{prefix}: missing {field}")
+    human_findings = _parse_findings(document)
+    finding_contract = meta.get("finding_contract")
+    structured_findings: list[dict[str, Any]] | None = None
 
-    if verdict == "pass" and findings:
+    if finding_contract is None:
+        # Historical Review Contract v1: validate the human-readable fields
+        # exactly as before. Immutable history is not rewritten during upgrade.
+        for index, finding in enumerate(human_findings, 1):
+            prefix = f"finding F-{index:03d}"
+            if finding.get("Severity") not in SEVERITIES:
+                errors.append(f"{prefix}: invalid or missing Severity")
+            if finding.get("Category") not in CATEGORIES:
+                errors.append(f"{prefix}: invalid or missing Category")
+            for field in ("Location", "Scenario", "Impact", "Fix direction"):
+                if not finding.get(field):
+                    errors.append(f"{prefix}: missing {field}")
+    elif finding_contract == FINDING_CONTRACT_VERSION:
+        try:
+            structured_findings = parse_machine_findings(document)
+        except FindingContractError as exc:
+            errors.append(f"Review Contract v2: {exc}")
+            structured_findings = []
+        if len(human_findings) != len(structured_findings):
+            errors.append(
+                "Review Contract v2: human and machine finding counts must match"
+            )
+        for index, (human, machine) in enumerate(
+            zip(human_findings, structured_findings), 1
+        ):
+            prefix = f"finding F-{index:03d}"
+            if human.get("Severity") != machine.get("severity"):
+                errors.append(f"{prefix}: human Severity differs from machine finding")
+            if human.get("Category") != machine.get("category"):
+                errors.append(f"{prefix}: human Category differs from machine finding")
+    else:
+        errors.append(
+            f"finding_contract must be omitted for legacy v1 or equal {FINDING_CONTRACT_VERSION}"
+        )
+        structured_findings = []
+
+    finding_count = (
+        len(structured_findings)
+        if structured_findings is not None
+        else len(human_findings)
+    )
+    categories = (
+        [item["category"] for item in structured_findings]
+        if structured_findings is not None
+        else [item.get("Category") for item in human_findings]
+    )
+
+    if verdict == "pass" and finding_count:
         errors.append("PASS review must not contain material findings")
     if verdict == "fail":
-        if not findings:
+        if not finding_count:
             errors.append("FAIL review requires at least one finding")
-        if any(item.get("Category") == "contract" for item in findings):
+        if "contract" in categories:
             errors.append("FAIL cannot contain contract findings; contract defect must be BLOCKED")
-        if not any(item.get("Category") in {"implementation", "evidence"} for item in findings):
+        if not any(item in {"implementation", "evidence"} for item in categories):
             errors.append("FAIL requires implementation/evidence finding")
     if verdict == "blocked":
-        if not findings:
+        if not finding_count:
             errors.append("BLOCKED review requires at least one finding")
-        if not any(
-            item.get("Category") in {"contract", "evidence"}
-            for item in findings
-        ):
+        if not any(item in {"contract", "evidence"} for item in categories):
             errors.append(
                 "BLOCKED review requires a contract or blocking evidence finding"
             )
@@ -912,9 +1101,15 @@ def review_reports(root: Path, step_id: str) -> list[dict[str, Any]]:
         if errors:
             continue
         doc = parse_document(path)
+        completion_result = doc["frontmatter"].get("completion_result")
         result.append({
             "path": path,
             "verdict": str(doc["frontmatter"]["verdict"]).upper(),
+            "completionResult": (
+                str(completion_result).upper()
+                if isinstance(completion_result, str)
+                else None
+            ),
             "document": doc,
         })
     return result
@@ -975,15 +1170,18 @@ def validate_review_immutability(root: Path, *, ci_mode: bool = False) -> list[s
     HEAD. В CI сравниваем итоговый commit с первым родителем: PR merge commit
     тем самым проверяется относительно base, обычный push — относительно parent.
     """
+    # Config accessors canonicalize paths через Path.resolve(); root обязан
+    # использовать тот же representation (важно для Windows 8.3 aliases).
+    root = root.resolve()
     errors: list[str] = []
     directories = [
-        review_directory(root).relative_to(root).as_posix(),
-        planning_review_directory(root).relative_to(root).as_posix(),
-        init_review_directory(root).relative_to(root).as_posix(),
-        audit_directory(root).relative_to(root).as_posix(),
-        release_directory(root).relative_to(root).as_posix(),
-        skill_search_directory(root).relative_to(root).as_posix(),
-        update_report_directory(root).relative_to(root).as_posix(),
+        _repo_relative(root, review_directory(root)),
+        _repo_relative(root, planning_review_directory(root)),
+        _repo_relative(root, init_review_directory(root)),
+        _repo_relative(root, audit_directory(root)),
+        _repo_relative(root, release_directory(root)),
+        _repo_relative(root, skill_search_directory(root)),
+        _repo_relative(root, update_report_directory(root)),
     ]
 
     probes: list[tuple[str, tuple[str, ...]]] = [
@@ -1076,7 +1274,7 @@ def validate_all_review_reports(root: Path, *, ci_mode: bool = False) -> list[st
             errors.append(f"review: pinned legacy report changed: {rel}")
 
     for path in sorted(directory.glob("STEP-*/REVIEW-*.md")):
-        rel = path.relative_to(root).as_posix()
+        rel = _repo_relative(root, path)
         expected_step_id = path.parent.name
         if path.is_symlink():
             errors.append(f"review: {rel}: durable review report must not be a symlink")
@@ -1140,7 +1338,7 @@ def main() -> int:
         directory = review_directory(root) / args.step
         for path in sorted(directory.glob("REVIEW-*.md")) if directory.is_dir() else []:
             errors.extend(
-                f"{path.relative_to(root)}: {item}"
+                f"{_repo_relative(root, path)}: {item}"
                 for item in validate_review_report(root, path)
             )
     else:

@@ -6,7 +6,7 @@ harness:
   version: "1"
   # Release Harness, от которого текущий project protocol layer синхронизирован.
   # Формат: "X.X.X"; immutable source ref хранится по state.lock_file из harness-update policy.
-  release: "0.8.6"
+  release: "0.10.2"
 
 # Состояние конкретного проекта, созданного из template.
 # Пример: до INIT initialized=false/name=null, после INIT finalize-init атомарно заполняет значения.
@@ -98,6 +98,9 @@ sources:
   # Каталог canonical ADR.
   # Пример: docs/adr.
   adrDirectory: docs/adr
+  # Каталог project-owned engineering principles PRN-NNN.
+  # Пример: docs/principles.
+  principles: docs/principles
   # Текущий architecture baseline; STEP ссылаются на document/anchor через architecture_refs.
   # Пример: docs/architecture.md.
   architecture: docs/architecture.md

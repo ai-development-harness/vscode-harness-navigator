@@ -138,10 +138,15 @@ require_clean_worktree = false
 # Пример: "create-if-missing"; варианты: never | ask | create-if-missing.
 after_push = "create-if-missing"
 # Provider Pull Request API/tooling.
-# Пример: "github" для GitHub repository.
+# Поддерживаются: "github" | "gitea".
+# Для self-hosted Gitea указывается "gitea"; host берётся из push.remote.
+# Пример: provider = "github".
 provider = "github"
-# Предпочтительный локальный инструмент создания/поиска PR.
-# Пример: "gh" — GitHub CLI; при недоступности PR-step должен быть честно BLOCKED.
+# Provider CLI. Допустимы только совместимые пары:
+# github -> gh
+# gitea  -> tea
+# При отсутствии/невалидной авторизации CLI GIT PR возвращает actionable BLOCKED.
+# Пример: preferred_tool = "gh".
 preferred_tool = "gh"
 # Base branch новых PR.
 # Пример: "main".

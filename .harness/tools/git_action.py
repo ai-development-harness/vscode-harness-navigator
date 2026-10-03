@@ -18,7 +18,12 @@ import secrets
 import subprocess
 from typing import Any
 
+GIT_MUTATION_TIMEOUT_SECONDS = 120
+PR_PROVIDER_TIMEOUT_SECONDS = 60
+
 from document_contract import atomic_write_text
+from execution_status import read_side_effect_checkpoint, write_side_effect_checkpoint
+from side_effect_recovery import recovery_decision
 from harness_config import ConfigError
 from git_preflight import (
     GitPreflightError,
@@ -31,6 +36,11 @@ from git_preflight import (
     pr_preflight,
     push_preflight,
     sync_preflight,
+)
+from pr_provider import (
+    ProviderError,
+    create_pr as provider_create_pr,
+    open_prs as provider_open_prs,
 )
 
 
@@ -49,18 +59,27 @@ def _run(
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Выполнить deterministic mutation, передавая captured semantic input по stdin."""
-    proc = subprocess.run(
-        argv,
-        cwd=root,
-        env={**os.environ, **env} if env else None,
-        text=True,
-        encoding="utf-8",
-        errors="surrogateescape",
-        input=input_text,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=root,
+            env={**os.environ, **env} if env else None,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            input=input_text,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=GIT_MUTATION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitActionError(
+            "MUTATION_TIMEOUT",
+            f"Git mutation timed out after {GIT_MUTATION_TIMEOUT_SECONDS}s",
+            argv=argv,
+            timeoutSeconds=GIT_MUTATION_TIMEOUT_SECONDS,
+        ) from exc
     if proc.returncode:
         raise GitActionError(
             "MUTATION_FAILED",
@@ -329,6 +348,81 @@ def _compensate_unvalidated_commit(
     }
 
 
+def _side_effect_read(root: Path, command: str) -> dict[str, Any] | None:
+    try:
+        return read_side_effect_checkpoint(root, command)
+    except (OSError, ValueError) as exc:
+        raise GitActionError(
+            "SIDE_EFFECT_CHECKPOINT_INVALID",
+            f"cannot read side-effect checkpoint for {command}: {exc}",
+        ) from exc
+
+
+def _side_effect_write(
+    root: Path,
+    command: str,
+    *,
+    kind: str,
+    phase: str,
+    proof: dict[str, Any],
+) -> None:
+    try:
+        write_side_effect_checkpoint(
+            root,
+            command,
+            kind=kind,
+            phase=phase,
+            proof=proof,
+        )
+    except (OSError, ValueError) as exc:
+        raise GitActionError(
+            "SIDE_EFFECT_CHECKPOINT_WRITE_FAILED",
+            f"cannot persist side-effect checkpoint for {command}: {exc}",
+        ) from exc
+
+
+def _live_remote_head(root: Path, remote: str, branch: str) -> str | None:
+    """Read provider-facing Git ref without relying on stale tracking refs."""
+    try:
+        proc = subprocess.run(
+            ["git", "ls-remote", "--heads", remote, f"refs/heads/{branch}"],
+            cwd=root,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=GIT_MUTATION_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise GitActionError(
+            "SIDE_EFFECT_RECOVERY_PROBE_FAILED",
+            f"cannot observe remote ref {remote}/{branch}: {exc}",
+        ) from exc
+    if proc.returncode != 0:
+        raise GitActionError(
+            "SIDE_EFFECT_RECOVERY_PROBE_FAILED",
+            proc.stderr.strip() or f"cannot observe remote ref {remote}/{branch}",
+        )
+    rows = [line for line in proc.stdout.splitlines() if line.strip()]
+    if not rows:
+        return None
+    if len(rows) != 1:
+        raise GitActionError(
+            "SIDE_EFFECT_RECOVERY_AMBIGUOUS",
+            f"remote probe returned multiple refs for {remote}/{branch}",
+            refs=rows,
+        )
+    oid = rows[0].split()[0]
+    if re.fullmatch(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", oid) is None:
+        raise GitActionError(
+            "SIDE_EFFECT_RECOVERY_PROBE_FAILED",
+            f"remote ref returned invalid object id for {remote}/{branch}",
+        )
+    return oid
+
+
 def execute_commit(
     root: Path,
     *,
@@ -336,12 +430,67 @@ def execute_commit(
     slug: str,
     message_file: Path,
 ) -> dict[str, Any]:
-    """Создать commit; при exact protected-branch plan создать required branch."""
-    repo = Repo(root)
-    created_branch: str | None = None
+    """Создать commit с durable reconciliation при interrupted outcome."""
+    recovered = _side_effect_read(root, "GIT COMMIT")
+    if recovered is not None and recovered.get("kind") == "git_commit":
+        proof = recovered.get("proof") if isinstance(recovered.get("proof"), dict) else {}
+        phase = recovered.get("phase")
+        before = proof.get("beforeHead")
+        marker = proof.get("reflogMarker")
+        expected_branch = proof.get("branch")
+        expected_tree = proof.get("tree")
+        if phase != "prepared" and isinstance(marker, str) and marker:
+            repo = Repo(root)
+            created_identity = _commit_created_by(repo, marker)
+            if created_identity is not None:
+                created = created_identity.get("oid")
+                current = _commit_snapshot(root)
+                if isinstance(created, str):
+                    parents = repo.git("rev-list", "--parents", "-n", "1", created).stdout.split()[1:]
+                    tree = repo.git("rev-parse", f"{created}^{{tree}}").stdout.strip()
+                    if (
+                        current.get("head") == created
+                        and current.get("branch") == expected_branch
+                        and tree == expected_tree
+                        and parents == ([before] if before else [])
+                    ):
+                        verified = {
+                            **proof,
+                            "observedHead": created,
+                            "recovered": True,
+                        }
+                        _side_effect_write(
+                            root,
+                            "GIT COMMIT",
+                            kind="git_commit",
+                            phase="postconditions_verified",
+                            proof=verified,
+                        )
+                        return {
+                            "status": "SUCCESS",
+                            "action": "commit",
+                            "branch": current.get("branch"),
+                            "createdBranch": None,
+                            "head": created,
+                            "recovered": True,
+                            "mutation": {"reconciled": True},
+                        }
+                raise GitActionError(
+                    "SIDE_EFFECT_RECOVERY_AMBIGUOUS",
+                    "commit side effect exists but current branch/HEAD/tree/parent no longer proves the interrupted mutation",
+                    checkpoint=proof,
+                    current=current,
+                )
+            current = _commit_snapshot(root)
+            if current.get("head") != before or current.get("branch") != expected_branch:
+                raise GitActionError(
+                    "SIDE_EFFECT_RECOVERY_AMBIGUOUS",
+                    "commit outcome is unknown and repository state changed since the checkpoint",
+                    checkpoint=proof,
+                    current=current,
+                )
 
-    # Message читается и проверяется до любых mutations: невалидный input не
-    # должен оставлять репозиторий на свежесозданной ветке (#110).
+    # Message читается и проверяется до любых новых mutations.
     path = _message_path(root, message_file)
     message_identity = _input_identity(path)
     message = path.read_text(encoding="utf-8")
@@ -360,6 +509,7 @@ def execute_commit(
     )
 
     snapshot = _commit_snapshot(root)
+    created_branch: str | None = None
     try:
         gate = commit_preflight(root, commit_type=commit_type, slug=slug)
     except GitPreflightError as exc:
@@ -371,6 +521,7 @@ def execute_commit(
                 "REQUIRED_BRANCH_UNRESOLVED",
                 "preflight requires branch creation but returned no exact branch",
             ) from exc
+        repo = Repo(root)
         exists = repo.git(
             "show-ref",
             "--verify",
@@ -391,8 +542,6 @@ def execute_commit(
         gate = commit_preflight(root, commit_type=commit_type, slug=slug)
     _validate_commit_message(message, commit_type=commit_type, gate=gate)
 
-    # Validator видел конкретные branch/HEAD/index tree. Если за время проверки
-    # что-то изменилось, commit зафиксировал бы непроверенное состояние (#107).
     if _commit_snapshot(root) != snapshot:
         raise GitActionError(
             "COMMIT_INPUT_CHANGED",
@@ -401,26 +550,42 @@ def execute_commit(
         )
 
     before = snapshot["head"]
-    # logAllRefUpdates=always: reflog нужен как доказательство владения commit-ом.
     argv = ["git", "-c", "core.logAllRefUpdates=always", "commit"]
     if gate.get("sign"):
         argv.append("-S")
     if gate.get("allowEmpty") and not gate.get("staged"):
         argv.append("--allow-empty")
-    # Git должен потребить ровно ту строку, которую Harness уже прочитал и
-    # провалидировал. Повторное чтение mutable path через "-F <file>" создаёт
-    # TOCTOU между validation и primary side effect при concurrent sessions.
     argv.extend(["-F", "-"])
     marker = _commit_marker()
+    proof = {
+        "beforeHead": before,
+        "branch": snapshot["branch"],
+        "tree": snapshot["tree"],
+        "reflogMarker": marker,
+    }
+    _side_effect_write(
+        root, "GIT COMMIT", kind="git_commit", phase="prepared", proof=proof
+    )
+    _side_effect_write(
+        root, "GIT COMMIT", kind="git_commit", phase="side_effect_started", proof=proof
+    )
+
     _run(root, argv, input_text=message, env={"GIT_REFLOG_ACTION": marker})
     repo = Repo(root)
     created_identity = _commit_created_by(repo, marker)
     created = created_identity["oid"] if created_identity is not None else None
     after = repo.head()
+    observed_proof = {**proof, "observedHead": after, "createdHead": created}
+    _side_effect_write(
+        root,
+        "GIT COMMIT",
+        kind="git_commit",
+        phase="side_effect_observed",
+        proof=observed_proof,
+    )
+
     if not after or after == before:
         raise GitActionError("COMMIT_POSTCONDITION_FAILED", "Git HEAD did not advance")
-    # Postcondition проверяет commit, созданный этим вызовом (если ref уже
-    # сдвинули, HEAD — чужой commit и сам по себе ничего не доказывает).
     subject = created or after
     parents = repo.git("rev-list", "--parents", "-n", "1", subject).stdout.split()[1:]
     committed_tree = repo.git("rev-parse", f"{subject}^{{tree}}").stdout.strip()
@@ -435,22 +600,32 @@ def execute_commit(
         or parents != ([before] if before else [])
         or committed_tree != snapshot["tree"]
     ):
-        # Любой failed postcondition компенсируем, если reflog marker uniquely
-        # доказывает primary commit/ref. Это включает branch-switch hooks:
-        # validated tree на неверной branch тоже не считается SUCCESS.
         compensation = _compensate_unvalidated_commit(
             root, snapshot, created_identity, parents, current_branch
         )
         raise GitActionError(
             "COMMIT_POSTCONDITION_FAILED",
-            "created commit does not match validated branch/parent/tree "
-            "(e.g. a Git hook changed the index); " + compensation["message"],
+            "created commit does not match validated branch/parent/tree; "
+            + compensation["message"],
             head=after,
             validated=snapshot,
             parents=parents,
             tree=committed_tree,
             compensation=compensation,
         )
+
+    verified_proof = {
+        **observed_proof,
+        "verifiedBranch": current_branch,
+        "verifiedTree": committed_tree,
+    }
+    _side_effect_write(
+        root,
+        "GIT COMMIT",
+        kind="git_commit",
+        phase="postconditions_verified",
+        proof=verified_proof,
+    )
 
     cleanup_warning = _cleanup_consumed_input(path, message_identity)
     result = {
@@ -465,8 +640,70 @@ def execute_commit(
         result["cleanupWarnings"] = [cleanup_warning]
     return result
 
-
 def execute_push(root: Path) -> dict[str, Any]:
+    recovered = _side_effect_read(root, "GIT PUSH")
+    if recovered is not None and recovered.get("kind") == "git_push":
+        proof = recovered.get("proof") if isinstance(recovered.get("proof"), dict) else {}
+        phase = recovered.get("phase")
+        remote = proof.get("remote")
+        branch = proof.get("branch")
+        target = proof.get("localHead")
+        baseline = proof.get("remoteHeadBefore")
+        if (
+            phase != "prepared"
+            and isinstance(remote, str)
+            and isinstance(branch, str)
+            and isinstance(target, str)
+        ):
+            live = _live_remote_head(root, remote, branch)
+            decision = recovery_decision(
+                observed=live or "",
+                expected=target,
+                baseline=baseline if isinstance(baseline, str) else None,
+            )
+            if decision == "ALREADY_APPLIED":
+                verified = {
+                    **proof,
+                    "observedRemoteHead": live,
+                    "recovered": True,
+                }
+                _side_effect_write(
+                    root,
+                    "GIT PUSH",
+                    kind="git_push",
+                    phase="postconditions_verified",
+                    proof=verified,
+                )
+                return {
+                    "status": "SUCCESS",
+                    "action": "push",
+                    "branch": branch,
+                    "remote": remote,
+                    "head": target,
+                    "afterPush": proof.get("afterPush"),
+                    "recovered": True,
+                    "mutation": {"reconciled": True},
+                }
+            if decision == "AMBIGUOUS":
+                raise GitActionError(
+                    "SIDE_EFFECT_RECOVERY_AMBIGUOUS",
+                    "remote branch no longer matches either pre-push or intended HEAD",
+                    remote=remote,
+                    branch=branch,
+                    expectedHead=target,
+                    remoteHeadBefore=baseline,
+                    observedRemoteHead=live,
+                )
+            repo = Repo(root)
+            if repo.head() != target or repo.branch() != branch:
+                raise GitActionError(
+                    "SIDE_EFFECT_RECOVERY_AMBIGUOUS",
+                    "push did not reach remote but local branch/HEAD changed before retry",
+                    expectedHead=target,
+                    currentHead=repo.head(),
+                    branch=branch,
+                )
+
     gate = push_preflight(root)
     plan = gate.get("mutationPlan", {})
     argv = plan.get("argv")
@@ -475,11 +712,7 @@ def execute_push(root: Path) -> dict[str, Any]:
     remote = str(gate["remote"])
     if not isinstance(argv, list) or argv[:2] != ["git", "push"]:
         raise GitActionError("UNSAFE_MUTATION_PLAN", "push preflight returned invalid argv")
-    # `+refspec` — такой же forced update, как `--force` (#107).
-    if any(
-        str(item).startswith(("--force", "+")) or item == "-f"
-        for item in argv
-    ):
+    if any(str(item).startswith(("--force", "+")) or item == "-f" for item in argv):
         raise GitActionError("UNSAFE_MUTATION_PLAN", "force push is forbidden")
     if not isinstance(validated, str) or argv[-1] != f"{validated}:refs/heads/{branch}":
         raise GitActionError("UNSAFE_MUTATION_PLAN", "push plan must publish the validated commit")
@@ -490,15 +723,45 @@ def execute_push(root: Path) -> dict[str, Any]:
             "branch or HEAD changed after push preflight",
             validatedHead=validated,
         )
+
+    before = _live_remote_head(root, remote, branch)
+    proof = {
+        "localHead": validated,
+        "remote": remote,
+        "branch": branch,
+        "remoteHeadBefore": before,
+        "afterPush": gate.get("afterPush"),
+    }
+    _side_effect_write(root, "GIT PUSH", kind="git_push", phase="prepared", proof=proof)
+    _side_effect_write(
+        root, "GIT PUSH", kind="git_push", phase="side_effect_started", proof=proof
+    )
+
     _run(root, [str(item) for item in argv])
+    live = _live_remote_head(root, remote, branch)
+    observed_proof = {**proof, "observedRemoteHead": live}
+    _side_effect_write(
+        root,
+        "GIT PUSH",
+        kind="git_push",
+        phase="side_effect_observed",
+        proof=observed_proof,
+    )
+    if live != validated:
+        raise GitActionError(
+            "PUSH_POSTCONDITION_FAILED",
+            "configured remote branch does not match validated HEAD after push",
+            localHead=validated,
+            remoteHead=live,
+        )
+
+    # Remote-tracking ref остаётся дополнительной local consistency check.
     repo = Repo(root)
-    # Git обновляет remote-tracking ref при push в configured remote; сверяем его
-    # с validated commit, а не с локальной веткой, которая могла сдвинуться.
     remote_head = repo.remote_ref(remote, branch)
     if remote_head != validated:
         raise GitActionError(
             "PUSH_POSTCONDITION_FAILED",
-            "configured remote branch does not match validated HEAD after push",
+            "remote-tracking ref does not match validated HEAD after successful remote observation",
             localHead=validated,
             remoteHead=remote_head,
         )
@@ -508,6 +771,14 @@ def execute_push(root: Path) -> dict[str, Any]:
         if upstream_argv != expected:
             raise GitActionError("UNSAFE_MUTATION_PLAN", "push preflight returned invalid upstream argv")
         _run(root, [str(item) for item in upstream_argv])
+
+    _side_effect_write(
+        root,
+        "GIT PUSH",
+        kind="git_push",
+        phase="postconditions_verified",
+        proof=observed_proof,
+    )
     return {
         "status": "SUCCESS",
         "action": "push",
@@ -517,7 +788,6 @@ def execute_push(root: Path) -> dict[str, Any]:
         "afterPush": gate.get("afterPush"),
         "mutation": {"argv": argv, "upstreamArgv": upstream_argv},
     }
-
 
 def _pr_input_path(root: Path, value: Path, *, label: str) -> Path:
     """Разрешить semantic PR input без symlink traversal."""
@@ -531,14 +801,23 @@ def _pr_input_path(root: Path, value: Path, *, label: str) -> Path:
 
 
 def _provider_json(root: Path, argv: list[str]) -> Any:
-    proc = subprocess.run(
-        argv,
-        cwd=root,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=PR_PROVIDER_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitActionError(
+            "PR_PROVIDER_TIMEOUT",
+            f"PR provider timed out after {PR_PROVIDER_TIMEOUT_SECONDS}s",
+            argv=argv,
+            timeoutSeconds=PR_PROVIDER_TIMEOUT_SECONDS,
+        ) from exc
     if proc.returncode:
         raise GitActionError(
             "PR_PROVIDER_FAILED",
@@ -568,43 +847,14 @@ def _repo_selector(gate: dict[str, Any]) -> str:
 
 
 def _open_prs(root: Path, gate: dict[str, Any]) -> list[dict[str, Any]]:
-    """Query exact open head/base PRs through configured provider tool."""
-    tool = str(gate["preferredTool"])
-    if gate.get("provider") != "github" or tool != "gh":
-        raise GitActionError(
-            "PR_PROVIDER_UNSUPPORTED",
-            "deterministic PR action currently supports provider=github, tool=gh",
-        )
-    data = _provider_json(
-        root,
-        [
-            tool,
-            "pr",
-            "list",
-            "--repo",
-            _repo_selector(gate),
-            "--head",
-            str(gate["branch"]),
-            "--base",
-            str(gate["base"]),
-            "--state",
-            "open",
-            "--limit",
-            "10",
-            "--json",
-            "number,url,state,headRefName,headRefOid,baseRefName,isDraft,title",
-        ],
-    )
-    if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
-        raise GitActionError("PR_PROVIDER_INVALID_JSON", "PR list must be a JSON array")
-    exact = [
-        item
-        for item in data
-        if item.get("headRefName") == gate["branch"]
-        and item.get("baseRefName") == gate["base"]
-        and item.get("state") == "OPEN"
-    ]
-    return exact
+    """Query exact open head/base PRs through the configured provider adapter."""
+    try:
+        return provider_open_prs(root, gate)
+    except ProviderError as exc:
+        # git_action.py owns the public mutation error contract. Provider
+        # internals are normalized here so existing callers never need to know
+        # which adapter produced the blocker.
+        raise GitActionError(exc.code, str(exc), **exc.details) from exc
 
 
 def _validate_provider_pr(gate: dict[str, Any], item: dict[str, Any]) -> None:
@@ -724,8 +974,39 @@ def execute_pr(
     title_file: Path | None = None,
     body_file: Path | None = None,
 ) -> dict[str, Any]:
-    """Find/reuse/create GitHub PR and persist deterministic local lifecycle state."""
+    """Find/reuse/create provider PR с durable reconciliation unknown outcome."""
     gate = pr_preflight(root)
+    recovery = _side_effect_read(root, "GIT PR")
+    recovery_kind = recovery.get("kind") if isinstance(recovery, dict) else None
+    if recovery is not None and recovery_kind not in {"provider_pr", "github_pr"}:
+        raise GitActionError(
+            "SIDE_EFFECT_CHECKPOINT_INVALID",
+            f"GIT PR cannot recover side-effect kind {recovery_kind!r}",
+        )
+    # Новые executions используют provider-neutral kind. Legacy github_pr
+    # продолжаем с исходным kind до terminal phase: contract запрещает менять
+    # kind внутри active side-effect lifecycle.
+    pr_side_effect_kind = recovery_kind if recovery is not None else "provider_pr"
+    recovery_proof = (
+        recovery.get("proof")
+        if isinstance(recovery, dict) and isinstance(recovery.get("proof"), dict)
+        else {}
+    )
+    if recovery is not None:
+        expected = (
+            recovery_proof.get("headBranch"),
+            recovery_proof.get("baseBranch"),
+            recovery_proof.get("headSha"),
+        )
+        actual = (gate.get("branch"), gate.get("base"), gate.get("publishedHead"))
+        if expected != actual:
+            raise GitActionError(
+                "SIDE_EFFECT_RECOVERY_AMBIGUOUS",
+                "PR recovery checkpoint does not match current head/base/revision",
+                checkpoint=recovery_proof,
+                current={"headBranch": actual[0], "baseBranch": actual[1], "headSha": actual[2]},
+            )
+
     body_path = (
         _pr_input_path(root, body_file, label="PR body")
         if body_file is not None
@@ -740,15 +1021,25 @@ def execute_pr(
     title_identity = _input_identity(title_path) if title_path is not None else None
     existing = _open_prs(root, gate)
     if len(existing) > 1:
+        code = (
+            "SIDE_EFFECT_RECOVERY_AMBIGUOUS"
+            if recovery is not None
+            else "PR_AMBIGUOUS"
+        )
         raise GitActionError(
-            "PR_AMBIGUOUS",
+            code,
             "multiple open PRs match configured head/base",
             prs=[item.get("number") for item in existing],
         )
 
     reused = bool(existing)
+    recovered_existing = bool(
+        existing
+        and recovery is not None
+        and recovery.get("phase") != "prepared"
+    )
     if existing:
-        if not gate.get("reuseExisting"):
+        if not gate.get("reuseExisting") and not recovered_existing:
             raise GitActionError(
                 "PR_ALREADY_EXISTS",
                 "an open PR already exists and pull_request.reuse_existing=false",
@@ -757,17 +1048,11 @@ def execute_pr(
         item = existing[0]
     else:
         if body_file is None:
-            raise GitActionError(
-                "PR_BODY_REQUIRED",
-                "creating a PR requires --body-file",
-            )
+            raise GitActionError("PR_BODY_REQUIRED", "creating a PR requires --body-file")
         assert body_path is not None
         body = body_path.read_text(encoding="utf-8")
         if _input_identity(body_path) != body_identity:
-            raise GitActionError(
-                "PR_BODY_CHANGED",
-                "PR body file changed while being read",
-            )
+            raise GitActionError("PR_BODY_CHANGED", "PR body file changed while being read")
         if not body.strip():
             raise GitActionError("PR_BODY_INVALID", "PR body must not be empty")
 
@@ -782,33 +1067,24 @@ def execute_pr(
             assert title_path is not None
             title = title_path.read_text(encoding="utf-8").strip()
             if _input_identity(title_path) != title_identity:
-                raise GitActionError(
-                    "PR_TITLE_CHANGED",
-                    "PR title file changed while being read",
-                )
+                raise GitActionError("PR_TITLE_CHANGED", "PR title file changed while being read")
         if not title or "\n" in title or "\r" in title:
             raise GitActionError("PR_TITLE_INVALID", "PR title must be one non-empty line")
 
-        argv = [
-            str(gate["preferredTool"]),
-            "pr",
-            "create",
-            "--repo",
-            _repo_selector(gate),
-            "--head",
-            str(gate["branch"]),
-            "--base",
-            str(gate["base"]),
-            "--title",
-            title,
-            "--body-file",
-            "-",
-        ]
-        if gate.get("draft"):
-            argv.append("--draft")
-        # GitHub CLI поддерживает --body-file -; provider получает captured
-        # body через stdin и больше не переоткрывает mutable semantic input.
-        _run(root, argv, input_text=body)
+        proof = {
+            "headRepo": gate.get("headRepo"),
+            "headBranch": gate["branch"],
+            "baseBranch": gate["base"],
+            "headSha": gate["publishedHead"],
+        }
+        _side_effect_write(root, "GIT PR", kind=pr_side_effect_kind, phase="prepared", proof=proof)
+        _side_effect_write(
+            root, "GIT PR", kind=pr_side_effect_kind, phase="side_effect_started", proof=proof
+        )
+        try:
+            provider_create_pr(root, gate, title=title, body=body)
+        except ProviderError as exc:
+            raise GitActionError(exc.code, str(exc), **exc.details) from exc
 
         existing = _open_prs(root, gate)
         if len(existing) != 1:
@@ -818,13 +1094,44 @@ def execute_pr(
                 matchCount=len(existing),
             )
         item = existing[0]
+        observed = {
+            **proof,
+            "providerObjectId": item.get("number"),
+            "providerUrl": item.get("url"),
+        }
+        _side_effect_write(
+            root,
+            "GIT PR",
+            kind=pr_side_effect_kind,
+            phase="side_effect_observed",
+            proof=observed,
+        )
 
     _validate_provider_pr(gate, item)
     state_file = _persist_pr_state(root, gate=gate, item=item)
 
-    # Semantic title/body — одноразовый transport. Удаляем только после
-    # provider postcondition + durable pr-state; на любом предыдущем exception
-    # inputs остаются для диагностики/retry.
+    verified = {
+        "headRepo": gate.get("headRepo"),
+        "headBranch": gate["branch"],
+        "baseBranch": gate["base"],
+        "headSha": gate["publishedHead"],
+        "providerObjectId": item.get("number"),
+        "providerUrl": item.get("url"),
+        "recovered": recovered_existing,
+    }
+    # Обычный reuse уже существующего PR не пересекает mutation boundary:
+    # provider create не выполнялся, поэтому начинать SideEffectProof только
+    # терминальной фазой нельзя. Если checkpoint уже есть, это recovery/create
+    # lifecycle и его нужно довести до postconditions_verified.
+    if recovery is not None or not reused:
+        _side_effect_write(
+            root,
+            "GIT PR",
+            kind=pr_side_effect_kind,
+            phase="postconditions_verified",
+            proof=verified,
+        )
+
     cleanup_warnings = [
         warning
         for warning in (
@@ -843,13 +1150,13 @@ def execute_pr(
         "base": gate["base"],
         "head": gate["publishedHead"],
         "reused": reused,
+        "recovered": recovered_existing,
         "draft": bool(item.get("isDraft")),
         "stateFile": state_file,
     }
     if cleanup_warnings:
         result["cleanupWarnings"] = cleanup_warnings
     return result
-
 
 def execute_sync(root: Path) -> dict[str, Any]:
     gate = sync_preflight(root)
@@ -980,7 +1287,7 @@ def main() -> int:
             result = execute_sync(root)
         else:
             result = execute_pr_finish(root)
-    except (GitActionError, GitPreflightError, ConfigError, OSError, UnicodeError) as exc:
+    except (GitActionError, GitPreflightError, ProviderError, ConfigError, OSError, UnicodeError) as exc:
         code = getattr(exc, "code", "CONFIG_OR_IO_ERROR")
         result = {
             "status": "BLOCKED",

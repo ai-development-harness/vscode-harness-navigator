@@ -7,9 +7,13 @@ import shutil
 import subprocess
 import tempfile
 
+import step_next as step_next_module
 from command_dispatch import start_dispatch
 from execution_status import complete_command, start_execution
 from step_next import resolve_step_action, resolve_step_next
+
+
+from self_test_fixture import isolate_project_artifacts
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -161,6 +165,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="harness-step-next-") as tmp:
         root = Path(tmp)
         copy_tracked(root)
+        isolate_project_artifacts(root)
         reset_steps(root)
 
         run(root, "git", "init", "-q", "-b", "main")
@@ -227,6 +232,32 @@ def main() -> int:
         assert continuity["reasonCode"] == "RESUME_STEP_EXECUTION", continuity
         assert continuity["selected"]["source"] == "execution", continuity
         assert continuity["alternatives"][0]["command"] == "STEP PLAN STEP-007", continuity
+
+        # REVIEW PASS and completion are different durable facts. A PASS review
+        # with in-scope completion FAIL still requires canonical FIX; a semantic
+        # completion blocker must not be converted into new implementation work.
+        original_latest_review = step_next_module.latest_review
+        try:
+            step_next_module.latest_review = lambda *_args, **_kwargs: {
+                "verdict": "PASS",
+                "completionResult": "FAIL",
+            }
+            completion_fix = resolve_step_action(root, "STEP-005")
+            assert completion_fix["status"] == "PASS", completion_fix
+            assert completion_fix["command"] == "STEP FIX STEP-005", completion_fix
+
+            step_next_module.latest_review = lambda *_args, **_kwargs: {
+                "verdict": "PASS",
+                "completionResult": "BLOCKED",
+            }
+            completion_blocked = resolve_step_action(root, "STEP-005")
+            assert completion_blocked["status"] == "BLOCKED", completion_blocked
+            assert (
+                "current-review-completion-blocked"
+                in completion_blocked["reasons"]
+            ), completion_blocked
+        finally:
+            step_next_module.latest_review = original_latest_review
 
         # Dispatcher executes STEP NEXT itself; no next-step semantic skill is
         # needed to choose the recommendation.

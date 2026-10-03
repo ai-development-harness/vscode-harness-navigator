@@ -24,22 +24,81 @@ git --version
 
 Harness поддерживает Codex и Claude Code и **не требует их одновременной установки**. Для agent-session нужен выбранный пользователем runtime. Второй runtime может отсутствовать и не является blocker. Tracked configs обоих adapters всё равно валидируются Harness Integrity как release contract.
 
-## GitHub Pull Request capability
+Provider-neutral interface, capability negotiation, account sources и normalized events зафиксированы в [`RUNTIME_ADAPTER_CONTRACT.md`](RUNTIME_ADAPTER_CONTRACT.md) и `.harness/runtime-adapter-contract.json`. Unsupported runtime capability должна быть объявлена явно; отсутствие optional capability не маскируется моделью.
 
-`GIT CHECK`, `GIT COMMIT`, `GIT PUSH` и `GIT SYNC` используют обычный Git и не требуют GitHub CLI.
+## Pull Request capability
 
-Текущая PR integration поддерживает GitHub:
+`GIT CHECK`, `GIT COMMIT`, `GIT PUSH` и `GIT SYNC` используют обычный Git и не требуют provider CLI. Provider-specific CLI нужен только для `GIT PR` и `GIT PR FINISH`.
+
+Поддерживаются две deterministic пары provider/tool:
 
 ```toml
+# GitHub
 [pull_request]
 provider = "github"
 preferred_tool = "gh"
 ```
 
-Для `GIT PR` и `GIT PR FINISH` нужен установленный и авторизованный `gh` (`gh auth status`).
+```toml
+# Gitea, включая self-hosted
+[pull_request]
+provider = "gitea"
+preferred_tool = "tea"
+```
 
-Отсутствующий или неавторизованный `gh` не блокирует Harness целиком: он делает unavailable только GitHub Pull Request capability. Поэтому `gh` — optional capability dependency, а не global dependency Harness.
+Неизвестная или несовместимая пара fail-closed блокируется validation/preflight. Выбор provider/tool не делегируется модели.
+
+### GitHub CLI (`gh`)
+
+Проверка установки и авторизации:
+
+```bash
+gh --version
+gh auth status
+```
+
+Первичная авторизация:
+
+```bash
+gh auth login
+```
+
+Для custom GitHub host:
+
+```bash
+gh auth login --hostname <host>
+```
+
+Официальная документация:
+
+- https://cli.github.com/
+- https://cli.github.com/manual/gh_auth_login
+
+### Gitea Tea CLI (`tea`)
+
+Tea — provider CLI для Gitea. Harness определяет Gitea host из configured `push.remote` и выбирает **ровно один** Tea login profile, URL которого соответствует этому host. Это поддерживает публичные и self-hosted Gitea instances без hard-coded host.
+
+Проверка установки:
+
+```bash
+tea --version
+```
+
+Пример настройки self-hosted instance:
+
+```bash
+tea login add --name work --url https://git.example.com --token "<token>"
+```
+
+Если для одного host подходят несколько Tea login profiles, Harness возвращает `PROVIDER_LOGIN_AMBIGUOUS`, а не выбирает профиль случайно.
+
+Официальная документация:
+
+- https://about.gitea.com/products/tea/
+- https://gitea.com/gitea/tea
+
+Отсутствующий или неавторизованный provider CLI не блокирует Harness целиком: unavailable становится только Pull Request capability. Основные Git operations остаются provider-neutral.
 
 ## Диагностика
 
-`HARNESS DOCTOR` показывает required core dependencies, optional runtimes и GitHub PR capability раздельно. Общий status становится `BLOCKED` только из-за обязательной зависимости или повреждения Harness.
+`HARNESS DOCTOR` показывает required core dependencies, optional runtimes и configured Pull Request capability раздельно. Для PR capability различаются отсутствие CLI, отсутствие подходящей авторизации/login и provider-specific blocker. Общий status становится `BLOCKED` только из-за обязательной зависимости или повреждения Harness.

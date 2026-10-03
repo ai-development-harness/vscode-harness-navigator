@@ -30,6 +30,9 @@ from typing import Any
 from harness_update import UpdateError, adopt_legacy, apply_update, check_update
 
 
+from self_test_fixture import isolate_project_artifacts
+
+
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = Path(__file__).resolve().parent
 JOURNAL = ".harness/local/update-journal"
@@ -883,35 +886,68 @@ def test_unsafe_source_tree_path(tmp: Path) -> None:
         base={},
         target={".harness/tools/validate.py": PASS_VALIDATOR + "# v1.1.0\n"},
     )
-    evil_blob = subprocess.run(
-        ["git", "hash-object", "-w", "--stdin"], cwd=source, input="evil\n",
-        text=True, stdout=subprocess.PIPE, check=True,
-    ).stdout.strip()
-    inner = subprocess.run(
-        ["git", "mktree"], cwd=source, input=f"100644 blob {evil_blob}\tpwned.txt\n",
-        text=True, stdout=subprocess.PIPE, check=True,
-    ).stdout.strip()
+    # malformed tree собирается через NUL-delimited binary plumbing. Обычный
+    # line-oriented `mktree` зависит от platform text/newline semantics и на
+    # Git for Windows может менять имена соседних entries, из-за чего fixture
+    # падает раньше production parser с SOURCE_PATH_MISSING.
+    def git_bytes(*args: str, input_data: bytes | None = None) -> bytes:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=source,
+            input=input_data,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+        return proc.stdout
+
+    def mktree(entries: bytes) -> str:
+        return git_bytes("mktree", "-z", input_data=entries).decode("ascii").strip()
+
+    evil_blob = git_bytes("hash-object", "-w", "--stdin", input_data=b"evil\n").decode("ascii").strip()
+    inner = mktree(f"100644 blob {evil_blob}\tpwned.txt\0".encode("ascii"))
+
     tools_tree = run(source, "git", "rev-parse", "v1.1.0:.harness/tools").stdout.strip()
-    listing = run(source, "git", "ls-tree", tools_tree).stdout
-    evil_tools = subprocess.run(
-        ["git", "mktree"], cwd=source, input=listing + f"040000 tree {inner}\t..\n",
-        text=True, stdout=subprocess.PIPE, check=True,
-    ).stdout.strip()
+    listing = git_bytes("ls-tree", "-z", tools_tree)
+    evil_tools = mktree(
+        listing + f"040000 tree {inner}\t..\0".encode("ascii")
+    )
+
     harness_tree = run(source, "git", "rev-parse", "v1.1.0:.harness").stdout.strip()
-    harness_listing = run(source, "git", "ls-tree", harness_tree).stdout
-    harness_listing = re.sub(r"(040000 tree )[0-9a-f]+(\ttools)", rf"\g<1>{evil_tools}\2", harness_listing)
-    evil_harness = subprocess.run(
-        ["git", "mktree"], cwd=source, input=harness_listing, text=True, stdout=subprocess.PIPE, check=True,
-    ).stdout.strip()
-    root_listing = run(source, "git", "ls-tree", "v1.1.0").stdout
-    root_listing = re.sub(r"(040000 tree )[0-9a-f]+(\t\.harness)", rf"\g<1>{evil_harness}\2", root_listing)
-    evil_root = subprocess.run(
-        ["git", "mktree"], cwd=source, input=root_listing, text=True, stdout=subprocess.PIPE, check=True,
-    ).stdout.strip()
+    harness_listing = git_bytes("ls-tree", "-z", harness_tree)
+    harness_listing = re.sub(
+        rb"(040000 tree )[0-9a-f]+(\ttools\x00)",
+        lambda match: match.group(1) + evil_tools.encode("ascii") + match.group(2),
+        harness_listing,
+    )
+    evil_harness = mktree(harness_listing)
+
+    root_listing = git_bytes("ls-tree", "-z", "v1.1.0")
+    root_listing = re.sub(
+        rb"(040000 tree )[0-9a-f]+(\t\.harness\x00)",
+        lambda match: match.group(1) + evil_harness.encode("ascii") + match.group(2),
+        root_listing,
+    )
+    evil_root = mktree(root_listing)
     evil_commit = run(source, "git", "commit-tree", evil_root, "-p", "v1.1.0", "-m", "evil").stdout.strip()
     run(source, "git", "tag", "-f", "v1.1.0", evil_commit)
     expect_error("UNSAFE_SOURCE_PATH", check_update, project, source_url=str(source))
     assert not (tmp / "pwned.txt").exists() and not (project.parent / "pwned.txt").exists()
+
+
+def test_git_line_endings_do_not_create_release_drift(tmp: Path) -> None:
+    """Git checkout CRLF/LF conversion не является Harness-owned drift."""
+    source, project = synthetic_pair(tmp, base={}, target={})
+    managed = project / ".harness/tools/validate.py"
+    canonical = managed.read_bytes()
+    assert b"\r\n" not in canonical
+    managed.write_bytes(canonical.replace(b"\n", b"\r\n"))
+
+    checked = check_update(project, source_url=str(source))
+    assert checked["status"] == "PASS", checked
+
+    managed.write_bytes(managed.read_bytes() + b"# substantive local drift\r\n")
+    expect_error("CURRENT_RELEASE_DRIFT", check_update, project, source_url=str(source))
 
 
 # --- Real template copy: pre-INIT template change (#101) ----------------------
@@ -976,6 +1012,7 @@ def test_preinit_template_change(tmp: Path) -> None:
     source = tmp / "source"
     source.mkdir()
     copy_tracked(source)
+    isolate_project_artifacts(source)
     git_init(source)
     set_release(source, first, (current, f"v{first}"))
     commit_all(source, f"v{first}")
@@ -1063,6 +1100,7 @@ CASES = [
     test_adopt_blocks_harness_owned_drift,
     test_graph_ignores_tag_named_like_branch,
     test_unsafe_source_tree_path,
+    test_git_line_endings_do_not_create_release_drift,
     test_preinit_template_change,
     test_graph_connectivity,
     test_local_state_rollback_is_byte_exact,

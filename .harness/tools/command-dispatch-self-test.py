@@ -18,6 +18,9 @@ from command_transitions import load_transition_table, validate_transition_table
 from execution_status import load_status
 
 
+from self_test_fixture import isolate_project_artifacts
+
+
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -57,6 +60,7 @@ def copy_tracked(target: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
 
+    isolate_project_artifacts(target)
     run(target, "git", "init", "-q", "-b", "main")
     run(target, "git", "config", "user.email", "dispatcher@example.invalid")
     run(target, "git", "config", "user.name", "Dispatcher Test")

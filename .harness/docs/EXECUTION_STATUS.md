@@ -516,3 +516,8 @@ interrupted current command
 new independent command
 → new execution record, old interrupted record remains
 ```
+
+
+## Side-effect checkpoint
+
+Mutation-команды могут хранить optional `current.context.sideEffect` по contract из [`SIDE_EFFECT_RECOVERY.md`](SIDE_EFFECT_RECOVERY.md). Это bounded per-attempt proof, а не новый журнал и не command transition state. CTS остаётся source of truth для переходов; execution state отвечает за resume invocation; checkpoint нужен только для reconciliation внешнего side effect после interruption.

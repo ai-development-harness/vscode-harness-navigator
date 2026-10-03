@@ -4,6 +4,9 @@
 
 Skill — это не просто Markdown-справка. `SKILL.md` задаёт повторяемый workflow, а рядом могут лежать references, templates и scripts. Поэтому сторонний skill следует рассматривать примерно как dependency: сначала найти и изучить, затем осознанно установить. OpenAI Agent Skills используют папку с `SKILL.md` и supporting resources; это хорошо подходит для хранения в Git рядом с проектом.
 
+Каждый tracked skill bundle должен содержать `UPSTREAM.md`. Для project-native/core skill он фиксирует `Source: project-native`, дату фиксации provenance, references и rationale; для third-party skill — exact upstream/ref/license, inspection notes и локальные адаптации. Это provenance metadata, а не альтернативный источник workflow semantics: исполняемая инструкция остаётся в `SKILL.md`.
+
+
 ## Команды
 
 ### `SKILL FIND: <описание>`

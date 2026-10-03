@@ -2,7 +2,7 @@
 name: security-reviewer
 description: Perform adversarial security review for security-sensitive changes only.
 model: opus
-effort: high
+effort: max
 permissionMode: plan
 ---
 

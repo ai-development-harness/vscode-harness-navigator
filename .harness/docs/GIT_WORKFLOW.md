@@ -116,11 +116,15 @@ Standalone `GIT PUSH` остаётся semantic boundary для проверки
 after_push = "never"
 ```
 
-Для GitHub PR Harness предпочитает `gh`. Если CLI недоступен/не авторизован, push не объявляется неуспешным, но PR creation показывается как отдельный blocker.
+Provider для Pull Request выбирается только из `.harness/git-policy.toml`: `github → gh`, `gitea → tea`. Это deterministic policy, модель provider/tool не выбирает. Если provider CLI отсутствует или не настроен для repository host, успешный push не объявляется неуспешным: PR operation возвращает отдельный actionable blocker с stable reason code и инструкцией по установке/авторизации.
 
 ### `GIT PR`
 
-`GIT PR` можно вызвать отдельно. Модель формирует только semantic body (и title, если `title_from_commit=false`) в `.harness/local/git/**`, затем вызывает `git-action.py pr`. Executor повторяет preflight, читает semantic input в memory snapshot, ищет exact open head/base PR через configured provider, переиспользует его по policy либо создаёт новый. При create captured body передаётся `gh pr create --body-file -` через stdin, поэтому provider не переоткрывает mutable `pr-body.md`; title также используется как captured string. После этого executor проверяет provider `headRefOid` против exact published HEAD и сам сохраняет `.harness/local/git/pr-state.json`. Только после этих postconditions executor пытается удалить exact validated `pr-body.md` / `pr-title.txt`; symlink paths запрещены, changed/undeletable inputs сохраняются с cleanup warning. Secondary cleanup failure не превращает уже созданный/reused PR в BLOCKED. `pr-state.json` остаётся recovery state до успешного `GIT PR FINISH`. Default body template — `.github/pull_request_template.md`.
+`GIT PR` можно вызвать отдельно. Модель формирует только semantic body (и title, если `title_from_commit=false`) в `.harness/local/git/**`, затем вызывает `git-action.py pr`. Executor повторяет preflight, читает semantic input в memory snapshot, разрешает provider repository из configured `push.remote`, проверяет provider CLI/login и ищет exact open head/base PR. Для GitHub используется `gh`; для Gitea — `tea`, включая self-hosted instances и exact-host Tea login selection.
+
+При create captured body передаётся provider CLI через stdin: GitHub использует `gh pr create --body-file -`, Gitea — `tea pulls create --description-file -`. Provider CLI не переоткрывает mutable `pr-body.md`; title также используется как captured string. После create/reuse executor проверяет normalized provider `headRefOid` против exact published HEAD и сам сохраняет `.harness/local/git/pr-state.json`. Только после этих postconditions executor пытается удалить exact validated `pr-body.md` / `pr-title.txt`; symlink paths запрещены, changed/undeletable inputs сохраняются с cleanup warning. Secondary cleanup failure не превращает уже созданный/reused PR в BLOCKED. `pr-state.json` остаётся recovery state до успешного `GIT PR FINISH`. Default body template — `.github/pull_request_template.md`.
+
+Self-hosted remote поддерживаются для HTTPS, SCP-like SSH и `ssh://` forms. Для Gitea несколько Tea profiles одного host дают `PROVIDER_LOGIN_AMBIGUOUS`; Harness не выбирает произвольный login.
 
 ### `GIT PR FINISH`
 
@@ -130,7 +134,7 @@ after_push = "never"
 python3 .harness/tools/git-preflight.py pr-finish --json
 ```
 
-PASS требует чистое рабочее дерево, состояние provider `MERGED`, совпадение текущего локального HEAD с GitHub `headRefOid`, согласованный local PR state и существующую return branch без local-ahead/divergence. Это позволяет безопасно завершать как обычный merge, так и squash/rebase merge.
+PASS требует чистое рабочее дерево, normalized состояние provider `MERGED`, совпадение текущего локального HEAD с provider `headRefOid`, согласованный local PR state и существующую return branch без local-ahead/divergence. Provider state читается через тот же configured GitHub/Gitea adapter. Это позволяет безопасно завершать как обычный merge, так и squash/rebase merge.
 
 После PASS exact ordered plan исполняет `git-action.py pr-finish`: switch → optional ff-only sync → удаление локальной PR-ветки → postconditions → удаление local PR state. При обычном merge используется `git branch -d`, после squash/rebase — compare-and-swap `git update-ref -d <ref> <verified-head-oid>`. `git branch -D`, удаление remote branch, reset/rebase запрещены.
 
@@ -193,3 +197,8 @@ Harness никогда по умолчанию не выполняет:
 Для typo/formatting/другого подтверждённого micro-change STEP не обязателен. Если пользователь уже внёс правку, достаточно `GIT CHECK > COMMIT` либо тех же команд по отдельности. Git operator обязан проверить, что diff действительно не меняет behavior/API/data/security/architecture/dependencies. Подробности: [`QUICK_CHANGES.md`](QUICK_CHANGES.md).
 
 Язык commit message берётся из `.harness/manifest.yaml` → `language.commitMessages`.
+
+
+## Durable side-effect recovery
+
+`GIT COMMIT`, `GIT PUSH` и `GIT PR` используют bounded checkpoint в active execution. После interruption executor сначала сверяет Git/provider facts и только затем решает, можно ли retry. Matching commit/push/PR не создаётся повторно; неоднозначное состояние блокируется с `SIDE_EFFECT_RECOVERY_AMBIGUOUS`. Полная модель: [`SIDE_EFFECT_RECOVERY.md`](SIDE_EFFECT_RECOVERY.md).

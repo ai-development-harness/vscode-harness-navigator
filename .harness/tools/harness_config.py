@@ -267,6 +267,10 @@ def requirements_directory(root: Path) -> Path:
     return manifest_path(root, "sources.requirements")
 
 
+def principles_directory(root: Path) -> Path:
+    return manifest_path(root, "sources.principles")
+
+
 def adr_directory(root: Path) -> Path:
     return manifest_path(root, "sources.adrDirectory")
 

@@ -76,6 +76,7 @@ Validator проверяет protocol/repository invariants, но **не зам�
 - tracked files через реальный Git index;
 - update graph и release metadata consistency;
 - обязательные protocol files, skills, agents и commands;
+- для каждого `required_skills` — соседний `UPSTREAM.md` с `Source: project-native`, чтобы core workflow не терял provenance;
 - active project document model;
 - CTS graph и command surface;
 - deprecated command references;
@@ -678,7 +679,7 @@ Engine проверяет:
 - exact ahead/behind;
 - unconditional remote-ahead blocker при `force=never`;
 - published PR head equality;
-- PR base/template/tool availability;
+- PR base/template/provider/tool availability, включая строгие пары `github→gh` и `gitea→tea`;
 - merged-PR provider state, local PR state, safe return-branch ff-only и non-force branch deletion для `pr-finish`;
 - ff-only sync;
 - Harness validator перед mutation, если это требует policy.
@@ -689,7 +690,8 @@ Engine проверяет:
 
 Файлы:
 
-- `.harness/tools/git_action.py` — engine;
+- `.harness/tools/git_action.py` — mutation engine;
+- `.harness/tools/pr_provider.py` — deterministic GitHub/Gitea provider adapters;
 - `.harness/tools/git-action.py` — CLI wrapper.
 
 Preflight отвечает на вопрос «разрешена ли mutation», executor — «как выполнить уже одобренную mechanical mutation и доказать postcondition».
@@ -705,11 +707,11 @@ python3 .harness/tools/git-action.py sync --json
 python3 .harness/tools/git-action.py pr-finish --json
 ```
 
-Executor повторяет canonical preflight непосредственно перед mutation. Semantic commit/PR inputs сначала читаются и проверяются Harness-ом как exact snapshot; primary `git`/`gh` consumer получает captured text через stdin (`git commit -F -`, `gh pr create --body-file -`) и не переоткрывает mutable source path. Original local input после postcondition очищается отдельно по identity-safe lifecycle.
+Executor повторяет canonical preflight непосредственно перед mutation. Semantic commit/PR inputs сначала читаются и проверяются Harness-ом как exact snapshot; primary consumer получает captured text через stdin (`git commit -F -`, `gh pr create --body-file -`, `tea pulls create --description-file -`) и не переоткрывает mutable source path. Provider adapter детерминированно разрешает remote host/repository, проверяет CLI/auth/login и нормализует GitHub/Gitea PR payload. Original local input после postcondition очищается отдельно по identity-safe lifecycle.
 
 - COMMIT создаёт только exact `requiredBranch`, если protected-branch preflight потребовал его; message file разрешён только под `.harness/local/git/`; postcondition — новый HEAD.
 - PUSH исполняет только returned non-force argv; postcondition — configured remote branch совпадает с local HEAD.
-- PR принимает semantic body/title только из `.harness/local/git/**`, сам ищет/reuse/create provider PR, сверяет exact head OID и сохраняет local PR state.
+- PR принимает semantic body/title только из `.harness/local/git/**`, сам ищет/reuse/create provider PR через `github→gh` или `gitea→tea`, сверяет exact head OID и сохраняет local PR state. Self-hosted Gitea login выбирается только по exact remote host; неоднозначность блокируется.
 - SYNC разрешает только report/noop или exact `git merge --ff-only`; postcondition — local HEAD совпадает с configured remote.
 - PR FINISH исполняет ordered exact steps, проверяет return branch и удаление verified local PR branch; local PR state удаляется только после полного успеха.
 
@@ -1350,3 +1352,331 @@ python3 .harness/tools/finalize-project-init.py \
 python3 .harness/tools/validate-command.py --json -- '<command-or-chain>'
 python3 .harness/tools/check-command-references.py --json
 ```
+
+---
+
+# Runtime Adapter Contract validator
+
+## Файл / Файлы
+
+- `.harness/runtime-adapter-contract.json`
+- `.harness/tools/runtime_adapter_contract.py`
+- `.harness/tools/runtime-adapter-contract-self-test.py`
+
+## Роль
+
+Проверяет provider-neutral boundary между Harness control plane и runtime adapters Codex/Claude: lifecycle methods, capability registry, support states и normalized event types.
+
+Этот contract валидируется из `project_integrity.py`, поэтому malformed runtime schema блокирует обычный Harness integrity gate.
+
+## CLI
+
+```bash
+python3 .harness/tools/runtime_adapter_contract.py --json
+python3 .harness/tools/runtime_adapter_contract.py --runtime codex --json
+python3 .harness/tools/runtime_adapter_contract.py --runtime claude --json
+```
+
+## Exit codes
+
+- `0` — PASS;
+- `1` — deterministic schema/capability violation;
+- `2` — BLOCKED: contract нельзя безопасно прочитать.
+
+## Что проверяет
+
+- exact `contractId` и `schemaVersion`;
+- закрытые registries lifecycle methods/capabilities/events/support states;
+- explicit capability state `native|synthesized|unsupported`;
+- полноту mappings каждого adapter;
+- account source без credential persistence;
+- invariants: command semantics принадлежат control plane, provider metadata optional, secrets persistence forbidden;
+- normalized runtime events и запрет неизвестных полей.
+
+Подробная семантика: [`RUNTIME_ADAPTER_CONTRACT.md`](RUNTIME_ADAPTER_CONTRACT.md).
+
+---
+
+# Review Contract v2 structured findings
+
+## Файл / Файлы
+
+- `.harness/tools/review_findings.py`
+- `.harness/tools/review-findings-self-test.py`
+
+## Роль
+
+`review_findings.py` задаёт machine-readable handoff `REVIEW → FIX`. Новый STEP REVIEW по-прежнему хранится как immutable Markdown, но внутри него есть отдельный canonical JSON-блок `## Machine-readable findings`.
+
+Human-readable `## Findings` нужен человеку. FIX/orchestration не должен повторно интерпретировать этот prose: он использует deterministic parser.
+
+## Contract finding v2
+
+Каждый finding содержит:
+
+- `id: F-NNN`;
+- `severity: critical|high|medium|low`;
+- `category: implementation|evidence|contract`;
+- `location.path` и optional `location.line`;
+- `scenario.given/when/then`;
+- `expected` и `observed`;
+- `impact`;
+- `repair.direction` и `repair.admissibleAlternatives[]`;
+- `constraints[]`;
+- `evidence[]`;
+- deterministic `fingerprint: sha256:...`.
+
+Fingerprint вычисляется из factual identity: `category + location + scenario + expected + observed`. ID, title и wording repair guidance не входят в fingerprint. Поэтому тот же дефект после FIX можно узнать даже при переформулировке текста.
+
+Duplicate fingerprints в одном report запрещены.
+
+## CLI
+
+```bash
+python3 .harness/tools/review_findings.py --step STEP-NNN --json
+```
+
+Команда возвращает latest Review Contract v2 report и normalized findings. Если latest review legacy v1, malformed или fingerprint не совпадает с содержимым, parser возвращает BLOCKED и non-zero exit code.
+
+## Совместимость
+
+Historical Review Contract v1 reports не переписываются и продолжают валидироваться старым human-readable contract. Writer новых STEP REVIEW всегда добавляет `finding_contract: 2` и canonical JSON section.
+
+FIX не должен угадывать structured fields из legacy report. Для deterministic REVIEW→FIX handoff нужен свежий v2 REVIEW.
+
+## Fail-closed проверки
+
+Validator `review_contract.py` для v2 дополнительно проверяет:
+
+- наличие и JSON-синтаксис machine section;
+- отсутствие legacy/partial transport forms внутри v2: `location` и `scenario` обязаны быть objects, `expected`/`observed` обязательны, legacy `fixDirection` не принимается;
+- exact schemaVersion;
+- supported fields/enums;
+- id sequence `F-001...`;
+- deterministic fingerprint;
+- отсутствие duplicate fingerprints;
+- совпадение количества human и machine findings;
+- совпадение `Severity` / `Category` между обеими формами;
+- прежние verdict composition rules PASS/FAIL/BLOCKED.
+
+Self-test отдельно доказывает stable fingerprint при rename/repair rewording и его изменение при factual change.
+
+---
+
+# Side-effect recovery contract validator
+
+## Файл / Файлы
+
+- `.harness/tools/side_effect_recovery.py`
+- `.harness/tools/side-effect-recovery-self-test.py`
+- persistence boundary: `.harness/tools/execution_status.py`
+
+## Роль
+
+Проверяет bounded internal checkpoint для mutation-команд. Contract не разрешает command transitions и не выполняет mutation; он валидирует version/kind/phase/attempt/proof и запрещает oversized или secret-like proof metadata.
+
+## Что проверяет
+
+- contract version;
+- известный canonical kind `git_commit|git_push|provider_pr|harness_update|file_write`;
+- legacy `github_pr` принимается только для чтения/завершения уже сохранённого PR recovery checkpoint; новые PR checkpoints используют `provider_pr`;
+- monotonic phases одной attempt;
+- новая attempt начинается с `prepared`;
+- proof — JSON object не более 8 KiB;
+- credential/token/password/secret-like keys не сохраняются;
+- checkpoint восстанавливается из execution-status после process restart.
+
+## Self-test
+
+~~~bash
+python3 .harness/tools/side-effect-recovery-self-test.py
+~~~
+
+Synthetic fault injection покрывает crash before side effect, unknown outcome, crash after applied side effect и crash between observation/completion checkpoint.
+
+Runtime reconciliation Git/provider подробно описан в [`SIDE_EFFECT_RECOVERY.md`](SIDE_EFFECT_RECOVERY.md).
+
+
+---
+
+# Adaptive repair-cycle comparator
+
+## Файл / Файлы
+
+- `.harness/tools/repair_cycle.py`
+- `.harness/tools/repair-cycle-self-test.py`
+
+## Роль
+
+Сравнивает два consecutive Review Contract v2 report по stable fingerprints, `reviewed_revision`, `contract_basis`, `verification_basis` и optional factual `verification_status`. Возвращает bounded telemetry и conservative stop decision `continue|NO_PROGRESS|REPEATED_FINDINGS|REGRESSION`.
+
+## Self-test
+
+```bash
+python3 .harness/tools/repair-cycle-self-test.py
+```
+
+Self-test покрывает progress, no-progress, repeated findings, higher-severity regression, worsening factual Verification status, historical report без status и scope-change guard. Resolver-level применение stored telemetry покрывается `execution-self-test.py`.
+
+Политика описана в [`ADAPTIVE_REPAIR_STOPPING.md`](ADAPTIVE_REPAIR_STOPPING.md).
+
+
+---
+
+# Runtime adapter conformance / scripted orchestration
+
+## Файл / Файлы
+
+- `.harness/tools/runtime_adapter_conformance.py`
+- `.harness/tools/scripted_runtime.py`
+- `.harness/tools/orchestration-harness-self-test.py`
+
+## Роль
+
+Общая deterministic conformance suite для declared runtime adapters и test-only ScriptedRuntime с exact event sequence/fault injection. Recovery tests ведут exact ordered journal side-effect applications, поэтому duplicate mutation при resume не может быть скрыта дедупликацией identity. Сеть, API key и real Claude/Codex process не требуются.
+
+## Self-test
+
+```bash
+python3 .harness/tools/orchestration-harness-self-test.py
+```
+
+Test автоматически входит в `run-self-tests.py`. Real-runtime integration вынесена за deterministic CI boundary. Подробнее: [`DETERMINISTIC_TEST_HARNESS.md`](DETERMINISTIC_TEST_HARNESS.md).
+
+
+---
+
+# Completion / Convergence Gate
+
+## Файл / Файлы
+
+- CLI: `.harness/tools/completion-gate.py`
+- engine: `.harness/tools/completion_gate.py`
+- regression: `.harness/tools/completion-gate-self-test.py`
+
+## Роль
+
+Deterministic precheck перед semantic convergence judgement STEP. Gate не
+повторяет code review: он проверяет, можно ли вообще оценивать полноту на
+текущем contract/evidence basis.
+
+## Когда использовать
+
+- внутри `STEP REVIEW` до semantic completion judgement;
+- при диагностике REVIEW PASS, который не закрыл STEP;
+- при проверке stale/missing Verification evidence.
+
+## Что проверяет
+
+- machine-discoverable Acceptance criteria;
+- generated Verification status;
+- совпадение current Verification contract hash с basis evidence;
+- совпадение current product/worktree subject revision с revision, на которой
+  запускалась Verification; сам STEP Evidence исключается из subject revision,
+  поэтому запись generated evidence не делает proof stale;
+- current Ready/prerequisite contract;
+- structured completion result `PASS | FAIL | BLOCKED`.
+
+## CLI
+
+```bash
+python3 .harness/tools/completion-gate.py STEP-024 --json
+```
+
+## Exit codes
+
+- `0` — deterministic precheck PASS;
+- `1` — BLOCKED/stale/missing prerequisite;
+- `2` — argparse error.
+
+## Граница ответственности
+
+Deterministic gate не решает, действительно ли implementation/evidence
+семантически покрывают criterion. Это делает reviewer один раз. Writer затем
+нормализует completion findings, сохраняет их в immutable REVIEW report и
+использует существующий FIX/BLOCKED routing без второго lifecycle.
+
+
+---
+
+# STEP Execution Groups
+
+## Файл / Файлы
+
+- engine: `.harness/tools/execution_groups.py`;
+- CLI: `.harness/tools/execution-groups.py`;
+- regression: `.harness/tools/execution-groups-self-test.py`.
+
+## Роль
+
+Валидирует optional machine-readable DAG внутри STEP Implementation plan и строит deterministic sequential scheduling projection.
+
+## Что проверяет
+
+- stable group IDs и exact schema;
+- покрытие каждого numbered Implementation plan step ровно одной group;
+- unknown/self dependencies и cycles;
+- repository-relative explicit mutation prefixes;
+- обязательные group verification responsibilities;
+- overlap mutation surface у независимых `parallel=true` groups.
+
+`parallel=true` не запускает concurrent agents. В v1 это capability metadata; implementer следует `topologicalOrder` последовательно.
+
+## CLI
+
+```bash
+python3 .harness/tools/execution-groups.py STEP-024 --json
+```
+
+## Exit codes
+
+- `0` — graph отсутствует либо валиден, projection построена;
+- `1` — malformed/unsafe graph или STEP нельзя прочитать;
+- `2` — argparse error.
+
+Подробная schema и conflict semantics: [`EXECUTION_GROUPS.md`](EXECUTION_GROUPS.md).
+
+
+---
+
+# Planning impact / evolution analysis
+
+## Файл / Файлы
+
+- engine: `.harness/tools/impact_analysis.py`;
+- CLI: `.harness/tools/impact-analysis.py`;
+- regression: `.harness/tools/impact-analysis-self-test.py`;
+- authoritative fingerprint source: `.harness/tools/planning_contract.py → planning_context_basis / planning_context_components`.
+
+## Роль
+
+Объясняет, какой canonical planning component сделал Ready plan stale, и показывает affected STEP surface после изменения REQ/ADR/STEP/OQ/PRN/architecture reference. Tool не создаёт второй freshness engine: окончательное решение fresh/stale по-прежнему определяется `planning_context_basis`.
+
+## CLI
+
+```bash
+python3 .harness/tools/impact-analysis.py --step STEP-018 --json
+python3 .harness/tools/impact-analysis.py --changed REQ-007 --json
+python3 .harness/tools/impact-analysis.py --changed ADR-012 --changed REQ-007 --json
+```
+
+`--step` и `--changed` взаимоисключающие.
+
+## Что проверяет / возвращает
+
+- current Ready basis против stored `plan.context_basis`;
+- per-component fingerprints, сохранённые при Ready stamp;
+- exact cause `added | removed | changed`;
+- affected STEP и remediation `STEP PLAN STEP-NNN`;
+- superseding ADR propagation через `superseded_by`;
+- legacy Ready plan без component fingerprints остаётся fail-safe stale с generic `PLANNING_CONTEXT changed`.
+
+Impact analysis read-only: downstream artifacts, reviews и completed history не переписываются.
+
+## Exit codes
+
+- `0` — запрос корректно вычислен, даже если найден stale plan;
+- `1` — canonical context нельзя безопасно прочитать/разрешить;
+- `2` — argparse error.
+
+Подробная lifecycle policy: [`EVOLUTION_SEMANTICS.md`](EVOLUTION_SEMANTICS.md).
