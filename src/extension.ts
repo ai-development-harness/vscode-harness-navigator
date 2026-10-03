@@ -10,6 +10,7 @@ import {
   runSetSortOrder,
 } from './views/artifactsView';
 import { FocusTreeDataProvider } from './views/focusView';
+import { ArtifactPriorityDecorationProvider } from './views/artifactPriorityDecorationProvider';
 import { SummaryTreeDataProvider } from './views/summaryView';
 import { HarnessStatusBar, type StatusBarSnapshot } from './views/statusBar';
 import { registerGoToArtifactCommand } from './commands/goToArtifact';
@@ -54,6 +55,7 @@ let activeProjectStates: ProjectStateService | undefined;
 let activeArtifactsTreeView: vscode.TreeView<unknown> | undefined;
 let activeFocusTreeView: vscode.TreeView<unknown> | undefined;
 let activeArtifactsProvider: ArtifactsTreeDataProvider | undefined;
+let activeArtifactPriorityDecorationProvider: ArtifactPriorityDecorationProvider | undefined;
 let activeFocusProvider: FocusTreeDataProvider | undefined;
 let activeSummaryProvider: SummaryTreeDataProvider | undefined;
 let activeStatusBar: HarnessStatusBar | undefined;
@@ -102,6 +104,12 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
   );
 
   const artifactsProvider = registry.register(new ArtifactsTreeDataProvider(projectStates));
+  const artifactPriorityDecorationProvider = registry.register(
+    new ArtifactPriorityDecorationProvider(projectStates),
+  );
+  registry.register(
+    vscode.window.registerFileDecorationProvider(artifactPriorityDecorationProvider),
+  );
   const artifactsTreeView = registry.register(
     vscode.window.createTreeView('harnessNavigator.artifacts', {
       treeDataProvider: artifactsProvider,
@@ -249,6 +257,7 @@ export function activate(context: vscode.ExtensionContext): ActivationResult {
   activeArtifactsTreeView = artifactsTreeView;
   activeFocusTreeView = focusTreeView;
   activeArtifactsProvider = artifactsProvider;
+  activeArtifactPriorityDecorationProvider = artifactPriorityDecorationProvider;
   activeFocusProvider = focusProvider;
   activeSummaryProvider = summaryProvider;
   activeStatusBar = statusBar;
@@ -413,6 +422,20 @@ export function getArtifactsViewArtifactItems(): readonly {
     artifact: node.artifact,
     item: provider.getTreeItem({ type: 'artifact', folder: node.folder, artifact: node.artifact }),
   }));
+}
+
+/**
+ * Узкий read-only seam возвращает decoration уже построенного leaf Artifacts View.
+ * Он позволяет Extension Host тесту проверить VS Code API без копирования lookup-логики provider-а.
+ */
+export function getArtifactsViewPriorityDecoration(id: string): vscode.FileDecoration | undefined {
+  const provider = activeArtifactPriorityDecorationProvider;
+  const item = getArtifactsViewArtifactItems().find(
+    (candidate) => candidate.artifact.id === id,
+  )?.item;
+  return provider === undefined || item?.resourceUri === undefined
+    ? undefined
+    : provider.provideFileDecoration(item.resourceUri);
 }
 
 /** Read-only Focus counterpart: regression-тест проверяет отсутствие semantic override. */

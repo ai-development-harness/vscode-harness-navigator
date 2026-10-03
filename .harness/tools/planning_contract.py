@@ -143,6 +143,20 @@ def adr_ids(task: dict[str, Any]) -> list[str]:
     return _list(task["frontmatter"], "adrs")
 
 
+def _adr_status_allows_readiness(task: dict[str, Any], status: Any) -> bool:
+    """Разрешить ADR prerequisite для Ready/IMPLEMENT boundary.
+
+    Обычный STEP может опираться только на accepted ADR. Для STEP type=adr
+    linked proposed ADR является результатом самого шага: требовать accepted
+    до начала выполнения создало бы циклический prerequisite. Completion proof
+    по-прежнему требует accepted, поэтому исключение действует только до
+    завершения ADR STEP.
+    """
+    return status == "accepted" or (
+        task["frontmatter"].get("type") == "adr" and status == "proposed"
+    )
+
+
 def architecture_refs(task: dict[str, Any]) -> list[str]:
     return _list(task["frontmatter"], "architecture_refs")
 
@@ -596,7 +610,10 @@ def implementation_prerequisite_failures(root: Path, step_id: str) -> list[str]:
         except (DocumentError, OSError, ValueError) as exc:
             failures.append(f"adr-unavailable:{adr_id}:{exc}")
             continue
-        if adr["frontmatter"].get("status") != "accepted":
+        if not _adr_status_allows_readiness(
+            task,
+            adr["frontmatter"].get("status"),
+        ):
             failures.append(f"adr-not-accepted:{adr_id}")
 
     for item in relevant_open_questions(root, task):
@@ -881,7 +898,13 @@ def _validate_task(root: Path, step_id: str, task: dict[str, Any], errors: list[
     for adr_id in adr_ids(task):
         try:
             adr = _parse_canonical_document(canonical_adr_path(root, adr_id), adr_id)
-            if meta.get("plan", {}).get("status") == "ready" and adr["frontmatter"].get("status") != "accepted":
+            if (
+                meta.get("plan", {}).get("status") == "ready"
+                and not _adr_status_allows_readiness(
+                    task,
+                    adr["frontmatter"].get("status"),
+                )
+            ):
                 errors.append(f"{prefix}: ready plan references non-accepted {adr_id}")
         except (DocumentError, ValueError, OSError) as exc:
             errors.append(f"{prefix}: {exc}")

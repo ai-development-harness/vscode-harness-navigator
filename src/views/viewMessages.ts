@@ -17,6 +17,7 @@ const MESSAGES = {
   // внутри переводимого текста вело бы RU-пользователя в никуда.
   filteredEmpty: 'No artifacts match the active filter. Clear the active filter to see them all.',
   statusTooltip: 'Status: {0}',
+  priorityTooltip: 'Priority: {0}',
   openArtifact: 'Open Harness artifact',
   focusEmpty: 'There are no in-progress or blocked STEP artifacts, and no open OQ artifacts.',
   focusActiveGroup: 'Active STEP',

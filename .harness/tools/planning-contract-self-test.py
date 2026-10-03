@@ -12,6 +12,7 @@ import tempfile
 
 from document_contract import content_hash
 from planning_contract import (
+    implementation_prerequisite_failures,
     init_review_basis,
     latest_matching_init_review,
     latest_matching_planning_review,
@@ -84,23 +85,33 @@ Self-test.
 """
 
 
-def adr(status: str = "accepted") -> str:
+def adr(
+    status: str = "accepted",
+    *,
+    adr_id: str = "ADR-1000",
+    requirements: list[str] | None = None,
+    steps: list[str] | None = None,
+) -> str:
+    requirements = ["REQ-1000"] if requirements is None else requirements
+    steps = ["STEP-1000"] if steps is None else steps
+
+    def block(name: str, values: list[str]) -> str:
+        if not values:
+            return f"{name}: []\n"
+        return f"{name}:\n" + "".join(f"  - {value}\n" for value in values)
+
     return f"""---
 schema: 1
-id: ADR-1000
+id: {adr_id}
 status: {status}
 date: 2026-09-21
 deciders:
   - test
 supersedes: []
 superseded_by: []
-requirements:
-  - REQ-1000
-steps:
-  - STEP-1000
----
+{block("requirements", requirements)}{block("steps", steps)}---
 
-# ADR-1000 — Test decision
+# {adr_id} — Test decision
 
 ## Context
 
@@ -550,6 +561,70 @@ def main() -> int:
         make_ready(root, "STEP-1000", depends=["STEP-1001"], adrs=["ADR-1000"])
         errors = validate_planning_contracts(root)
         assert not errors, errors
+
+        # Regression: ADR STEP планирует собственный proposed ADR как output.
+        # Ready validation и implement-readiness не должны требовать accepted
+        # до выполнения самого ADR STEP; completion proof потребует accepted позже.
+        write(
+            root / "spec/adr/ADR-1100-own.md",
+            adr(
+                "proposed",
+                adr_id="ADR-1100",
+                requirements=[],
+                steps=["STEP-1100"],
+            ),
+        )
+        make_ready(
+            root,
+            "STEP-1100",
+            step_type="adr",
+            requirements=[],
+            adrs=["ADR-1100"],
+            architecture_refs=[],
+        )
+        own_adr_errors = validate_planning_contracts(root)
+        assert not any(
+            "ready plan references non-accepted ADR-1100" in item
+            for item in own_adr_errors
+        ), own_adr_errors
+        own_adr_readiness = implementation_prerequisite_failures(root, "STEP-1100")
+        assert "adr-not-accepted:ADR-1100" not in own_adr_readiness, own_adr_readiness
+
+        # External proposed ADR остаётся blocker для обычного STEP: исключение
+        # относится только к STEP type=adr, который производит решение.
+        write(
+            root / "spec/adr/ADR-1101-external.md",
+            adr(
+                "proposed",
+                adr_id="ADR-1101",
+                requirements=[],
+                steps=["STEP-1101"],
+            ),
+        )
+        make_ready(
+            root,
+            "STEP-1101",
+            step_type="implementation",
+            requirements=[],
+            adrs=["ADR-1101"],
+            architecture_refs=[],
+        )
+        external_adr_errors = validate_planning_contracts(root)
+        assert any(
+            "ready plan references non-accepted ADR-1101" in item
+            for item in external_adr_errors
+        ), external_adr_errors
+        external_adr_readiness = implementation_prerequisite_failures(root, "STEP-1101")
+        assert "adr-not-accepted:ADR-1101" in external_adr_readiness, external_adr_readiness
+
+        for step_id, adr_id, adr_name in (
+            ("STEP-1100", "ADR-1100", "ADR-1100-own.md"),
+            ("STEP-1101", "ADR-1101", "ADR-1101-external.md"),
+        ):
+            (root / f"work/tasks/{step_id}.md").unlink()
+            (root / f"work/plan-reviews/{step_id}/PLAN-REVIEW-20260921T000000Z.md").unlink()
+            (root / f"work/plan-reviews/{step_id}").rmdir()
+            (root / f"spec/adr/{adr_name}").unlink()
 
         # PLAN может оставаться Ready, пока dependency ещё выполняется.
         dependency_ready = (root / "work/tasks/STEP-1001.md").read_text(encoding="utf-8")

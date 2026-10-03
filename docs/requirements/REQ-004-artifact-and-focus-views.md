@@ -7,6 +7,7 @@ steps:
   - STEP-004
   - STEP-007
   - STEP-016
+  - STEP-017
 adrs:
   - ADR-004
 ---
@@ -29,3 +30,4 @@ adrs:
 - `Harness: Go to Artifact` открывает Quick Pick со всеми известными STEP, REQ, ADR и OQ, fuzzy-ищет по ID, title и kind и открывает выбранный canonical Markdown-файл.
 - Focus View показывает активные, заблокированные STEP и открытые OQ, но не назначает следующий STEP.
 - Только leaf-элементы Artifacts View получают семантические `ThemeIcon` и theme-aware `ThemeColor` из уже построенного Artifact Index: STEP — по `status`, REQ — по `metadata.priority`, ADR — по `status`. Для неизвестного, отсутствующего или некорректного значения остаётся нейтральная kind-иконка без цвета; Focus View, текстовые поля, действия, открытие, сортировка и фильтрация не изменяются.
+- Основная iconPath leaf-элемента Artifacts View сохраняет принятую семантическую матрицу: STEP и ADR — status, REQ — `metadata.priority`, OQ — нейтральная kind-иконка. Если индексированный artifact имеет canonical `metadata.priority` (`critical`, `high`, `medium` или `low`), View дополнительно показывает отдельный нативный `FileDecoration` badge (`!`, `H`, `M` или `L`) с theme-aware цветом и локализованным RU/EN tooltip; при отсутствии или некорректном priority decoration отсутствует. Для REQ основная priority-иконка и badge намеренно сосуществуют. Decoration использует общий Artifact Index, обновляется после refresh/watcher изменения metadata без перезапуска Extension Host и не заменяет iconPath или остальные возможности View. Tooltip артефакта локализованно показывает status и известный priority.
