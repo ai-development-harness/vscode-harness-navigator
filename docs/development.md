@@ -6,8 +6,10 @@
 - Corepack-managed Yarn 4 (Berry) с `node-modules` linker. Один раз выполните `corepack enable`,
   после чего `yarn` внутри репозитория автоматически использует версию, зафиксированную в
   `package.json#packageManager`.
-- Python 3.11+ — только для Harness tools/validators (`python3 .harness/tools/validate.py`,
-  `sync-projections.py`); сам код расширения Python не использует.
+- Python 3.11+ — для Harness tools/validators (`python3 .harness/tools/validate.py`,
+  `sync-projections.py`) и Project State API. В trusted workspace Extension Host может запустить
+  только фиксированную shell-free команду `python3 .harness/tools/project-state.py --json` с
+  workspace root как `cwd`; в untrusted workspace Python не запускается.
 - Yarn настроен на `node-modules` linker в `.yarnrc.yml`. Plug'n'Play намеренно не используется:
   он несовместим с packaging через `@vscode/vsce` и с тем, как `@vscode/test-electron` загружает
   расширение в реальный Extension Host.
@@ -53,6 +55,22 @@ headless Linux используйте `xvfb-run -a yarn test:integration` и `xv
    `out/test-workspace/mvp/mvp.code-workspace`) в Extension Development Host в RU и EN локали,
    светлой и тёмной теме: Status Bar item читаем и использует theme colors, по click открывает
    Harness View, Summary view показывает release и counts.
+
+### Ручной checklist STEP-018
+
+- В trusted workspace в RU и EN, светлой, тёмной и custom theme откройте полный и сфокусированный
+  dependency Graph; проверьте навигацию по artifact и связанным node, reset/fit, filters и режим
+  `STEP dependencies`.
+- Проверьте легенду цветов: STEP со статусом `in_progress` выделен зелёным, `blocked` —
+  красным, cycle — оранжевым, выбранный узел — цветом фокуса темы. Красная рамка старого
+  REVIEW отражает его status, а не текущий STEP. Длинные ID и status сокращаются внутри
+  узла; полный ID и title доступны при наведении и в details.
+- Проверьте представление `MISSING`, cycle, degraded integrity и error Project State API без
+  fallback к локальному parser графа.
+- В untrusted workspace убедитесь, что graph показывает ограничение Workspace Trust и Python не
+  запускается.
+- В multi-root workspace проверьте, что refresh и watcher обновляют graph только соответствующего
+  root, а cache и состояние навигации не смешиваются между roots.
 
 ## Структура тестов
 
@@ -122,10 +140,19 @@ README для пользователей расширения: только аб
 остаточный риск конкурентной подмены ancestor. Runtime-границу (нет shell/network/auth/записи в
 Harness artifacts) доказывают boundary suite и static bundle scan `yarn inspect:package`.
 
+ADR-008 задаёт узкое исключение: только в trusted workspace разрешён фиксированный non-shell
+процесс `python3 .harness/tools/project-state.py --json` с `cwd` корня workspace, timeout 10 s,
+ограничением stdout и stderr по 1 MiB, cancellation, ожиданием завершения и `SIGKILL` после
+grace-периода 250 ms; к наследуемой среде добавляется `PYTHONDONTWRITEBYTECODE=1`. Произвольные shell/
+process invocation, сеть, запись, Harness commands и WebView-доступ к filesystem или процессам
+остаются запрещены. При untrusted workspace или ошибке graph Python не запускается либо
+показывает локализованную ошибку без fallback.
+
 ## Environment / configuration
 
-Переменные окружения и внешняя конфигурация не требуются. Расширение не выполняет сетевых
-обращений, telemetry или запуска shell/процессов.
+Внешняя конфигурация не требуется. Для фиксированного Project State API Extension Host добавляет
+к наследуемой среде `PYTHONDONTWRITEBYTECODE=1`; расширение не выполняет сетевых обращений, telemetry, shell
+или произвольных процессов.
 
 ## Git и CI
 

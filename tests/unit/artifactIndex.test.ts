@@ -40,7 +40,7 @@ function project(root: string): ValidProjectState {
   return {
     kind: 'valid',
     workspaceRoot: root,
-    release: '0.6.0',
+    release: '0.10.3',
     configuredPaths: {
       taskDirectory: 'planning/tasks',
       projectOverview: 'docs/PROJECT.md',

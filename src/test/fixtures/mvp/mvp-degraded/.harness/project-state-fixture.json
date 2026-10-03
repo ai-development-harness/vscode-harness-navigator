@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "status": "PASS",
+  "integrity": "degraded",
+  "project": {
+    "name": "mvp/mvp-degraded",
+    "harnessRelease": "0.10.3"
+  },
+  "summary": {
+    "relationshipCoveragePercent": 75
+  },
+  "insights": {
+    "dependency": {
+      "longestChain": ["STEP-702", "STEP-701"],
+      "cycles": [["STEP-701", "STEP-702"]]
+    },
+    "blockers": [
+      {
+        "id": "STEP-702"
+      }
+    ],
+    "uncoveredRequirements": [],
+    "isolatedArtifacts": []
+  },
+  "diagnostics": [
+    {
+      "category": "MissingReference",
+      "message": "REQ-999"
+    }
+  ],
+  "sources": {
+    "steps": "planning/tasks",
+    "requirements": "docs/requirements",
+    "reviews": "planning/reviews",
+    "skills": ".agents/skills"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "PROJECT:graph-fixture",
+        "artifactId": "PROJECT",
+        "type": "PROJECT",
+        "title": "Graph fixture",
+        "metadata": {}
+      },
+      {
+        "id": "STEP-701",
+        "artifactId": "STEP-701",
+        "type": "STEP",
+        "status": "in_progress",
+        "title": "First",
+        "path": "planning/tasks/STEP-701.md",
+        "metadata": {
+          "priority": "high",
+          "phase": "mvp",
+          "planFreshness": "fresh",
+          "planStaleCauses": [],
+          "executionGroups": []
+        }
+      },
+      {
+        "id": "STEP-702",
+        "artifactId": "STEP-702",
+        "type": "STEP",
+        "status": "blocked",
+        "title": "Second",
+        "path": "planning/tasks/STEP-702.md",
+        "metadata": {
+          "planFreshness": "stale",
+          "planRemediation": "STEP PLAN STEP-702",
+          "downstreamImpact": 2
+        }
+      },
+      {
+        "id": "REQ-701",
+        "artifactId": "REQ-701",
+        "type": "REQ",
+        "path": "docs/requirements/REQ-701-mvp.md",
+        "metadata": {}
+      },
+      {
+        "id": "MISSING:REQ-999",
+        "artifactId": "REQ-999",
+        "type": "MISSING",
+        "metadata": {}
+      }
+    ],
+    "edges": [
+      {
+        "source": "STEP-702",
+        "target": "STEP-701",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-702"]
+      },
+      {
+        "source": "STEP-701",
+        "target": "STEP-702",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-701"]
+      },
+      {
+        "source": "REQ-701",
+        "target": "STEP-701",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-701", "STEP-701"]
+      },
+      {
+        "source": "STEP-702",
+        "target": "MISSING:REQ-999",
+        "relation": "addresses",
+        "declaredBy": ["STEP-702"]
+      }
+    ]
+  }
+}

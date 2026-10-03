@@ -1,7 +1,13 @@
 <!-- PROJECT:START -->
 # VSCode Harness Navigator
 
-Локальное read-only расширение Visual Studio Code для навигации по STEP, REQ, ADR, OQ и справке по canonical-командам AI Development Harness 0.6.0+.
+Локальное read-only расширение Visual Studio Code для навигации по STEP, REQ, ADR, OQ, dependency Graph и справке по canonical-командам AI Development Harness 0.10.3+.
+
+Для trusted workspace расширение может только запустить фиксированную shell-free команду
+`python3 .harness/tools/project-state.py --json` с корнем workspace как `cwd`, чтобы получить
+canonical данные графа. WebView служит только для представления: он не имеет доступа к сети,
+workspace, процессам или произвольному API Extension Host. В untrusted workspace Python не
+запускается; ошибка API отображается в UI без fallback к локальному parser графа.
 
 Ключевые документы:
 

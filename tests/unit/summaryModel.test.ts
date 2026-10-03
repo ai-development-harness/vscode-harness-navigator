@@ -22,7 +22,7 @@ function valid(root: string): ProjectState {
   return {
     kind: 'valid',
     workspaceRoot: root,
-    release: '0.6.0',
+    release: '0.10.3',
     configuredPaths: {} as never,
     diagnostic: {
       category: 'ValidHarnessProject',
@@ -63,7 +63,7 @@ test('пустой проект даёт нулевые counts и valid root', (
   ]);
   assert.deepEqual(model.aggregate, EMPTY_COUNTS);
   assert.equal(model.validRootCount, 1);
-  assert.equal(model.roots[0]?.release, '0.6.0');
+  assert.equal(model.roots[0]?.release, '0.10.3');
 });
 
 test('смешанные статусы считаются через общий focus selector', () => {

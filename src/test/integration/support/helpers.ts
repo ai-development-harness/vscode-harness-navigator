@@ -40,6 +40,32 @@ export interface StatusBarSnapshotLike {
 
 /** Узкие read-only test seams `src/extension.ts` (именованные CJS exports bundle). */
 export interface ExtensionSeams {
+  getActiveDependencyGraphSnapshot: (folder: vscode.WorkspaceFolder) =>
+    | {
+        kind: string;
+        error?: string;
+        payload?: { integrity: string; graph: { nodes: readonly { id: string; type: string }[] } };
+      }
+    | undefined;
+  getDependencyGraphPanelSnapshot: (folder: vscode.WorkspaceFolder) =>
+    | {
+        title: string;
+        html: string;
+        model: {
+          state: string;
+          selectedId?: string;
+          nodes: readonly { id: string; kind: string; status?: string }[];
+          edges: readonly { type: string; declaredBy: readonly string[] }[];
+          longestDependencyChain: unknown;
+          cycleMembers?: readonly string[];
+          error?: string;
+        };
+      }
+    | undefined;
+  dispatchDependencyGraphMessage: (
+    folder: vscode.WorkspaceFolder,
+    message: unknown,
+  ) => Promise<void>;
   activate: (context: vscode.ExtensionContext) => unknown;
   deactivate: () => void;
   getActiveRegistrationCount: () => number;

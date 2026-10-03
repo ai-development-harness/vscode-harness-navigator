@@ -27,6 +27,12 @@
   "activationEvents": [
     "onStartupFinished"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "%workspaceTrust.description%"
+    }
+  },
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -112,6 +118,16 @@
         "title": "%command.showRelations.title%"
       },
       {
+        "command": "harnessNavigator.showDependencyGraph",
+        "category": "%category.harness%",
+        "title": "%command.showDependencyGraph.title%"
+      },
+      {
+        "command": "harnessNavigator.showInDependencyGraph",
+        "category": "%category.harness%",
+        "title": "%command.showInDependencyGraph.title%"
+      },
+      {
         "command": "harnessNavigator.findCommand",
         "category": "%category.harness%",
         "title": "%command.findCommand.title%"
@@ -139,6 +155,11 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "harnessNavigator.showDependencyGraph",
+          "when": "view == harnessNavigator.artifacts || view == harnessNavigator.focus || view == harnessNavigator.summary",
+          "group": "navigation@4"
+        },
         {
           "command": "harnessNavigator.setSortOrder",
           "when": "view == harnessNavigator.artifacts",
@@ -175,6 +196,11 @@
           "group": "navigation@2"
         },
         {
+          "command": "harnessNavigator.showInDependencyGraph",
+          "when": "view == harnessNavigator.artifacts && viewItem == harnessArtifactItem || view == harnessNavigator.focus && viewItem == harnessArtifactItem",
+          "group": "navigation@3"
+        },
+        {
           "command": "harnessNavigator.copyCommand",
           "when": "view == harnessNavigator.commands && viewItem == harnessCommandItem",
           "group": "navigation@1"
@@ -191,6 +217,10 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "harnessNavigator.showInDependencyGraph",
+          "when": "false"
+        },
         {
           "command": "harnessNavigator.goToArtifact",
           "when": "true"
@@ -234,6 +264,10 @@
         {
           "command": "harnessNavigator.showRelations",
           "when": "editorLangId == markdown"
+        },
+        {
+          "command": "harnessNavigator.showDependencyGraph",
+          "when": "true"
         },
         {
           "command": "harnessNavigator.editor.findAllReferences",

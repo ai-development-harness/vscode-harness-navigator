@@ -85,7 +85,7 @@ suite('MVP watchers без restart (Extension Host)', () => {
     const text = new TextDecoder().decode(original);
     assert.ok(text.includes('banana'));
     try {
-      await writeText(manifest, text.replace('banana', '0.6.0'));
+      await writeText(manifest, text.replace('banana', '0.10.3'));
       await pollFor(
         () => seams.getActiveArtifactSnapshot(invalid) !== undefined,
         'manifest watcher must turn mvp-invalid-manifest into a valid root',

@@ -11,7 +11,7 @@ import path from 'node:path';
 import { load } from 'js-yaml';
 import type { ConfiguredPaths, ProjectDiagnostic, ProjectState } from './projectState';
 
-const MINIMUM_RELEASE = '0.6.0';
+const MINIMUM_RELEASE = '0.10.3';
 const SUPPORTED_MANIFEST_VERSION = '1';
 // Manifest является недоверенным входом workspace. 64 KiB достаточно для его
 // declarative configuration и ограничивает память/время до запуска YAML parser.

@@ -43,6 +43,21 @@ interface Target {
 
 const asRecord = (value: unknown): Record<string, unknown> => value as Record<string, unknown>;
 
+function isProjectStateInvocation(args: readonly unknown[]): boolean {
+  const options = args[2] as { shell?: unknown; cwd?: unknown } | undefined;
+  return (
+    vscode.workspace.isTrusted &&
+    args[0] === 'python3' &&
+    Array.isArray(args[1]) &&
+    JSON.stringify(args[1]) === JSON.stringify(['.harness/tools/project-state.py', '--json']) &&
+    options?.shell === false &&
+    typeof options.cwd === 'string' &&
+    (vscode.workspace.workspaceFolders ?? []).some(
+      (f) => path.resolve(f.uri.fsPath) === options.cwd,
+    )
+  );
+}
+
 function targets(): Target[] {
   const list: Target[] = [];
   const add = (prefix: string, owner: unknown, keys: readonly string[], kind: SpyKind) => {
@@ -109,6 +124,7 @@ function targets(): Target[] {
     'observed',
   );
   add('vscode.window', vscode.window, ['showQuickPick'], 'observed');
+  add('vscode.window', vscode.window, ['createWebviewPanel'], 'observed');
   return list;
 }
 
@@ -168,11 +184,16 @@ export class BoundarySpies {
     const spies = this;
     const wrapper = function (this: unknown, ...args: unknown[]): unknown {
       const extensionOriginated = isBundleOriginated(new Error().stack ?? '', spies.bundleFile);
-      const forbidden = target.kind === 'forbidden' || spies.escalatedApis.has(target.api);
+      // ADR-008 разрешает только fixed non-shell Project State API в trusted открытом root.
+      const allowedProjectState =
+        target.api === 'child_process.spawn' && isProjectStateInvocation(args);
+      const forbidden =
+        (target.kind === 'forbidden' && !allowedProjectState) ||
+        spies.escalatedApis.has(target.api);
       const sentinel = forbidden && extensionOriginated;
       spies.records.push({
         api: target.api,
-        kind: forbidden ? 'forbidden' : target.kind,
+        kind: forbidden ? 'forbidden' : 'observed',
         extensionOriginated,
         sentinel,
       });

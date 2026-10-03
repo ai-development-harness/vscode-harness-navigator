@@ -52,7 +52,7 @@ function manifest(paths: Record<string, string> = {}): string {
     status: 'planning/STATUS.md',
     ...paths,
   };
-  return `harness:\n  version: "1"\n  release: "0.6.0"\nprotocol:\n  taskDirectory: "${paths.taskDirectory ?? 'planning/tasks'}"\nsources:\n${Object.entries(
+  return `harness:\n  version: "1"\n  release: "0.10.3"\nprotocol:\n  taskDirectory: "${paths.taskDirectory ?? 'planning/tasks'}"\nsources:\n${Object.entries(
     sourcePaths,
   )
     .filter(([name]) => name !== 'taskDirectory')
@@ -93,24 +93,24 @@ test('некорректный manifest возвращает диагности�
 
 test('release ниже минимума не становится валидным проектом', () => {
   withRoot((root) => {
-    writeManifest(root, manifest().replace('0.6.0', '0.5.9'));
+    writeManifest(root, manifest().replace('0.10.3', '0.5.9'));
     const project = detectProject(root);
     assert.equal(project.kind, 'unsupportedVersion');
     assert.equal(project.detectedRelease, '0.5.9');
-    assert.equal(project.minimumRelease, '0.6.0');
+    assert.equal(project.minimumRelease, '0.10.3');
   });
 });
 
 test('SemVer граница отличает prerelease, build metadata и поддерживаемые releases', () => {
   withRoot((root) => {
     for (const [release, expectedKind] of [
-      ['0.5.9', 'unsupportedVersion'],
-      ['0.6.0-beta.1', 'unsupportedVersion'],
-      ['0.6.0', 'valid'],
-      ['0.6.0+build.42', 'valid'],
-      ['0.6.1-beta.1', 'valid'],
+      ['0.10.2', 'unsupportedVersion'],
+      ['0.10.3-beta.1', 'unsupportedVersion'],
+      ['0.10.3', 'valid'],
+      ['0.10.3+build.42', 'valid'],
+      ['0.10.4-beta.1', 'valid'],
     ] as const) {
-      writeManifest(root, manifest().replace('0.6.0', release));
+      writeManifest(root, manifest().replace('0.10.3', release));
       assert.equal(detectProject(root).kind, expectedKind, `release ${release}`);
     }
   });
@@ -119,7 +119,7 @@ test('SemVer граница отличает prerelease, build metadata и по�
 test('некорректный SemVer release является malformed manifest', () => {
   withRoot((root) => {
     for (const release of ['banana', '01.6.0']) {
-      writeManifest(root, manifest().replace('0.6.0', release));
+      writeManifest(root, manifest().replace('0.10.3', release));
       const project = detectProject(root);
       assert.equal(project.kind, 'invalidManifest', `release ${release}`);
       assert.equal(project.diagnostic.category, 'InvalidManifest');
@@ -182,7 +182,7 @@ test('resolveManifestOpenCapability даёт правильный profile для
 
 test('отсутствующий release является malformed manifest, а не unsupported version', () => {
   withRoot((root) => {
-    writeManifest(root, manifest().replace('  release: "0.6.0"\n', ''));
+    writeManifest(root, manifest().replace('  release: "0.10.3"\n', ''));
     const project = detectProject(root);
     assert.equal(project.kind, 'invalidManifest');
     assert.equal(project.diagnostic.category, 'InvalidManifest');
@@ -353,7 +353,7 @@ test('подмена manifest внешним symlink перед open не чит
       writeManifest(root);
       const manifestPath = path.join(root, '.harness', 'manifest.yaml');
       const outsideManifest = path.join(outside, 'external-manifest.yaml');
-      writeFileSync(outsideManifest, manifest().replace('0.6.0', 'banana'));
+      writeFileSync(outsideManifest, manifest().replace('0.10.3', 'banana'));
 
       const project = detectProject(root, {
         beforeOpen: () => {
@@ -394,7 +394,7 @@ test('подмена промежуточного ancestor (.harness) на symli
       writeManifest(root);
       const harnessDirectory = path.join(root, '.harness');
       const outsideManifest = path.join(outside, 'manifest.yaml');
-      writeFileSync(outsideManifest, manifest().replace('0.6.0', 'banana'));
+      writeFileSync(outsideManifest, manifest().replace('0.10.3', 'banana'));
 
       const project = detectProject(root, {
         beforeOpen: () => {
@@ -434,7 +434,7 @@ test('.harness/manifest.yaml как статический symlink на внеш
     try {
       mkdirSync(path.join(root, '.harness'), { recursive: true });
       const outsideManifest = path.join(outside, 'external-manifest.yaml');
-      writeFileSync(outsideManifest, manifest().replace('0.6.0', 'banana'));
+      writeFileSync(outsideManifest, manifest().replace('0.10.3', 'banana'));
       symlinkSync(outsideManifest, path.join(root, '.harness', 'manifest.yaml'));
 
       const project = detectProject(root, { capability: WINDOWS_LIKE_CAPABILITY });
@@ -454,7 +454,7 @@ test('.harness/manifest.yaml как статический symlink на внеш
     try {
       mkdirSync(path.join(root, '.harness'), { recursive: true });
       const outsideManifest = path.join(outside, 'external-manifest.yaml');
-      writeFileSync(outsideManifest, manifest().replace('0.6.0', 'banana'));
+      writeFileSync(outsideManifest, manifest().replace('0.10.3', 'banana'));
       symlinkSync(outsideManifest, path.join(root, '.harness', 'manifest.yaml'));
 
       const project = detectProject(root, { capability: DARWIN_LIKE_CAPABILITY });
@@ -475,7 +475,7 @@ test('подмена финального component symlink-ом блокиру�
       writeManifest(root);
       const manifestPath = path.join(root, '.harness', 'manifest.yaml');
       const outsideManifest = path.join(outside, 'external-manifest.yaml');
-      writeFileSync(outsideManifest, manifest().replace('0.6.0', 'banana'));
+      writeFileSync(outsideManifest, manifest().replace('0.10.3', 'banana'));
 
       const project = detectProject(root, {
         capability: DARWIN_LIKE_CAPABILITY,
@@ -508,7 +508,7 @@ test('подмена финального component symlink-ом блокиру�
       writeManifest(root);
       const manifestPath = path.join(root, '.harness', 'manifest.yaml');
       const outsideManifest = path.join(outside, 'external-manifest.yaml');
-      writeFileSync(outsideManifest, manifest().replace('0.6.0', 'banana'));
+      writeFileSync(outsideManifest, manifest().replace('0.10.3', 'banana'));
 
       const project = detectProject(root, {
         capability: WINDOWS_LIKE_CAPABILITY,

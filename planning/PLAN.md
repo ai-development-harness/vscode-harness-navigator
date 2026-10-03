@@ -21,3 +21,4 @@
 | STEP-015 | Пункт «Открыть документацию» в меню команд Harness | implementation | low | completed | STEP-014 | REQ-007 |
 | STEP-016 | Семантические иконки артефактов в Harness Artifacts | implementation | medium | completed | STEP-004 | REQ-004 |
 | STEP-017 | Отдельный priority decoration в Harness Artifacts | implementation | medium | completed | STEP-016 | REQ-004 |
+| STEP-018 | Интерактивный dependency Graph из Project State API | implementation | high | completed | — | REQ-001, REQ-002, REQ-004, REQ-008, REQ-009, REQ-011 |

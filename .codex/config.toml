@@ -1,10 +1,10 @@
 # Основная модель root-agent текущей Codex-сессии.
 # Пример: "gpt-5.6-terra" для balanced режима; reasoning-heavy работу делегируют специализированным субагентам.
-model = "gpt-5.6-terra"
+model = "gpt-6.1-sol"
 
 # Reasoning effort root-agent для обычных команд.
 # Пример: "medium"; увеличивай до "high" только если root сам решает сложную задачу вместо делегирования.
-model_reasoning_effort = "medium"
+model_reasoning_effort = "high"
 
 # Reasoning effort, который Codex использует в plan mode, если клиент поддерживает отдельную настройку.
 # Пример: "high" для более тщательного планирования перед mutation.

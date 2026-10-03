@@ -1,7 +1,10 @@
 {
+  "workspaceTrust.description": "Навигация доступна; Project State API требует доверенный workspace.",
+  "command.showInDependencyGraph.title": "Показать в графе зависимостей",
   "extension.displayName": "Harness Navigator",
   "extension.description": "Read-only навигация и справка по проектам AI Development Harness в VS Code.",
   "command.showDiagnostics.title": "Показать диагностику",
+  "command.showDependencyGraph.title": "Показать граф зависимостей",
   "command.refresh.title": "Обновить",
   "command.goToArtifact.title": "Перейти к артефакту",
   "command.setSortOrder.title": "Задать порядок сортировки",

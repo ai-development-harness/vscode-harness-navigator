@@ -108,7 +108,7 @@ function main(): void {
   const absoluteManifest = [
     'harness:',
     '  version: "1"',
-    '  release: "0.6.0"',
+    '  release: "0.10.3"',
     'protocol:',
     `  taskDirectory: ${JSON.stringify(absoluteTasks)}`,
     'sources:',
