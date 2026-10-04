@@ -3,6 +3,8 @@
 
 Локальное read-only расширение Visual Studio Code для навигации по STEP, REQ, ADR, OQ, dependency Graph и справке по canonical-командам AI Development Harness 0.10.3+.
 
+Dependency Graph показывает только факты Project State API: overview с canonical metrics, health и diagnostics, inspector выбранного артефакта и локальные presets, filters и поиск. Эти действия меняют лишь представление WebView; расширение не вычисляет health score, новые связи или semantic impact и не выполняет команды из графа.
+
 Для trusted workspace расширение может только запустить фиксированную shell-free команду
 `python3 .harness/tools/project-state.py --json` с корнем workspace как `cwd`, чтобы получить
 canonical данные графа. WebView служит только для представления: он не имеет доступа к сети,

@@ -90,6 +90,11 @@ suite('Project State dependency Graph: production Extension Host/VSIX', () => {
       assert.equal(panel.model.edges.length, 4);
       assert.deepEqual(panel.model.edges[2]?.declaredBy, ['REQ-701', 'STEP-701']);
       assert.match(panel.html, /<svg/u);
+      assert.match(panel.html, /id="presets"/u);
+      assert.match(panel.html, /id="kinds"/u);
+      assert.match(panel.html, /id="relations"/u);
+      assert.match(panel.html, /id="health"/u);
+      assert.match(panel.html, /navigationRevision/u);
       assert.match(panel.html, /style-src 'nonce-/u);
       assert.ok(
         panel.html.includes(
@@ -97,6 +102,33 @@ suite('Project State dependency Graph: production Extension Host/VSIX', () => {
         ),
       );
       assert.ok(panel.html.includes(isRussian() ? 'Уместить в окне' : 'Fit to viewport'));
+      // Сохраняем фактический shipped HTML Host для отдельной visual-проверки того же renderer.
+      originalFs.writeFileSync(
+        `/tmp/navigator-step019-host-${isRussian() ? 'ru' : 'en'}.html`,
+        panel.html,
+      );
+      const spawnCount = () =>
+        spies.recordsFor('child_process.spawn').filter((r) => r.extensionOriginated).length;
+      const beforeUi = spawnCount();
+      const revision = panel.model.navigationRevision;
+      await seams.dispatchDependencyGraphMessage(root, { type: 'select', id: 'STEP-701' });
+      await seams.dispatchDependencyGraphMessage(root, { type: 'related', id: 'STEP-701' });
+      await seams.dispatchDependencyGraphMessage(root, { type: 'reset' });
+      assert.equal(spawnCount(), beforeUi, 'локальные UI messages не повторяют Project State API');
+      assert.equal(seams.getDependencyGraphPanelSnapshot(root)?.model.navigationRevision, revision);
+      await vscode.commands.executeCommand('harnessNavigator.showInDependencyGraph', {
+        folder: root,
+        artifact: { id: 'STEP-701' },
+      });
+      const reveal = seams.getDependencyGraphPanelSnapshot(root)?.model.navigationRevision;
+      await vscode.commands.executeCommand('harnessNavigator.showInDependencyGraph', {
+        folder: root,
+        artifact: { id: 'STEP-701' },
+      });
+      assert.equal(
+        seams.getDependencyGraphPanelSnapshot(root)?.model.navigationRevision,
+        (reveal ?? 0) + 1,
+      );
       assert.ok(
         spies.recordsFor('child_process.spawn').some((r) => r.extensionOriginated && !r.sentinel),
       );
@@ -221,7 +253,13 @@ suite('Project State dependency Graph: production Extension Host/VSIX', () => {
       spies.restore();
       await writeText(uri, original);
       await seams.dispatchDependencyGraphMessage(root, { type: 'refresh' });
-      assert.equal(seams.getActiveDependencyGraphSnapshot(root)?.kind, 'ready');
+      // Watcher manifest может отменить этот refresh и опубликовать итоговый снимок позднее.
+      await pollFor(
+        () =>
+          seams.getActiveDependencyGraphSnapshot(root)?.kind === 'ready' &&
+          seams.getDependencyGraphPanelSnapshot(root)?.model.state === 'ready',
+        'восстановление WebView после manifest watcher',
+      );
       await refresh();
     }
   });

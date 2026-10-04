@@ -59,6 +59,8 @@ The extension only reads files and never modifies Harness artifacts. In a truste
 
 Локальная read-only навигация и справка по проектам AI Development Harness в Visual Studio Code.
 
+Dependency Graph предоставляет обзор метрик API, поиск и локальные presets, filters, inspector выбранного артефакта и читаемую диагностику. Метрики берутся только из Project State API; presets меняют представление, расширение не вычисляет health score и не исполняет команды из графа.
+
 ### Что делает расширение
 
 - Показывает артефакты Harness (STEP, REQ, ADR, OQ) из рабочей области в контейнере Harness Navigator на Activity Bar.

@@ -15,3 +15,4 @@
 | [REQ-009](REQ-009-incremental-offline-operation.md) | Incremental и offline работа | medium | brief |
 | [REQ-010](REQ-010-quality-and-testability.md) | Качество реализации и проверяемость | high | brief |
 | [REQ-011](REQ-011-project-state-dependency-graph.md) | Граф зависимостей из Project State API | high | brief |
+| [REQ-012](REQ-012-dependency-graph-analytical-overview.md) | Аналитический обзор и интерактивный граф проекта | high | brief |

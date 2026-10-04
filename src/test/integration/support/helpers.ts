@@ -52,6 +52,7 @@ export interface ExtensionSeams {
         title: string;
         html: string;
         model: {
+          navigationRevision?: number;
           state: string;
           selectedId?: string;
           nodes: readonly { id: string; kind: string; status?: string }[];

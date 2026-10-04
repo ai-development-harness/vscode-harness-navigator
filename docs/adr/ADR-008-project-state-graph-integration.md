@@ -14,8 +14,10 @@ requirements:
   - REQ-008
   - REQ-009
   - REQ-011
+  - REQ-012
 steps:
   - STEP-018
+  - STEP-019
 ---
 
 # ADR-008 — Узкая интеграция Project State API и dependency Graph
