@@ -253,7 +253,13 @@ suite('Project State dependency Graph: production Extension Host/VSIX', () => {
       spies.restore();
       await writeText(uri, original);
       await seams.dispatchDependencyGraphMessage(root, { type: 'refresh' });
-      assert.equal(seams.getActiveDependencyGraphSnapshot(root)?.kind, 'ready');
+      // Watcher manifest может отменить этот refresh и опубликовать итоговый снимок позднее.
+      await pollFor(
+        () =>
+          seams.getActiveDependencyGraphSnapshot(root)?.kind === 'ready' &&
+          seams.getDependencyGraphPanelSnapshot(root)?.model.state === 'ready',
+        'восстановление WebView после manifest watcher',
+      );
       await refresh();
     }
   });
