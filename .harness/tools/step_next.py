@@ -24,6 +24,7 @@ from execution_status import unresolved_executions
 from harness_config import task_directory
 from planning_contract import (
     adr_ids,
+    adr_status_allows_readiness,
     canonical_adr_path,
     dependency_ids,
     implementation_prerequisite_failures,
@@ -126,7 +127,10 @@ def _planning_blockers(root: Path, task: dict[str, Any]) -> list[str]:
     for adr_id in adr_ids(task):
         path = canonical_adr_path(root, adr_id)
         adr = parse_document(path)
-        if adr["frontmatter"].get("status") != "accepted":
+        if not adr_status_allows_readiness(
+            task,
+            adr["frontmatter"].get("status"),
+        ):
             blockers.append(f"adr-not-accepted:{adr_id}")
 
     return blockers
