@@ -1,21 +1,25 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Script } from 'node:vm';
+import * as esbuild from 'esbuild';
+import { readFileSync } from 'node:fs';
 import { dependencyGraphHtml } from '../../src/projectGraph/dependencyGraphWebview';
 import { presentDependencyGraph } from '../../src/projectGraph/dependencyGraphPresentation';
 import { parseProjectStatePayload } from '../../src/projectGraph/projectStatePayload';
 import { projectStateFixture } from './fixtures/projectState';
 import type { DependencyGraphPresentation } from '../../src/projectGraph/dependencyGraphPresentation';
 
-/** Минимальный DOM adapter исполняет именно shipped script, а не второй UI алгоритм. */
+/** Адаптер запускает ровно serialized WebView runtime без второго алгоритма rendering. */
 class Element {
   children: Element[] = [];
   attributes: Record<string, string> = {};
+  className = '';
   textContent = '';
   value = '';
   checked = false;
   onclick?: () => void;
   onchange?: () => void;
+  oninput?: () => void;
   viewBox = { baseVal: { x: 0, y: 0, width: 1000, height: 600 } };
   constructor(readonly tag: string) {}
   append(...children: Element[]) {
@@ -26,245 +30,297 @@ class Element {
   }
   setAttribute(key: string, value: string) {
     this.attributes[key] = value;
+    if (key === 'viewBox') {
+      const [x = 0, y = 0, width = 1000, height = 600] = value.split(' ').map(Number);
+      this.viewBox.baseVal = { x, y, width, height };
+    }
   }
-  /** Предсказуемая метрика для runtime regression; реальные шрифты проверяются в браузере. */
   getComputedTextLength() {
     return Array.from(this.textContent).length * 7;
   }
+  classList = { toggle: () => undefined };
+  addEventListener(type: string, listener: () => void) {
+    if (type === 'click') this.onclick = listener;
+  }
+  closest() {
+    return undefined;
+  }
+  setPointerCapture() {}
+  getBoundingClientRect() {
+    return { width: 800, height: 600 };
+  }
+  scrollIntoView() {}
+  focus() {}
+  select() {}
 }
 
-/** Общий adapter исполняет production script для разных canonical API snapshots. */
-function renderWebview(model: DependencyGraphPresentation) {
+function render(model: DependencyGraphPresentation) {
   const html = dependencyGraphHtml({ cspSource: 'local' }, model);
-  const scriptText = html.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/u)?.[1];
-  assert.ok(scriptText);
-  const script = new Script(scriptText);
+  const source = html.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/u)?.[1];
+  assert.ok(source);
   const elements = new Map<string, Element>();
-  const el = (id: string) => {
-    if (!elements.has(id)) elements.set(id, new Element(id));
-    return elements.get(id) as Element;
+  const byId = (id: string) => {
+    const existing = elements.get(id);
+    if (existing) return existing;
+    const created = new Element(id);
+    elements.set(id, created);
+    return created;
   };
   const messages: unknown[] = [];
   let update: ((event: unknown) => void) | undefined;
-  script.runInNewContext({
+  new Script(source).runInNewContext({
     document: {
-      getElementById: el,
+      getElementById: byId,
       createElement: (tag: string) => new Element(tag),
-      createElementNS: (_ns: string, tag: string) => new Element(tag),
-      createTextNode: (text: string) => {
-        const e = new Element('text');
-        e.textContent = text;
-        return e;
-      },
+      createElementNS: (_: string, tag: string) => new Element(tag),
     },
     acquireVsCodeApi: () => ({ postMessage: (message: unknown) => messages.push(message) }),
+    navigator: { clipboard: { writeText: () => Promise.resolve() } },
     window: {
-      addEventListener: (_type: string, listener: (event: unknown) => void) => {
+      addEventListener: (_: string, listener: (event: unknown) => void) => {
         update = listener;
       },
     },
   });
-  const nodes = () => el('graph').children.filter((n) => n.tag === 'g');
-  return { el, nodes, messages, update: (event: unknown) => update?.(event) };
+  return {
+    html,
+    byId,
+    messages,
+    update: (modelUpdate: DependencyGraphPresentation) =>
+      update?.({ data: { type: 'model', model: modelUpdate } }),
+  };
 }
 
-test('shipped WebView script: syntax, SVG selection/details, filters, STEP mode, reset/fit', () => {
-  const payload = parseProjectStatePayload(projectStateFixture());
-  if (payload.kind !== 'valid') throw new Error('fixture must parse');
-  const model = presentDependencyGraph({ kind: 'ready', payload: payload.payload });
-  const { el, nodes, messages, update } = renderWebview(model);
-  assert.equal(nodes().length, 9);
-  nodes()
-    .find((n) => n.attributes['aria-label'] === 'STEP-002')
-    ?.onclick?.();
-  assert.ok(el('details').children.some((n) => n.textContent.includes('STEP-002')));
-  assert.ok(nodes().some((n) => n.attributes.class?.includes('selected')));
-  assert.equal(JSON.stringify(messages.at(-1)), JSON.stringify({ type: 'select', id: 'STEP-002' }));
-  const selects = el('toolbar')
-    .children.flatMap((n) => n.children)
-    .filter((n) => n.tag === 'select');
-  const kinds = selects[0] as Element,
-    statuses = selects[1] as Element,
-    relations = selects[2] as Element;
-  kinds.value = 'MISSING';
-  kinds.onchange?.();
-  assert.equal(nodes().length, 1);
-  kinds.value = '';
-  statuses.value = 'blocked';
-  statuses.onchange?.();
-  assert.equal(nodes().length, 1);
-  statuses.value = '';
-  relations.value = 'reviews';
-  relations.onchange?.();
-  assert.equal(el('graph').children.filter((n) => n.attributes.class === 'edge').length, 1);
-  const mode = el('toolbar')
-    .children.flatMap((n) => n.children)
-    .find((n) => n.tag === 'input') as Element;
-  relations.value = '';
-  mode.checked = true;
-  mode.onchange?.();
-  assert.equal(nodes().length, 2);
-  assert.equal(el('graph').children.filter((n) => n.attributes.class === 'edge').length, 2);
-  el('toolbar')
-    .children.find((n) => n.textContent === 'Full graph')
-    ?.onclick?.();
-  assert.equal(nodes().length, 9);
-  assert.equal(mode.checked, false);
-  assert.ok(el('graph').attributes.viewBox);
-  // Initial loading panel получает statuses только после async ответа API.
-  update?.({
-    data: {
-      type: 'model',
-      model: { ...model, nodes: model.nodes.map((n) => ({ ...n, status: 'new-state' })) },
-    },
-  });
-  assert.ok(statuses.children.some((n) => n.value === 'new-state'));
+function fixtureModel() {
+  const parsed = parseProjectStatePayload(projectStateFixture());
+  if (parsed.kind !== 'valid') throw new Error('fixture must parse');
+  return presentDependencyGraph({ kind: 'ready', payload: parsed.payload });
+}
+
+test('shipped script строит overview, SVG и локальные presets без API message', () => {
+  const view = render(fixtureModel());
+  assert.match(view.html, /Project overview/u);
+  assert.ok(view.byId('overview').children.length > 0);
+  assert.ok(view.byId('graph').children.some((node) => node.tag === 'g'));
+  const buttons = view.byId('presets').children.filter((node) => node.tag === 'button');
+  buttons.find((node) => node.textContent === 'STEP dependencies')?.onclick?.();
+  assert.equal(view.byId('graph').children.filter((node) => node.tag === 'g').length, 2);
+  assert.equal(view.messages.length, 0);
 });
 
-test('текущий STEP выделяется независимо от blocked REVIEW, длинные подписи остаются внутри узла', () => {
-  const reviewId = 'REVIEW:STEP-002:REVIEW-20260922T064000Z';
-  const model: DependencyGraphPresentation = {
-    state: 'ready',
-    nodes: [
-      { id: 'STEP-018', kind: 'STEP', status: 'in_progress', metadata: {} },
-      { id: 'STEP-002', kind: 'STEP', status: 'completed', metadata: {} },
-      {
-        id: reviewId,
-        kind: 'REVIEW',
-        status: 'blocked',
-        title: 'Исторический отчёт',
-        metadata: {},
-      },
-      { id: 'REQ-011', kind: 'REQ', status: 'очень-длинный-статус-без-пробелов', metadata: {} },
-    ],
-    edges: [],
-    longestDependencyChain: undefined,
-  };
-  const { el, nodes, update } = renderWebview(model);
-  const activeIds = () =>
-    nodes()
-      .filter((n) => n.attributes.class?.split(' ').includes('active'))
-      .map((n) => n.attributes['aria-label']);
-  assert.deepEqual(activeIds(), ['STEP-018']);
-  assert.equal(el('legend').children.length, 4);
-  const review = nodes().find((n) => n.attributes['aria-label'] === reviewId);
-  assert.ok(review);
-  assert.ok(review.attributes.class?.includes('blocked'));
-  const reviewText = review.children.find((n) => n.tag === 'text');
-  assert.ok(reviewText?.textContent.endsWith('…'));
-  assert.ok(review.children.find((n) => n.tag === 'title')?.textContent.includes(reviewId));
-  for (const node of nodes()) {
-    for (const label of node.children.filter((n) => n.tag === 'text')) {
-      assert.ok(label.getComputedTextLength() <= 170);
-      assert.equal(label.attributes['clip-path'], 'url(#node-label-clip)');
-    }
-  }
-  review.onclick?.();
-  assert.ok(el('details').children.some((n) => n.textContent.includes(reviewId)));
-  assert.deepEqual(activeIds(), ['STEP-018'], 'выбор REVIEW не меняет canonical active status');
-  update({
-    data: {
-      type: 'model',
-      model: {
-        ...model,
-        nodes: model.nodes.map((n) => ({ ...n, status: 'completed' })),
-      },
-    },
-  });
-  assert.deepEqual(activeIds(), [], 'refresh снимает подсветку завершённого STEP');
-});
-
-test('title виден после ID: перенос, сокращение, отсутствие названия и обновление snapshot', () => {
-  const title = 'Качество и тестируемость';
-  const longTitle =
-    'Очень длинное название артефакта с дополнительными подробностями и пояснениями';
-  const model: DependencyGraphPresentation = {
-    state: 'ready',
-    nodes: [
-      { id: 'REQ-010', kind: 'REQ', title, metadata: {} },
-      { id: 'STEP-018', kind: 'STEP', title: longTitle, status: 'in_progress', metadata: {} },
-      { id: 'ADR-008', kind: 'ADR', title: 'НазваниеБезПробелов'.repeat(8), metadata: {} },
-      { id: 'OQ-001', kind: 'OQ', metadata: {} },
-      { id: 'OQ-002', kind: 'OQ', title: '  \n ', metadata: {} },
-    ],
-    edges: [{ from: 'REQ-010', to: 'STEP-018', type: 'implemented_by', declaredBy: [] }],
-    longestDependencyChain: undefined,
-  };
-  const { nodes, update } = renderWebview(model);
-  const labels = (id: string) =>
-    nodes()
-      .find((node) => node.attributes['aria-label'] === id)
-      ?.children.filter((child) => child.tag === 'text') as Element[];
-  assert.deepEqual(
-    labels('REQ-010').map((label) => label.textContent),
-    ['REQ-010', title, 'REQ · '],
+test('selection, MISSING и model refresh сохраняют narrow ID-based contract', () => {
+  const model = fixtureModel();
+  const view = render(model);
+  const node = view
+    .byId('graph')
+    .children.find((item) => item.attributes['aria-label']?.startsWith('STEP-002'));
+  node?.onclick?.();
+  assert.equal(
+    JSON.stringify(view.messages.at(-1)),
+    JSON.stringify({ type: 'select', id: 'STEP-002' }),
   );
-  for (const id of ['STEP-018', 'ADR-008']) {
-    const lines = labels(id);
-    assert.equal(lines.length, 5, 'ID, три строки названия и статус');
-    assert.ok(lines[3]?.textContent.endsWith('…'));
-    assert.equal(lines.at(-1)?.attributes.y, '99');
-    for (const line of lines) assert.ok(line.getComputedTextLength() <= 170);
-  }
-  for (const id of ['OQ-001', 'OQ-002']) {
-    assert.equal(labels(id).length, 2);
-    assert.equal(labels(id).at(-1)?.attributes.y, '46');
-  }
-  const step = nodes().find((node) => node.attributes['aria-label'] === 'STEP-018');
-  assert.equal(step?.attributes['aria-description'], longTitle);
-  assert.ok(step?.children.find((child) => child.tag === 'title')?.textContent.includes(longTitle));
-  update({
-    data: {
-      type: 'model',
-      model: { ...model, nodes: [{ ...model.nodes[0], title: 'Новое название' }] },
-    },
-  });
-  assert.equal(labels('REQ-010')[1]?.textContent, 'Новое название');
+  view.update({ ...model, nodes: model.nodes.filter((item) => item.id !== 'STEP-002') });
+  assert.ok(view.byId('graph-inspector').children.length > 0);
 });
 
-test('стрелки находятся вне target rect и сохраняют противоположные направления API', () => {
-  const ids = ['STEP-001', 'STEP-002', 'STEP-003', 'STEP-004'];
+test('preset Blockers показывает только seed и direct neighbours без транзитивного expansion', () => {
   const model: DependencyGraphPresentation = {
     state: 'ready',
-    nodes: ids.map((id, index) => ({
+    nodes: ['STEP-019', 'STEP-018', 'REQ-001'].map((id) => ({
       id,
-      kind: 'STEP',
+      kind: 'STEP' as const,
       metadata: {},
-      ...(index % 2 ? { title: 'Название' } : {}),
     })),
-    edges: ids.flatMap((from) =>
-      ids.map((to) => ({ from, to, type: 'depends_on', declaredBy: [] })),
-    ),
+    edges: [
+      { from: 'STEP-019', to: 'STEP-018', type: 'depends_on', declaredBy: [] },
+      { from: 'STEP-018', to: 'REQ-001', type: 'depends_on', declaredBy: [] },
+    ],
+    insights: { blockers: [{ nodeId: 'STEP-019' }], dependency: { cycles: [] } },
     longestDependencyChain: undefined,
   };
-  const { el, nodes } = renderWebview(model);
-  const paths = el('graph').children.filter((node) => node.attributes.class === 'edge');
-  assert.equal(paths.length, 16);
-  for (const edge of paths) {
-    const target = nodes().find(
-      (node) => node.attributes['aria-label'] === edge.attributes['data-target'],
-    );
-    assert.ok(target);
-    const position = target.attributes.transform?.match(/translate\(([^,]+),([^)]+)\)/u);
-    const coordinates = edge.attributes.d?.match(/-?\d+(?:\.\d+)?/gu)?.map(Number);
-    assert.ok(position && coordinates);
-    const x = coordinates.at(-2) as number,
-      y = coordinates.at(-1) as number;
-    const tx = Number(position[1]),
-      ty = Number(position[2]);
-    const height = Number(target.children.find((child) => child.tag === 'rect')?.attributes.height);
-    assert.ok(
-      x < tx || x > tx + 190 || y < ty || y > ty + height,
-      'marker endpoint не скрыт target',
-    );
-    assert.equal(
-      edge.children[0]?.textContent,
-      `${edge.attributes['data-source']} → ${edge.attributes['data-target']} · depends_on`,
-    );
-  }
-  assert.notEqual(
-    paths[1]?.attributes.d,
-    paths[4]?.attributes.d,
-    'обратное relation имеет другую стрелку',
+  const view = render(model);
+  view
+    .byId('presets')
+    .children.find((node) => node.textContent === 'Blockers')
+    ?.onclick?.();
+  const ids = view
+    .byId('graph')
+    .children.filter((node) => node.tag === 'g')
+    .map((node) => node.attributes['aria-label']);
+  assert.deepEqual(ids.sort(), ['STEP-018', 'STEP-019']);
+});
+
+test('F-001: longest chain подсвечивает существующие reverse depends_on из captured API', () => {
+  const wire = JSON.parse(
+    readFileSync('tests/unit/fixtures/dependencyGraphApi.json', 'utf8'),
+  ) as Record<string, unknown>;
+  const parsed = parseProjectStatePayload(wire);
+  if (parsed.kind !== 'valid') throw new Error('captured fixture must parse');
+  const model = presentDependencyGraph({ kind: 'ready', payload: parsed.payload });
+  const view = render(model);
+  view
+    .byId('toolbar')
+    .children.find((node) => node.textContent === 'Longest dependency chain')
+    ?.onclick?.();
+  const chain = ((wire.insights as Record<string, unknown>).dependency as Record<string, unknown>)
+    .longestChain as string[];
+  const pairs = new Set(
+    chain.slice(0, -1).map((id, index) => [id, chain[index + 1]].sort().join('\0')),
   );
+  const expected = model.edges.filter(
+    (edge) => edge.type === 'depends_on' && pairs.has([edge.from, edge.to].sort().join('\0')),
+  );
+  const highlighted = view
+    .byId('graph')
+    .children.filter((node) => node.tag === 'path' && node.attributes.class?.includes(' chain'));
+  assert.equal(highlighted.length, expected.length);
+  assert.equal(highlighted.length, 9);
+  assert.deepEqual(
+    highlighted
+      .map((edge) => `${edge.attributes['data-source']}→${edge.attributes['data-target']}`)
+      .sort(),
+    expected.map((edge) => `${edge.from}→${edge.to}`).sort(),
+  );
+  assert.ok(highlighted.every((edge) => edge.attributes.class?.includes('depends_on')));
+  assert.ok(highlighted.every((edge) => edge.attributes['marker-end'] === 'url(#arrow)'));
+  assert.equal(view.messages.length, 0);
+  view
+    .byId('toolbar')
+    .children.find((node) => node.textContent === 'Longest dependency chain')
+    ?.onclick?.();
+  assert.equal(
+    view.byId('graph').children.filter((node) => node.attributes.class?.includes(' chain')).length,
+    0,
+  );
+});
+
+test('serialized production runtime сохраняет diagnostics и не выводит raw JSON containers', () => {
+  const model = fixtureModel();
+  const view = render(model);
+  assert.ok(view.byId('diagnostics').children.length > 0);
+  assert.doesNotMatch(view.html, /<pre(?:\s|>)/u);
+  assert.match(view.html, /textContent/u);
+});
+
+test('status filter остаётся видимым при исчезновении matching status из нового snapshot', () => {
+  const initial = fixtureModel();
+  const view = render(initial);
+  const status = view.byId('status-filter');
+  status.value = 'blocked';
+  status.onchange?.();
+  view.update({
+    ...initial,
+    nodes: initial.nodes.map((n) => (n.status === 'blocked' ? { ...n, status: 'completed' } : n)),
+  });
+  assert.equal(status.value, 'blocked');
+  assert.ok(status.children.some((option) => option.value === 'blocked'));
+  assert.equal(view.byId('graph').children.filter((n) => n.tag === 'g').length, 0);
+});
+
+test('cold context open сохраняет pending focus через loading/error → ready с той же revision', () => {
+  const ready = fixtureModel();
+  const pending = presentDependencyGraph({ kind: 'error', error: 'loading' }, 'STEP-002');
+  assert.equal(pending.focusId, 'STEP-002');
+  const view = render({ ...pending, navigationRevision: 0 });
+  view.update({
+    ...presentDependencyGraph({ kind: 'error', error: 'malformed' }, 'STEP-002'),
+    navigationRevision: 0,
+  });
+  view.update({ ...ready, navigationRevision: 0, selectedId: 'STEP-002', focusId: 'STEP-002' });
+  const ids = view
+    .byId('graph')
+    .children.filter((n) => n.tag === 'g')
+    .map((n) => n.attributes['aria-label']);
+  assert.ok(ids.some((id) => id?.startsWith('STEP-002')));
+  assert.ok(!ids.some((id) => id?.startsWith('SKILL:')));
+  assert.ok(view.byId('graph-inspector').children.some((n) => n.textContent === 'STEP-002'));
+});
+
+/** Обычный Host echo не равен новому external reveal: client filters и viewport принадлежат panel. */
+test('snapshot/selection echo сохраняют view/viewport, повторный reveal сбрасывает их, исчезнувший ID очищается', () => {
+  const initial = { ...fixtureModel(), navigationRevision: 1 };
+  const view = render(initial);
+  const search = view.byId('search');
+  search.value = 'STEP-002';
+  search.oninput?.();
+  const graph = view.byId('graph');
+  const originalNode = graph.children.find((n) => n.tag === 'g');
+  assert.ok(originalNode);
+  originalNode.onclick?.();
+  const zoom = view.byId('toolbar').children.find((n) => n.textContent === 'Zoom in');
+  zoom?.onclick?.();
+  const box = graph.attributes.viewBox;
+  view.update({ ...initial, selectedId: 'STEP-002' });
+  assert.equal(
+    graph.children.find((n) => n.tag === 'g'),
+    originalNode,
+  );
+  assert.equal(graph.attributes.viewBox, box);
+  assert.equal(search.value, 'STEP-002');
+  view.update({ ...initial, summary: { ...initial.summary, reviews: 123 } });
+  assert.equal(search.value, 'STEP-002');
+  assert.equal(graph.attributes.viewBox, box);
+  view.update({ ...initial, navigationRevision: 2, focusId: 'STEP-001', selectedId: 'STEP-001' });
+  assert.equal(search.value, '');
+  search.value = 'absent';
+  search.oninput?.();
+  view.update({ ...initial, navigationRevision: 3, focusId: 'STEP-001', selectedId: 'STEP-001' });
+  assert.equal(search.value, '');
+  assert.ok(graph.children.some((n) => n.attributes['aria-label']?.startsWith('STEP-001')));
+  view.update({
+    ...initial,
+    navigationRevision: 3,
+    nodes: initial.nodes.filter((n) => n.id !== 'STEP-001'),
+  });
+  assert.ok(view.byId('graph-inspector').children.some((n) => n.className === 'empty-inspector'));
+  assert.equal(view.messages.filter((m) => (m as { type: string }).type === 'refresh').length, 0);
+});
+
+test('dev и minified esbuild module сохраняют исполнимый shipped WebView factory', () => {
+  for (const minify of [false, true]) {
+    const output = esbuild.buildSync({
+      entryPoints: ['src/projectGraph/dependencyGraphWebview.ts'],
+      bundle: true,
+      platform: 'node',
+      format: 'cjs',
+      write: false,
+      minify,
+    }).outputFiles[0];
+    assert.ok(output);
+    const module = { exports: {} as Record<string, unknown> };
+    new Script(output.text).runInNewContext({
+      module,
+      exports: module.exports,
+      require: () => ({}),
+    });
+    const html = (
+      module.exports.dependencyGraphHtml as (
+        webview: { cspSource: string },
+        model: DependencyGraphPresentation,
+      ) => string
+    )({ cspSource: 'local' }, fixtureModel());
+    assert.match(html, /<script nonce=/u);
+    assert.match(html, /<svg/u);
+    const source = html.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/u)?.[1];
+    assert.ok(source);
+    const elements = new Map<string, Element>();
+    const byId = (id: string) => {
+      const existing = elements.get(id);
+      if (existing) return existing;
+      const created = new Element(id);
+      elements.set(id, created);
+      return created;
+    };
+    new Script(source).runInNewContext({
+      document: {
+        getElementById: byId,
+        createElement: (tag: string) => new Element(tag),
+        createElementNS: (_: string, tag: string) => new Element(tag),
+      },
+      acquireVsCodeApi: () => ({ postMessage: () => undefined }),
+      navigator: { clipboard: { writeText: () => Promise.resolve() } },
+      window: { addEventListener: () => undefined },
+    });
+    assert.ok(byId('graph').children.some((node) => node.tag === 'g'));
+  }
 });

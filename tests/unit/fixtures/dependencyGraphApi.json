@@ -1,0 +1,2736 @@
+{
+  "schemaVersion": 1,
+  "status": "PASS",
+  "integrity": "degraded",
+  "project": {
+    "name": "vscode-harness-navigator",
+    "initialized": true,
+    "initializedAt": "2026-09-21T14:07:31+00:00",
+    "harnessVersion": "1",
+    "harnessRelease": "0.10.3"
+  },
+  "summary": {
+    "artifacts": 39,
+    "reviews": 43,
+    "skills": 0,
+    "relationships": 165,
+    "byType": { "ADR": 8, "REQ": 12, "STEP": 19 },
+    "byStatus": { "accepted": 8, "blocked": 1, "completed": 27, "partial": 2, "planned": 1 },
+    "blockers": 1,
+    "missingReferences": 1,
+    "invalidReviews": 1,
+    "relationshipCoveragePercent": 100.0,
+    "traceabilityCoverage": {
+      "requirements": 12,
+      "coveredByStep": 12,
+      "verified": 9,
+      "uncovered": 0,
+      "staleEvidence": 1,
+      "openBlockingQuestions": 0,
+      "orphanSteps": 0,
+      "invalidReferences": 0
+    }
+  },
+  "graph": {
+    "rootNodeId": "PROJECT",
+    "nodes": [
+      {
+        "id": "ADR-001",
+        "artifactId": "ADR-001",
+        "type": "ADR",
+        "title": "Read-only граница и Harness как источник истины",
+        "status": "accepted",
+        "path": "docs/adr/ADR-001-read-only-source-of-truth.md",
+        "metadata": { "date": "2026-09-21" }
+      },
+      {
+        "id": "ADR-002",
+        "artifactId": "ADR-002",
+        "type": "ADR",
+        "title": "Общие Artifact и Reference indexes",
+        "status": "accepted",
+        "path": "docs/adr/ADR-002-shared-project-indexes.md",
+        "metadata": { "date": "2026-09-21" }
+      },
+      {
+        "id": "ADR-003",
+        "artifactId": "ADR-003",
+        "type": "ADR",
+        "title": "Command Catalog строится из command graph",
+        "status": "accepted",
+        "path": "docs/adr/ADR-003-command-catalog-from-graph.md",
+        "metadata": { "date": "2026-09-21" }
+      },
+      {
+        "id": "ADR-004",
+        "artifactId": "ADR-004",
+        "type": "ADR",
+        "title": "Нативный VS Code UI и локальный offline runtime",
+        "status": "accepted",
+        "path": "docs/adr/ADR-004-native-vscode-ui-and-local-runtime.md",
+        "metadata": { "date": "2026-09-21" }
+      },
+      {
+        "id": "ADR-005",
+        "artifactId": "ADR-005",
+        "type": "ADR",
+        "title": "Platform-scoped гарантия containment при чтении manifest",
+        "status": "accepted",
+        "path": "docs/adr/ADR-005-platform-scoped-manifest-containment.md",
+        "metadata": { "date": "2026-09-21" }
+      },
+      {
+        "id": "ADR-006",
+        "artifactId": "ADR-006",
+        "type": "ADR",
+        "title": "Прямой platform-scoped contract для STEP-002",
+        "status": "accepted",
+        "path": "docs/adr/ADR-006-step-002-platform-containment-bridge.md",
+        "metadata": { "date": "2026-09-22" }
+      },
+      {
+        "id": "ADR-007",
+        "artifactId": "ADR-007",
+        "type": "ADR",
+        "title": "Прямой platform-scoped contract для STEP-007",
+        "status": "accepted",
+        "path": "docs/adr/ADR-007-step-007-platform-containment-bridge.md",
+        "metadata": { "date": "2026-09-23" }
+      },
+      {
+        "id": "ADR-008",
+        "artifactId": "ADR-008",
+        "type": "ADR",
+        "title": "Узкая интеграция Project State API и dependency Graph",
+        "status": "accepted",
+        "path": "docs/adr/ADR-008-project-state-graph-integration.md",
+        "metadata": { "date": "2026-10-03" }
+      },
+      {
+        "id": "MISSING:STEP-9999",
+        "artifactId": "STEP-9999",
+        "type": "MISSING",
+        "title": "STEP-9999",
+        "status": "missing",
+        "path": null,
+        "metadata": { "expectedType": "STEP" }
+      },
+      {
+        "id": "PROJECT",
+        "artifactId": "PROJECT",
+        "type": "PROJECT",
+        "title": "vscode-harness-navigator",
+        "status": "initialized",
+        "path": ".harness/manifest.yaml",
+        "metadata": { "initializedAt": "2026-09-21T14:07:31+00:00" }
+      },
+      {
+        "id": "REQ-001",
+        "artifactId": "REQ-001",
+        "type": "REQ",
+        "title": "Read-only граница и источник истины",
+        "status": "completed",
+        "path": "docs/requirements/REQ-001-read-only-source-of-truth.md",
+        "metadata": { "priority": "high", "source": "brief" }
+      },
+      {
+        "id": "REQ-002",
+        "artifactId": "REQ-002",
+        "type": "REQ",
+        "title": "Определение Harness-проекта и совместимость",
+        "status": "completed",
+        "path": "docs/requirements/REQ-002-project-detection-and-compatibility.md",
+        "metadata": { "priority": "high", "source": "brief" }
+      },
+      {
+        "id": "REQ-003",
+        "artifactId": "REQ-003",
+        "type": "REQ",
+        "title": "Индексация артефактов и статусов",
+        "status": "completed",
+        "path": "docs/requirements/REQ-003-artifact-index-and-statuses.md",
+        "metadata": { "priority": "high", "source": "brief" }
+      },
+      {
+        "id": "REQ-004",
+        "artifactId": "REQ-004",
+        "type": "REQ",
+        "title": "Нативные views артефактов и фокуса",
+        "status": "completed",
+        "path": "docs/requirements/REQ-004-artifact-and-focus-views.md",
+        "metadata": { "priority": "high", "source": "brief" }
+      },
+      {
+        "id": "REQ-005",
+        "artifactId": "REQ-005",
+        "type": "REQ",
+        "title": "Навигация по Harness ID",
+        "status": "completed",
+        "path": "docs/requirements/REQ-005-harness-id-navigation.md",
+        "metadata": { "priority": "high", "source": "brief" }
+      },
+      {
+        "id": "REQ-006",
+        "artifactId": "REQ-006",
+        "type": "REQ",
+        "title": "Связи и поиск упоминаний",
+        "status": "completed",
+        "path": "docs/requirements/REQ-006-relations-and-references.md",
+        "metadata": { "priority": "high", "source": "brief" }
+      },
+      {
+        "id": "REQ-007",
+        "artifactId": "REQ-007",
+        "type": "REQ",
+        "title": "Read-only каталог Harness-команд",
+        "status": "partial",
+        "path": "docs/requirements/REQ-007-command-catalog.md",
+        "metadata": { "priority": "high", "source": "brief" }
+      },
+      {
+        "id": "REQ-008",
+        "artifactId": "REQ-008",
+        "type": "REQ",
+        "title": "Локализация и диагностируемая деградация",
+        "status": "completed",
+        "path": "docs/requirements/REQ-008-localization-and-diagnostics.md",
+        "metadata": { "priority": "medium", "source": "brief" }
+      },
+      {
+        "id": "REQ-009",
+        "artifactId": "REQ-009",
+        "type": "REQ",
+        "title": "Incremental и offline работа",
+        "status": "completed",
+        "path": "docs/requirements/REQ-009-incremental-offline-operation.md",
+        "metadata": { "priority": "medium", "source": "brief" }
+      },
+      {
+        "id": "REQ-010",
+        "artifactId": "REQ-010",
+        "type": "REQ",
+        "title": "Качество реализации и проверяемость",
+        "status": "completed",
+        "path": "docs/requirements/REQ-010-quality-and-testability.md",
+        "metadata": { "priority": "high", "source": "brief" }
+      },
+      {
+        "id": "REQ-011",
+        "artifactId": "REQ-011",
+        "type": "REQ",
+        "title": "Граф зависимостей из Project State API",
+        "status": "partial",
+        "path": "docs/requirements/REQ-011-project-state-dependency-graph.md",
+        "metadata": { "priority": "high", "source": "brief" }
+      },
+      {
+        "id": "REQ-012",
+        "artifactId": "REQ-012",
+        "type": "REQ",
+        "title": "Аналитический обзор и интерактивный граф проекта",
+        "status": "planned",
+        "path": "docs/requirements/REQ-012-dependency-graph-analytical-overview.md",
+        "metadata": { "priority": "high", "source": "brief" }
+      },
+      {
+        "id": "REVIEW:STEP-001:REVIEW-20260921T170700Z",
+        "artifactId": "REVIEW-20260921T170700Z",
+        "type": "REVIEW",
+        "title": "Review STEP-001",
+        "status": "fail",
+        "path": "planning/reviews/STEP-001/REVIEW-20260921T170700Z.md",
+        "metadata": {
+          "stepId": "STEP-001",
+          "createdAt": "2026-09-21T17:07:00Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-001:REVIEW-20260921T173001Z",
+        "artifactId": "REVIEW-20260921T173001Z",
+        "type": "REVIEW",
+        "title": "Review STEP-001",
+        "status": "fail",
+        "path": "planning/reviews/STEP-001/REVIEW-20260921T173001Z.md",
+        "metadata": {
+          "stepId": "STEP-001",
+          "createdAt": "2026-09-21T17:30:01Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-001:REVIEW-20260921T173400Z",
+        "artifactId": "REVIEW-20260921T173400Z",
+        "type": "REVIEW",
+        "title": "Review STEP-001",
+        "status": "pass",
+        "path": "planning/reviews/STEP-001/REVIEW-20260921T173400Z.md",
+        "metadata": {
+          "stepId": "STEP-001",
+          "createdAt": "2026-09-21T17:34:00Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-002:REVIEW-20260921T180853Z",
+        "artifactId": "REVIEW-20260921T180853Z",
+        "type": "REVIEW",
+        "title": "Review STEP-002",
+        "status": "fail",
+        "path": "planning/reviews/STEP-002/REVIEW-20260921T180853Z.md",
+        "metadata": {
+          "stepId": "STEP-002",
+          "createdAt": "2026-09-21T18:08:53Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-002:REVIEW-20260921T182245Z",
+        "artifactId": "REVIEW-20260921T182245Z",
+        "type": "REVIEW",
+        "title": "Review STEP-002",
+        "status": "fail",
+        "path": "planning/reviews/STEP-002/REVIEW-20260921T182245Z.md",
+        "metadata": {
+          "stepId": "STEP-002",
+          "createdAt": "2026-09-21T18:22:45Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-002:REVIEW-20260921T183152Z",
+        "artifactId": "REVIEW-20260921T183152Z",
+        "type": "REVIEW",
+        "title": "Review STEP-002",
+        "status": "fail",
+        "path": "planning/reviews/STEP-002/REVIEW-20260921T183152Z.md",
+        "metadata": {
+          "stepId": "STEP-002",
+          "createdAt": "2026-09-21T18:31:52Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-002:REVIEW-20260921T184919Z",
+        "artifactId": "REVIEW-20260921T184919Z",
+        "type": "REVIEW",
+        "title": "Review STEP-002",
+        "status": "fail",
+        "path": "planning/reviews/STEP-002/REVIEW-20260921T184919Z.md",
+        "metadata": {
+          "stepId": "STEP-002",
+          "createdAt": "2026-09-21T18:49:19Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-002:REVIEW-20260922T050932Z",
+        "artifactId": "REVIEW-20260922T050932Z",
+        "type": "REVIEW",
+        "title": "Review STEP-002",
+        "status": "blocked",
+        "path": "planning/reviews/STEP-002/REVIEW-20260922T050932Z.md",
+        "metadata": {
+          "stepId": "STEP-002",
+          "createdAt": "2026-09-22T05:09:32Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-002:REVIEW-20260922T064041Z",
+        "artifactId": "REVIEW-20260922T064041Z",
+        "type": "REVIEW",
+        "title": "Review STEP-002",
+        "status": "fail",
+        "path": "planning/reviews/STEP-002/REVIEW-20260922T064041Z.md",
+        "metadata": {
+          "stepId": "STEP-002",
+          "createdAt": "2026-09-22T06:40:41Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-002:REVIEW-20260922T065700Z",
+        "artifactId": "REVIEW-20260922T065700Z",
+        "type": "REVIEW",
+        "title": "Review STEP-002",
+        "status": "pass",
+        "path": "planning/reviews/STEP-002/REVIEW-20260922T065700Z.md",
+        "metadata": {
+          "stepId": "STEP-002",
+          "createdAt": "2026-09-22T06:57:00Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-003:REVIEW-20260922T165202Z",
+        "artifactId": "REVIEW-20260922T165202Z",
+        "type": "REVIEW",
+        "title": "Review STEP-003",
+        "status": "fail",
+        "path": "planning/reviews/STEP-003/REVIEW-20260922T165202Z.md",
+        "metadata": {
+          "stepId": "STEP-003",
+          "createdAt": "2026-09-22T16:52:02Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-003:REVIEW-20260922T172659Z",
+        "artifactId": "REVIEW-20260922T172659Z",
+        "type": "REVIEW",
+        "title": "Review STEP-003",
+        "status": "fail",
+        "path": "planning/reviews/STEP-003/REVIEW-20260922T172659Z.md",
+        "metadata": {
+          "stepId": "STEP-003",
+          "createdAt": "2026-09-22T17:26:59Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-003:REVIEW-20260922T183900Z",
+        "artifactId": "REVIEW-20260922T183900Z",
+        "type": "REVIEW",
+        "title": "Review STEP-003",
+        "status": "fail",
+        "path": "planning/reviews/STEP-003/REVIEW-20260922T183900Z.md",
+        "metadata": {
+          "stepId": "STEP-003",
+          "createdAt": "2026-09-22T18:39:00Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-003:REVIEW-20260922T191500Z",
+        "artifactId": "REVIEW-20260922T191500Z",
+        "type": "REVIEW",
+        "title": "Review STEP-003",
+        "status": "fail",
+        "path": "planning/reviews/STEP-003/REVIEW-20260922T191500Z.md",
+        "metadata": {
+          "stepId": "STEP-003",
+          "createdAt": "2026-09-22T19:15:00Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-003:REVIEW-20260922T213000Z",
+        "artifactId": "REVIEW-20260922T213000Z",
+        "type": "REVIEW",
+        "title": "Review STEP-003",
+        "status": "fail",
+        "path": "planning/reviews/STEP-003/REVIEW-20260922T213000Z.md",
+        "metadata": {
+          "stepId": "STEP-003",
+          "createdAt": "2026-09-22T21:30:00Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-003:REVIEW-20260922T222000Z",
+        "artifactId": "REVIEW-20260922T222000Z",
+        "type": "REVIEW",
+        "title": "Review STEP-003",
+        "status": "fail",
+        "path": "planning/reviews/STEP-003/REVIEW-20260922T222000Z.md",
+        "metadata": {
+          "stepId": "STEP-003",
+          "createdAt": "2026-09-22T22:20:00Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-003:REVIEW-20260923T090000Z",
+        "artifactId": "REVIEW-20260923T090000Z",
+        "type": "REVIEW",
+        "title": "Review STEP-003",
+        "status": "pass",
+        "path": "planning/reviews/STEP-003/REVIEW-20260923T090000Z.md",
+        "metadata": {
+          "stepId": "STEP-003",
+          "createdAt": "2026-09-23T09:00:00Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-004:REVIEW-20260923T053851Z",
+        "artifactId": "REVIEW-20260923T053851Z",
+        "type": "REVIEW",
+        "title": "Review STEP-004",
+        "status": "fail",
+        "path": "planning/reviews/STEP-004/REVIEW-20260923T053851Z.md",
+        "metadata": {
+          "stepId": "STEP-004",
+          "createdAt": "2026-09-23T05:38:51Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-004:REVIEW-20260923T060500Z",
+        "artifactId": "REVIEW-20260923T060500Z",
+        "type": "REVIEW",
+        "title": "Review STEP-004",
+        "status": "fail",
+        "path": "planning/reviews/STEP-004/REVIEW-20260923T060500Z.md",
+        "metadata": {
+          "stepId": "STEP-004",
+          "createdAt": "2026-09-23T06:05:00Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-004:REVIEW-20260923T062600Z",
+        "artifactId": "REVIEW-20260923T062600Z",
+        "type": "REVIEW",
+        "title": "Review STEP-004",
+        "status": "pass",
+        "path": "planning/reviews/STEP-004/REVIEW-20260923T062600Z.md",
+        "metadata": {
+          "stepId": "STEP-004",
+          "createdAt": "2026-09-23T06:26:00Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-005:REVIEW-20260923T155615Z",
+        "artifactId": "REVIEW-20260923T155615Z",
+        "type": "REVIEW",
+        "title": "Review STEP-005",
+        "status": "fail",
+        "path": "planning/reviews/STEP-005/REVIEW-20260923T155615Z.md",
+        "metadata": {
+          "stepId": "STEP-005",
+          "createdAt": "2026-09-23T15:56:15Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-005:REVIEW-20260923T160850Z",
+        "artifactId": "REVIEW-20260923T160850Z",
+        "type": "REVIEW",
+        "title": "Review STEP-005",
+        "status": "fail",
+        "path": "planning/reviews/STEP-005/REVIEW-20260923T160850Z.md",
+        "metadata": {
+          "stepId": "STEP-005",
+          "createdAt": "2026-09-23T16:08:50Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-005:REVIEW-20260923T161500Z",
+        "artifactId": "REVIEW-20260923T161500Z",
+        "type": "REVIEW",
+        "title": "Review STEP-005",
+        "status": "pass",
+        "path": "planning/reviews/STEP-005/REVIEW-20260923T161500Z.md",
+        "metadata": {
+          "stepId": "STEP-005",
+          "createdAt": "2026-09-23T16:15:00Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-006:REVIEW-20260923T165013Z",
+        "artifactId": "REVIEW-20260923T165013Z",
+        "type": "REVIEW",
+        "title": "Review STEP-006",
+        "status": "pass",
+        "path": "planning/reviews/STEP-006/REVIEW-20260923T165013Z.md",
+        "metadata": {
+          "stepId": "STEP-006",
+          "createdAt": "2026-09-23T16:50:13Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-007:REVIEW-20260923T201940Z",
+        "artifactId": "REVIEW-20260923T201940Z",
+        "type": "REVIEW",
+        "title": "Review STEP-007",
+        "status": "fail",
+        "path": "planning/reviews/STEP-007/REVIEW-20260923T201940Z.md",
+        "metadata": {
+          "stepId": "STEP-007",
+          "createdAt": "2026-09-23T20:19:40Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-007:REVIEW-20260923T203536Z",
+        "artifactId": "REVIEW-20260923T203536Z",
+        "type": "REVIEW",
+        "title": "Review STEP-007",
+        "status": "fail",
+        "path": "planning/reviews/STEP-007/REVIEW-20260923T203536Z.md",
+        "metadata": {
+          "stepId": "STEP-007",
+          "createdAt": "2026-09-23T20:35:36Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-007:REVIEW-20260923T205645Z",
+        "artifactId": "REVIEW-20260923T205645Z",
+        "type": "REVIEW",
+        "title": "Review STEP-007",
+        "status": "pass",
+        "path": "planning/reviews/STEP-007/REVIEW-20260923T205645Z.md",
+        "metadata": {
+          "stepId": "STEP-007",
+          "createdAt": "2026-09-23T20:56:45Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-008:REVIEW-20260921T202606Z",
+        "artifactId": "REVIEW-20260921T202606Z",
+        "type": "REVIEW",
+        "title": "Review STEP-008",
+        "status": "fail",
+        "path": "planning/reviews/STEP-008/REVIEW-20260921T202606Z.md",
+        "metadata": {
+          "stepId": "STEP-008",
+          "createdAt": "2026-09-21T20:26:06Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-008:REVIEW-20260921T204202Z",
+        "artifactId": "REVIEW-20260921T204202Z",
+        "type": "REVIEW",
+        "title": "Review STEP-008",
+        "status": "pass",
+        "path": "planning/reviews/STEP-008/REVIEW-20260921T204202Z.md",
+        "metadata": {
+          "stepId": "STEP-008",
+          "createdAt": "2026-09-21T20:42:02Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-009:REVIEW-20260922T062731Z",
+        "artifactId": "REVIEW-20260922T062731Z",
+        "type": "REVIEW",
+        "title": "Review STEP-009",
+        "status": "pass",
+        "path": "planning/reviews/STEP-009/REVIEW-20260922T062731Z.md",
+        "metadata": {
+          "stepId": "STEP-009",
+          "createdAt": "2026-09-22T06:27:31Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-010:REVIEW-20260924T051505Z",
+        "artifactId": "REVIEW-20260924T051505Z",
+        "type": "REVIEW",
+        "title": "Review STEP-010",
+        "status": "fail",
+        "path": "planning/reviews/STEP-010/REVIEW-20260924T051505Z.md",
+        "metadata": {
+          "stepId": "STEP-010",
+          "createdAt": "2026-09-24T05:15:05Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-010:REVIEW-20260924T053123Z",
+        "artifactId": "REVIEW-20260924T053123Z",
+        "type": "REVIEW",
+        "title": "Review STEP-010",
+        "status": "pass",
+        "path": "planning/reviews/STEP-010/REVIEW-20260924T053123Z.md",
+        "metadata": {
+          "stepId": "STEP-010",
+          "createdAt": "2026-09-24T05:31:23Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-011:REVIEW-20260924T064132Z",
+        "artifactId": "REVIEW-20260924T064132Z",
+        "type": "REVIEW",
+        "title": "Review STEP-011",
+        "status": "pass",
+        "path": "planning/reviews/STEP-011/REVIEW-20260924T064132Z.md",
+        "metadata": {
+          "stepId": "STEP-011",
+          "createdAt": "2026-09-24T06:41:32Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-012:REVIEW-20260924T065518Z",
+        "artifactId": "REVIEW-20260924T065518Z",
+        "type": "REVIEW",
+        "title": "Review STEP-012",
+        "status": "pass",
+        "path": "planning/reviews/STEP-012/REVIEW-20260924T065518Z.md",
+        "metadata": {
+          "stepId": "STEP-012",
+          "createdAt": "2026-09-24T06:55:18Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-013:REVIEW-20260924T070901Z",
+        "artifactId": "REVIEW-20260924T070901Z",
+        "type": "REVIEW",
+        "title": "Review STEP-013",
+        "status": "pass",
+        "path": "planning/reviews/STEP-013/REVIEW-20260924T070901Z.md",
+        "metadata": {
+          "stepId": "STEP-013",
+          "createdAt": "2026-09-24T07:09:01Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-014:REVIEW-20260924T080433Z",
+        "artifactId": "REVIEW-20260924T080433Z",
+        "type": "REVIEW",
+        "title": "Review STEP-014",
+        "status": "fail",
+        "path": "planning/reviews/STEP-014/REVIEW-20260924T080433Z.md",
+        "metadata": {
+          "stepId": "STEP-014",
+          "createdAt": "2026-09-24T08:04:33Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-014:REVIEW-20260924T081438Z",
+        "artifactId": "REVIEW-20260924T081438Z",
+        "type": "REVIEW",
+        "title": "Review STEP-014",
+        "status": "fail",
+        "path": "planning/reviews/STEP-014/REVIEW-20260924T081438Z.md",
+        "metadata": {
+          "stepId": "STEP-014",
+          "createdAt": "2026-09-24T08:14:38Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-014:REVIEW-20260924T083346Z",
+        "artifactId": "REVIEW-20260924T083346Z",
+        "type": "REVIEW",
+        "title": "Review STEP-014",
+        "status": "pass",
+        "path": "planning/reviews/STEP-014/REVIEW-20260924T083346Z.md",
+        "metadata": {
+          "stepId": "STEP-014",
+          "createdAt": "2026-09-24T08:33:46Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-016:REVIEW-20260925T080920Z",
+        "artifactId": "REVIEW-20260925T080920Z",
+        "type": "REVIEW",
+        "title": "Review STEP-016",
+        "status": "fail",
+        "path": "planning/reviews/STEP-016/REVIEW-20260925T080920Z.md",
+        "metadata": {
+          "stepId": "STEP-016",
+          "createdAt": "2026-09-25T08:09:20Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-016:REVIEW-20260925T081829Z",
+        "artifactId": "REVIEW-20260925T081829Z",
+        "type": "REVIEW",
+        "title": "Review STEP-016",
+        "status": "pass",
+        "path": "planning/reviews/STEP-016/REVIEW-20260925T081829Z.md",
+        "metadata": {
+          "stepId": "STEP-016",
+          "createdAt": "2026-09-25T08:18:29Z",
+          "verificationStatus": null
+        }
+      },
+      {
+        "id": "REVIEW:STEP-017:REVIEW-20261003T091125Z",
+        "artifactId": "REVIEW-20261003T091125Z",
+        "type": "REVIEW",
+        "title": "Review STEP-017",
+        "status": "pass",
+        "path": "planning/reviews/STEP-017/REVIEW-20261003T091125Z.md",
+        "metadata": {
+          "stepId": "STEP-017",
+          "createdAt": "2026-10-03T09:11:25Z",
+          "verificationStatus": "PASS"
+        }
+      },
+      {
+        "id": "REVIEW:STEP-018:REVIEW-20261003T120646Z",
+        "artifactId": "REVIEW-20261003T120646Z",
+        "type": "REVIEW",
+        "title": "Review STEP-018",
+        "status": "fail",
+        "path": "planning/reviews/STEP-018/REVIEW-20261003T120646Z.md",
+        "metadata": {
+          "stepId": "STEP-018",
+          "createdAt": "2026-10-03T12:06:46Z",
+          "verificationStatus": "PASS"
+        }
+      },
+      {
+        "id": "REVIEW:STEP-018:REVIEW-20261003T123541Z",
+        "artifactId": "REVIEW-20261003T123541Z",
+        "type": "REVIEW",
+        "title": "Review STEP-018",
+        "status": "pass",
+        "path": "planning/reviews/STEP-018/REVIEW-20261003T123541Z.md",
+        "metadata": {
+          "stepId": "STEP-018",
+          "createdAt": "2026-10-03T12:35:41Z",
+          "verificationStatus": "PASS"
+        }
+      },
+      {
+        "id": "STEP-001",
+        "artifactId": "STEP-001",
+        "type": "STEP",
+        "title": "Базовый каркас расширения и toolchain",
+        "status": "completed",
+        "path": "planning/tasks/STEP-001.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "high",
+          "phase": "foundation",
+          "riskFlags": ["architecture"],
+          "planStatus": "ready",
+          "planRevision": 1,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#system-context"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-001"
+        }
+      },
+      {
+        "id": "STEP-002",
+        "artifactId": "STEP-002",
+        "type": "STEP",
+        "title": "Определение проекта и чтение manifest",
+        "status": "completed",
+        "path": "planning/tasks/STEP-002.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "high",
+          "phase": "project-model",
+          "riskFlags": ["architecture", "security-sensitive"],
+          "planStatus": "ready",
+          "planRevision": 2,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#system-context"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-002"
+        }
+      },
+      {
+        "id": "STEP-003",
+        "artifactId": "STEP-003",
+        "type": "STEP",
+        "title": "Парсинг артефактов и общие индексы",
+        "status": "completed",
+        "path": "planning/tasks/STEP-003.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "high",
+          "phase": "project-model",
+          "riskFlags": ["performance-critical"],
+          "planStatus": "ready",
+          "planRevision": 1,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#основные-компоненты-границы"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-003"
+        }
+      },
+      {
+        "id": "STEP-004",
+        "artifactId": "STEP-004",
+        "type": "STEP",
+        "title": "Views артефактов, фокуса и поиск",
+        "status": "completed",
+        "path": "planning/tasks/STEP-004.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "high",
+          "phase": "workspace-ui",
+          "riskFlags": ["none"],
+          "planStatus": "ready",
+          "planRevision": 1,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#основные-компоненты-границы"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-004"
+        }
+      },
+      {
+        "id": "STEP-005",
+        "artifactId": "STEP-005",
+        "type": "STEP",
+        "title": "Навигация, references и relations Harness ID",
+        "status": "completed",
+        "path": "planning/tasks/STEP-005.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "high",
+          "phase": "ide-navigation",
+          "riskFlags": ["performance-critical"],
+          "planStatus": "ready",
+          "planRevision": 1,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#основные-компоненты-границы"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-005"
+        }
+      },
+      {
+        "id": "STEP-006",
+        "artifactId": "STEP-006",
+        "type": "STEP",
+        "title": "Каталог и справка Harness-команд",
+        "status": "completed",
+        "path": "planning/tasks/STEP-006.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "high",
+          "phase": "commands-ui",
+          "riskFlags": ["none"],
+          "planStatus": "ready",
+          "planRevision": 1,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#основные-компоненты-границы"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-006"
+        }
+      },
+      {
+        "id": "STEP-007",
+        "artifactId": "STEP-007",
+        "type": "STEP",
+        "title": "Интеграция MVP и release proof",
+        "status": "completed",
+        "path": "planning/tasks/STEP-007.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "high",
+          "phase": "integration-quality",
+          "riskFlags": ["release-critical", "security-sensitive"],
+          "planStatus": "ready",
+          "planRevision": 1,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#основные-потоки"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-007"
+        }
+      },
+      {
+        "id": "STEP-008",
+        "artifactId": "STEP-008",
+        "type": "STEP",
+        "title": "Кросс-платформенное no-follow containment чтение manifest и полнота localization regression",
+        "status": "completed",
+        "path": "planning/tasks/STEP-008.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "bugfix",
+          "priority": "high",
+          "phase": "project-model",
+          "riskFlags": ["architecture", "security-sensitive"],
+          "planStatus": "ready",
+          "planRevision": 3,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#security-boundaries"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-008"
+        }
+      },
+      {
+        "id": "STEP-009",
+        "artifactId": "STEP-009",
+        "type": "STEP",
+        "title": "Bridge ADR для traceability STEP-002 и platform containment",
+        "status": "completed",
+        "path": "planning/tasks/STEP-009.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "adr",
+          "priority": "high",
+          "phase": "architecture-governance",
+          "riskFlags": ["architecture", "security-sensitive"],
+          "planStatus": "ready",
+          "planRevision": 2,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#security-boundaries"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-009"
+        }
+      },
+      {
+        "id": "STEP-010",
+        "artifactId": "STEP-010",
+        "type": "STEP",
+        "title": "Подготовка расширения к публикации: иконка, README и метаданные VSIX",
+        "status": "completed",
+        "path": "planning/tasks/STEP-010.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "medium",
+          "phase": "release-preparation",
+          "riskFlags": ["release-critical"],
+          "planStatus": "ready",
+          "planRevision": 1,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#deployment-runtime-assumptions"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-010"
+        }
+      },
+      {
+        "id": "STEP-011",
+        "artifactId": "STEP-011",
+        "type": "STEP",
+        "title": "CI workflow GitHub Actions для quality gates и packaging",
+        "status": "completed",
+        "path": "planning/tasks/STEP-011.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "medium",
+          "phase": "release-preparation",
+          "riskFlags": ["none"],
+          "planStatus": "ready",
+          "planRevision": 2,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#deployment-runtime-assumptions"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-011"
+        }
+      },
+      {
+        "id": "STEP-012",
+        "artifactId": "STEP-012",
+        "type": "STEP",
+        "title": "Согласование engines.node с минимумом Node 22",
+        "status": "completed",
+        "path": "planning/tasks/STEP-012.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "low",
+          "phase": "release-preparation",
+          "riskFlags": ["none"],
+          "planStatus": "ready",
+          "planRevision": 1,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#deployment-runtime-assumptions"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-012"
+        }
+      },
+      {
+        "id": "STEP-013",
+        "artifactId": "STEP-013",
+        "type": "STEP",
+        "title": "Закрепление GitHub Actions по commit SHA и Dependabot",
+        "status": "completed",
+        "path": "planning/tasks/STEP-013.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "low",
+          "phase": "release-preparation",
+          "riskFlags": ["none"],
+          "planStatus": "ready",
+          "planRevision": 1,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#deployment-runtime-assumptions"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-013"
+        }
+      },
+      {
+        "id": "STEP-014",
+        "artifactId": "STEP-014",
+        "type": "STEP",
+        "title": "Префикс «Harness:» только в Command Palette (category вместо title)",
+        "status": "completed",
+        "path": "planning/tasks/STEP-014.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "low",
+          "phase": "release-preparation",
+          "riskFlags": ["none"],
+          "planStatus": "ready",
+          "planRevision": 1,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#основные-компоненты-границы"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-014"
+        }
+      },
+      {
+        "id": "STEP-015",
+        "artifactId": "STEP-015",
+        "type": "STEP",
+        "title": "Пункт «Открыть документацию» в меню команд Harness",
+        "status": "completed",
+        "path": "planning/tasks/STEP-015.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": null,
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "low",
+          "phase": "release-preparation",
+          "riskFlags": ["none"],
+          "planStatus": "ready",
+          "planRevision": 1,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#основные-компоненты-границы"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-015"
+        }
+      },
+      {
+        "id": "STEP-016",
+        "artifactId": "STEP-016",
+        "type": "STEP",
+        "title": "Семантические иконки артефактов в Harness Artifacts",
+        "status": "completed",
+        "path": "planning/tasks/STEP-016.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "medium",
+          "phase": "workspace-ui",
+          "riskFlags": ["none"],
+          "planStatus": "ready",
+          "planRevision": 1,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#основные-компоненты-границы"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-016"
+        }
+      },
+      {
+        "id": "STEP-017",
+        "artifactId": "STEP-017",
+        "type": "STEP",
+        "title": "Отдельный priority decoration в Harness Artifacts",
+        "status": "completed",
+        "path": "planning/tasks/STEP-017.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": "PASS",
+          "stepType": "implementation",
+          "priority": "medium",
+          "phase": "workspace-ui",
+          "riskFlags": ["none"],
+          "planStatus": "ready",
+          "planRevision": 1,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#основные-компоненты-границы"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-017"
+        }
+      },
+      {
+        "id": "STEP-018",
+        "artifactId": "STEP-018",
+        "type": "STEP",
+        "title": "Интерактивный dependency Graph из Project State API",
+        "status": "completed",
+        "path": "planning/tasks/STEP-018.md",
+        "metadata": {
+          "completionState": "completed",
+          "latestReviewVerdict": "PASS",
+          "latestCompletionResult": "PASS",
+          "stepType": "implementation",
+          "priority": "high",
+          "phase": "project-graph",
+          "riskFlags": ["architecture", "security-sensitive"],
+          "planStatus": "ready",
+          "planRevision": 1,
+          "executionGroups": [],
+          "planFreshness": "blocked",
+          "planStaleCauses": [
+            {
+              "component": "PLANNING_CONTEXT",
+              "change": "architecture ref file not found: docs/architecture.md#основные-компоненты-границы"
+            }
+          ],
+          "planRemediation": "STEP PLAN STEP-018"
+        }
+      },
+      {
+        "id": "STEP-019",
+        "artifactId": "STEP-019",
+        "type": "STEP",
+        "title": "Аналитический обзор и интерактивный Dependency Graph",
+        "status": "blocked",
+        "path": "planning/tasks/STEP-019.md",
+        "metadata": {
+          "completionState": "not_ready_for_completion",
+          "latestReviewVerdict": null,
+          "latestCompletionResult": null,
+          "stepType": "implementation",
+          "priority": "high",
+          "phase": "project-graph-ui",
+          "riskFlags": ["security-sensitive"],
+          "planStatus": "draft",
+          "planRevision": 0,
+          "executionGroups": [],
+          "planFreshness": "not_ready",
+          "planStaleCauses": [],
+          "planRemediation": "STEP PLAN STEP-019"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "addresses:ADR-001:REQ-001",
+        "source": "ADR-001",
+        "target": "REQ-001",
+        "relation": "addresses",
+        "declaredBy": ["ADR-001", "REQ-001"]
+      },
+      {
+        "id": "addresses:ADR-001:REQ-002",
+        "source": "ADR-001",
+        "target": "REQ-002",
+        "relation": "addresses",
+        "declaredBy": ["ADR-001", "REQ-002"]
+      },
+      {
+        "id": "addresses:ADR-001:REQ-003",
+        "source": "ADR-001",
+        "target": "REQ-003",
+        "relation": "addresses",
+        "declaredBy": ["ADR-001", "REQ-003"]
+      },
+      {
+        "id": "addresses:ADR-002:REQ-003",
+        "source": "ADR-002",
+        "target": "REQ-003",
+        "relation": "addresses",
+        "declaredBy": ["ADR-002", "REQ-003"]
+      },
+      {
+        "id": "addresses:ADR-002:REQ-005",
+        "source": "ADR-002",
+        "target": "REQ-005",
+        "relation": "addresses",
+        "declaredBy": ["ADR-002", "REQ-005"]
+      },
+      {
+        "id": "addresses:ADR-002:REQ-006",
+        "source": "ADR-002",
+        "target": "REQ-006",
+        "relation": "addresses",
+        "declaredBy": ["ADR-002", "REQ-006"]
+      },
+      {
+        "id": "addresses:ADR-002:REQ-009",
+        "source": "ADR-002",
+        "target": "REQ-009",
+        "relation": "addresses",
+        "declaredBy": ["ADR-002", "REQ-009"]
+      },
+      {
+        "id": "addresses:ADR-002:REQ-010",
+        "source": "ADR-002",
+        "target": "REQ-010",
+        "relation": "addresses",
+        "declaredBy": ["ADR-002", "REQ-010"]
+      },
+      {
+        "id": "addresses:ADR-003:REQ-007",
+        "source": "ADR-003",
+        "target": "REQ-007",
+        "relation": "addresses",
+        "declaredBy": ["ADR-003", "REQ-007"]
+      },
+      {
+        "id": "addresses:ADR-004:REQ-001",
+        "source": "ADR-004",
+        "target": "REQ-001",
+        "relation": "addresses",
+        "declaredBy": ["ADR-004", "REQ-001"]
+      },
+      {
+        "id": "addresses:ADR-004:REQ-004",
+        "source": "ADR-004",
+        "target": "REQ-004",
+        "relation": "addresses",
+        "declaredBy": ["ADR-004", "REQ-004"]
+      },
+      {
+        "id": "addresses:ADR-004:REQ-005",
+        "source": "ADR-004",
+        "target": "REQ-005",
+        "relation": "addresses",
+        "declaredBy": ["ADR-004", "REQ-005"]
+      },
+      {
+        "id": "addresses:ADR-004:REQ-007",
+        "source": "ADR-004",
+        "target": "REQ-007",
+        "relation": "addresses",
+        "declaredBy": ["ADR-004", "REQ-007"]
+      },
+      {
+        "id": "addresses:ADR-004:REQ-008",
+        "source": "ADR-004",
+        "target": "REQ-008",
+        "relation": "addresses",
+        "declaredBy": ["ADR-004", "REQ-008"]
+      },
+      {
+        "id": "addresses:ADR-004:REQ-009",
+        "source": "ADR-004",
+        "target": "REQ-009",
+        "relation": "addresses",
+        "declaredBy": ["ADR-004", "REQ-009"]
+      },
+      {
+        "id": "addresses:ADR-004:REQ-010",
+        "source": "ADR-004",
+        "target": "REQ-010",
+        "relation": "addresses",
+        "declaredBy": ["ADR-004", "REQ-010"]
+      },
+      {
+        "id": "addresses:ADR-005:REQ-002",
+        "source": "ADR-005",
+        "target": "REQ-002",
+        "relation": "addresses",
+        "declaredBy": ["ADR-005", "REQ-002"]
+      },
+      {
+        "id": "addresses:ADR-006:REQ-002",
+        "source": "ADR-006",
+        "target": "REQ-002",
+        "relation": "addresses",
+        "declaredBy": ["ADR-006", "REQ-002"]
+      },
+      {
+        "id": "addresses:ADR-007:REQ-002",
+        "source": "ADR-007",
+        "target": "REQ-002",
+        "relation": "addresses",
+        "declaredBy": ["ADR-007", "REQ-002"]
+      },
+      {
+        "id": "addresses:ADR-008:REQ-001",
+        "source": "ADR-008",
+        "target": "REQ-001",
+        "relation": "addresses",
+        "declaredBy": ["ADR-008", "REQ-001"]
+      },
+      {
+        "id": "addresses:ADR-008:REQ-002",
+        "source": "ADR-008",
+        "target": "REQ-002",
+        "relation": "addresses",
+        "declaredBy": ["ADR-008", "REQ-002"]
+      },
+      {
+        "id": "addresses:ADR-008:REQ-004",
+        "source": "ADR-008",
+        "target": "REQ-004",
+        "relation": "addresses",
+        "declaredBy": ["ADR-008", "REQ-004"]
+      },
+      {
+        "id": "addresses:ADR-008:REQ-008",
+        "source": "ADR-008",
+        "target": "REQ-008",
+        "relation": "addresses",
+        "declaredBy": ["ADR-008", "REQ-008"]
+      },
+      {
+        "id": "addresses:ADR-008:REQ-009",
+        "source": "ADR-008",
+        "target": "REQ-009",
+        "relation": "addresses",
+        "declaredBy": ["ADR-008", "REQ-009"]
+      },
+      {
+        "id": "addresses:ADR-008:REQ-011",
+        "source": "ADR-008",
+        "target": "REQ-011",
+        "relation": "addresses",
+        "declaredBy": ["ADR-008", "REQ-011"]
+      },
+      {
+        "id": "addresses:ADR-008:REQ-012",
+        "source": "ADR-008",
+        "target": "REQ-012",
+        "relation": "addresses",
+        "declaredBy": ["ADR-008", "REQ-012"]
+      },
+      {
+        "id": "depends_on:STEP-002:STEP-001",
+        "source": "STEP-002",
+        "target": "STEP-001",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-002"]
+      },
+      {
+        "id": "depends_on:STEP-003:STEP-002",
+        "source": "STEP-003",
+        "target": "STEP-002",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-003"]
+      },
+      {
+        "id": "depends_on:STEP-004:STEP-003",
+        "source": "STEP-004",
+        "target": "STEP-003",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-004"]
+      },
+      {
+        "id": "depends_on:STEP-005:STEP-003",
+        "source": "STEP-005",
+        "target": "STEP-003",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-005"]
+      },
+      {
+        "id": "depends_on:STEP-006:STEP-002",
+        "source": "STEP-006",
+        "target": "STEP-002",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-006"]
+      },
+      {
+        "id": "depends_on:STEP-007:STEP-004",
+        "source": "STEP-007",
+        "target": "STEP-004",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-007"]
+      },
+      {
+        "id": "depends_on:STEP-007:STEP-005",
+        "source": "STEP-007",
+        "target": "STEP-005",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-007"]
+      },
+      {
+        "id": "depends_on:STEP-007:STEP-006",
+        "source": "STEP-007",
+        "target": "STEP-006",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-007"]
+      },
+      {
+        "id": "depends_on:STEP-008:STEP-001",
+        "source": "STEP-008",
+        "target": "STEP-001",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-008"]
+      },
+      {
+        "id": "depends_on:STEP-009:STEP-008",
+        "source": "STEP-009",
+        "target": "STEP-008",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-009"]
+      },
+      {
+        "id": "depends_on:STEP-010:STEP-007",
+        "source": "STEP-010",
+        "target": "STEP-007",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-010"]
+      },
+      {
+        "id": "depends_on:STEP-011:STEP-010",
+        "source": "STEP-011",
+        "target": "STEP-010",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-011"]
+      },
+      {
+        "id": "depends_on:STEP-012:STEP-011",
+        "source": "STEP-012",
+        "target": "STEP-011",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-012"]
+      },
+      {
+        "id": "depends_on:STEP-013:STEP-011",
+        "source": "STEP-013",
+        "target": "STEP-011",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-013"]
+      },
+      {
+        "id": "depends_on:STEP-014:STEP-013",
+        "source": "STEP-014",
+        "target": "STEP-013",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-014"]
+      },
+      {
+        "id": "depends_on:STEP-015:STEP-014",
+        "source": "STEP-015",
+        "target": "STEP-014",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-015"]
+      },
+      {
+        "id": "depends_on:STEP-016:STEP-004",
+        "source": "STEP-016",
+        "target": "STEP-004",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-016"]
+      },
+      {
+        "id": "depends_on:STEP-017:STEP-016",
+        "source": "STEP-017",
+        "target": "STEP-016",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-017"]
+      },
+      {
+        "id": "depends_on:STEP-019:MISSING:STEP-9999",
+        "source": "STEP-019",
+        "target": "MISSING:STEP-9999",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-019"]
+      },
+      {
+        "id": "depends_on:STEP-019:STEP-018",
+        "source": "STEP-019",
+        "target": "STEP-018",
+        "relation": "depends_on",
+        "declaredBy": ["STEP-019"]
+      },
+      {
+        "id": "governs:ADR-001:STEP-001",
+        "source": "ADR-001",
+        "target": "STEP-001",
+        "relation": "governs",
+        "declaredBy": ["ADR-001", "STEP-001"]
+      },
+      {
+        "id": "governs:ADR-001:STEP-002",
+        "source": "ADR-001",
+        "target": "STEP-002",
+        "relation": "governs",
+        "declaredBy": ["ADR-001", "STEP-002"]
+      },
+      {
+        "id": "governs:ADR-001:STEP-003",
+        "source": "ADR-001",
+        "target": "STEP-003",
+        "relation": "governs",
+        "declaredBy": ["ADR-001", "STEP-003"]
+      },
+      {
+        "id": "governs:ADR-001:STEP-007",
+        "source": "ADR-001",
+        "target": "STEP-007",
+        "relation": "governs",
+        "declaredBy": ["ADR-001", "STEP-007"]
+      },
+      {
+        "id": "governs:ADR-001:STEP-008",
+        "source": "ADR-001",
+        "target": "STEP-008",
+        "relation": "governs",
+        "declaredBy": ["ADR-001", "STEP-008"]
+      },
+      {
+        "id": "governs:ADR-002:STEP-003",
+        "source": "ADR-002",
+        "target": "STEP-003",
+        "relation": "governs",
+        "declaredBy": ["ADR-002", "STEP-003"]
+      },
+      {
+        "id": "governs:ADR-002:STEP-005",
+        "source": "ADR-002",
+        "target": "STEP-005",
+        "relation": "governs",
+        "declaredBy": ["ADR-002", "STEP-005"]
+      },
+      {
+        "id": "governs:ADR-002:STEP-007",
+        "source": "ADR-002",
+        "target": "STEP-007",
+        "relation": "governs",
+        "declaredBy": ["ADR-002", "STEP-007"]
+      },
+      {
+        "id": "governs:ADR-002:STEP-016",
+        "source": "ADR-002",
+        "target": "STEP-016",
+        "relation": "governs",
+        "declaredBy": ["ADR-002", "STEP-016"]
+      },
+      {
+        "id": "governs:ADR-002:STEP-017",
+        "source": "ADR-002",
+        "target": "STEP-017",
+        "relation": "governs",
+        "declaredBy": ["ADR-002", "STEP-017"]
+      },
+      {
+        "id": "governs:ADR-003:STEP-006",
+        "source": "ADR-003",
+        "target": "STEP-006",
+        "relation": "governs",
+        "declaredBy": ["ADR-003", "STEP-006"]
+      },
+      {
+        "id": "governs:ADR-003:STEP-007",
+        "source": "ADR-003",
+        "target": "STEP-007",
+        "relation": "governs",
+        "declaredBy": ["ADR-003", "STEP-007"]
+      },
+      {
+        "id": "governs:ADR-003:STEP-015",
+        "source": "ADR-003",
+        "target": "STEP-015",
+        "relation": "governs",
+        "declaredBy": ["ADR-003", "STEP-015"]
+      },
+      {
+        "id": "governs:ADR-004:STEP-001",
+        "source": "ADR-004",
+        "target": "STEP-001",
+        "relation": "governs",
+        "declaredBy": ["ADR-004", "STEP-001"]
+      },
+      {
+        "id": "governs:ADR-004:STEP-004",
+        "source": "ADR-004",
+        "target": "STEP-004",
+        "relation": "governs",
+        "declaredBy": ["ADR-004", "STEP-004"]
+      },
+      {
+        "id": "governs:ADR-004:STEP-005",
+        "source": "ADR-004",
+        "target": "STEP-005",
+        "relation": "governs",
+        "declaredBy": ["ADR-004", "STEP-005"]
+      },
+      {
+        "id": "governs:ADR-004:STEP-006",
+        "source": "ADR-004",
+        "target": "STEP-006",
+        "relation": "governs",
+        "declaredBy": ["ADR-004", "STEP-006"]
+      },
+      {
+        "id": "governs:ADR-004:STEP-007",
+        "source": "ADR-004",
+        "target": "STEP-007",
+        "relation": "governs",
+        "declaredBy": ["ADR-004", "STEP-007"]
+      },
+      {
+        "id": "governs:ADR-004:STEP-016",
+        "source": "ADR-004",
+        "target": "STEP-016",
+        "relation": "governs",
+        "declaredBy": ["ADR-004", "STEP-016"]
+      },
+      {
+        "id": "governs:ADR-004:STEP-017",
+        "source": "ADR-004",
+        "target": "STEP-017",
+        "relation": "governs",
+        "declaredBy": ["ADR-004", "STEP-017"]
+      },
+      {
+        "id": "governs:ADR-005:STEP-008",
+        "source": "ADR-005",
+        "target": "STEP-008",
+        "relation": "governs",
+        "declaredBy": ["ADR-005", "STEP-008"]
+      },
+      {
+        "id": "governs:ADR-005:STEP-015",
+        "source": "ADR-005",
+        "target": "STEP-015",
+        "relation": "governs",
+        "declaredBy": ["ADR-005", "STEP-015"]
+      },
+      {
+        "id": "governs:ADR-006:STEP-002",
+        "source": "ADR-006",
+        "target": "STEP-002",
+        "relation": "governs",
+        "declaredBy": ["ADR-006", "STEP-002"]
+      },
+      {
+        "id": "governs:ADR-006:STEP-009",
+        "source": "ADR-006",
+        "target": "STEP-009",
+        "relation": "governs",
+        "declaredBy": ["ADR-006", "STEP-009"]
+      },
+      {
+        "id": "governs:ADR-007:STEP-007",
+        "source": "ADR-007",
+        "target": "STEP-007",
+        "relation": "governs",
+        "declaredBy": ["ADR-007", "STEP-007"]
+      },
+      {
+        "id": "governs:ADR-008:STEP-018",
+        "source": "ADR-008",
+        "target": "STEP-018",
+        "relation": "governs",
+        "declaredBy": ["ADR-008", "STEP-018"]
+      },
+      {
+        "id": "governs:ADR-008:STEP-019",
+        "source": "ADR-008",
+        "target": "STEP-019",
+        "relation": "governs",
+        "declaredBy": ["ADR-008", "STEP-019"]
+      },
+      {
+        "id": "implemented_by:REQ-001:STEP-001",
+        "source": "REQ-001",
+        "target": "STEP-001",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-001", "STEP-001"]
+      },
+      {
+        "id": "implemented_by:REQ-001:STEP-002",
+        "source": "REQ-001",
+        "target": "STEP-002",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-001", "STEP-002"]
+      },
+      {
+        "id": "implemented_by:REQ-001:STEP-003",
+        "source": "REQ-001",
+        "target": "STEP-003",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-001", "STEP-003"]
+      },
+      {
+        "id": "implemented_by:REQ-001:STEP-004",
+        "source": "REQ-001",
+        "target": "STEP-004",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-001", "STEP-004"]
+      },
+      {
+        "id": "implemented_by:REQ-001:STEP-005",
+        "source": "REQ-001",
+        "target": "STEP-005",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-001", "STEP-005"]
+      },
+      {
+        "id": "implemented_by:REQ-001:STEP-006",
+        "source": "REQ-001",
+        "target": "STEP-006",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-001", "STEP-006"]
+      },
+      {
+        "id": "implemented_by:REQ-001:STEP-007",
+        "source": "REQ-001",
+        "target": "STEP-007",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-001", "STEP-007"]
+      },
+      {
+        "id": "implemented_by:REQ-001:STEP-018",
+        "source": "REQ-001",
+        "target": "STEP-018",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-001", "STEP-018"]
+      },
+      {
+        "id": "implemented_by:REQ-002:STEP-002",
+        "source": "REQ-002",
+        "target": "STEP-002",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-002", "STEP-002"]
+      },
+      {
+        "id": "implemented_by:REQ-002:STEP-007",
+        "source": "REQ-002",
+        "target": "STEP-007",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-002", "STEP-007"]
+      },
+      {
+        "id": "implemented_by:REQ-002:STEP-008",
+        "source": "REQ-002",
+        "target": "STEP-008",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-002", "STEP-008"]
+      },
+      {
+        "id": "implemented_by:REQ-002:STEP-009",
+        "source": "REQ-002",
+        "target": "STEP-009",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-002", "STEP-009"]
+      },
+      {
+        "id": "implemented_by:REQ-002:STEP-018",
+        "source": "REQ-002",
+        "target": "STEP-018",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-002", "STEP-018"]
+      },
+      {
+        "id": "implemented_by:REQ-003:STEP-003",
+        "source": "REQ-003",
+        "target": "STEP-003",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-003", "STEP-003"]
+      },
+      {
+        "id": "implemented_by:REQ-003:STEP-007",
+        "source": "REQ-003",
+        "target": "STEP-007",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-003", "STEP-007"]
+      },
+      {
+        "id": "implemented_by:REQ-004:STEP-004",
+        "source": "REQ-004",
+        "target": "STEP-004",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-004", "STEP-004"]
+      },
+      {
+        "id": "implemented_by:REQ-004:STEP-007",
+        "source": "REQ-004",
+        "target": "STEP-007",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-004", "STEP-007"]
+      },
+      {
+        "id": "implemented_by:REQ-004:STEP-016",
+        "source": "REQ-004",
+        "target": "STEP-016",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-004", "STEP-016"]
+      },
+      {
+        "id": "implemented_by:REQ-004:STEP-017",
+        "source": "REQ-004",
+        "target": "STEP-017",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-004", "STEP-017"]
+      },
+      {
+        "id": "implemented_by:REQ-004:STEP-018",
+        "source": "REQ-004",
+        "target": "STEP-018",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-004", "STEP-018"]
+      },
+      {
+        "id": "implemented_by:REQ-005:STEP-005",
+        "source": "REQ-005",
+        "target": "STEP-005",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-005", "STEP-005"]
+      },
+      {
+        "id": "implemented_by:REQ-005:STEP-007",
+        "source": "REQ-005",
+        "target": "STEP-007",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-005", "STEP-007"]
+      },
+      {
+        "id": "implemented_by:REQ-006:STEP-005",
+        "source": "REQ-006",
+        "target": "STEP-005",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-006", "STEP-005"]
+      },
+      {
+        "id": "implemented_by:REQ-006:STEP-007",
+        "source": "REQ-006",
+        "target": "STEP-007",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-006", "STEP-007"]
+      },
+      {
+        "id": "implemented_by:REQ-007:STEP-006",
+        "source": "REQ-007",
+        "target": "STEP-006",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-007", "STEP-006"]
+      },
+      {
+        "id": "implemented_by:REQ-007:STEP-007",
+        "source": "REQ-007",
+        "target": "STEP-007",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-007", "STEP-007"]
+      },
+      {
+        "id": "implemented_by:REQ-007:STEP-015",
+        "source": "REQ-007",
+        "target": "STEP-015",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-007", "STEP-015"]
+      },
+      {
+        "id": "implemented_by:REQ-008:STEP-001",
+        "source": "REQ-008",
+        "target": "STEP-001",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-008", "STEP-001"]
+      },
+      {
+        "id": "implemented_by:REQ-008:STEP-002",
+        "source": "REQ-008",
+        "target": "STEP-002",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-008", "STEP-002"]
+      },
+      {
+        "id": "implemented_by:REQ-008:STEP-003",
+        "source": "REQ-008",
+        "target": "STEP-003",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-008", "STEP-003"]
+      },
+      {
+        "id": "implemented_by:REQ-008:STEP-004",
+        "source": "REQ-008",
+        "target": "STEP-004",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-008", "STEP-004"]
+      },
+      {
+        "id": "implemented_by:REQ-008:STEP-005",
+        "source": "REQ-008",
+        "target": "STEP-005",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-008", "STEP-005"]
+      },
+      {
+        "id": "implemented_by:REQ-008:STEP-006",
+        "source": "REQ-008",
+        "target": "STEP-006",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-008", "STEP-006"]
+      },
+      {
+        "id": "implemented_by:REQ-008:STEP-007",
+        "source": "REQ-008",
+        "target": "STEP-007",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-008", "STEP-007"]
+      },
+      {
+        "id": "implemented_by:REQ-008:STEP-008",
+        "source": "REQ-008",
+        "target": "STEP-008",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-008", "STEP-008"]
+      },
+      {
+        "id": "implemented_by:REQ-008:STEP-014",
+        "source": "REQ-008",
+        "target": "STEP-014",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-008", "STEP-014"]
+      },
+      {
+        "id": "implemented_by:REQ-008:STEP-018",
+        "source": "REQ-008",
+        "target": "STEP-018",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-008", "STEP-018"]
+      },
+      {
+        "id": "implemented_by:REQ-009:STEP-003",
+        "source": "REQ-009",
+        "target": "STEP-003",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-009", "STEP-003"]
+      },
+      {
+        "id": "implemented_by:REQ-009:STEP-007",
+        "source": "REQ-009",
+        "target": "STEP-007",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-009", "STEP-007"]
+      },
+      {
+        "id": "implemented_by:REQ-009:STEP-018",
+        "source": "REQ-009",
+        "target": "STEP-018",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-009", "STEP-018"]
+      },
+      {
+        "id": "implemented_by:REQ-010:STEP-001",
+        "source": "REQ-010",
+        "target": "STEP-001",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-010", "STEP-001"]
+      },
+      {
+        "id": "implemented_by:REQ-010:STEP-007",
+        "source": "REQ-010",
+        "target": "STEP-007",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-010", "STEP-007"]
+      },
+      {
+        "id": "implemented_by:REQ-010:STEP-010",
+        "source": "REQ-010",
+        "target": "STEP-010",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-010", "STEP-010"]
+      },
+      {
+        "id": "implemented_by:REQ-010:STEP-011",
+        "source": "REQ-010",
+        "target": "STEP-011",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-010", "STEP-011"]
+      },
+      {
+        "id": "implemented_by:REQ-010:STEP-012",
+        "source": "REQ-010",
+        "target": "STEP-012",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-010", "STEP-012"]
+      },
+      {
+        "id": "implemented_by:REQ-010:STEP-013",
+        "source": "REQ-010",
+        "target": "STEP-013",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-010", "STEP-013"]
+      },
+      {
+        "id": "implemented_by:REQ-011:STEP-018",
+        "source": "REQ-011",
+        "target": "STEP-018",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-011", "STEP-018"]
+      },
+      {
+        "id": "implemented_by:REQ-011:STEP-019",
+        "source": "REQ-011",
+        "target": "STEP-019",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-011", "STEP-019"]
+      },
+      {
+        "id": "implemented_by:REQ-012:STEP-019",
+        "source": "REQ-012",
+        "target": "STEP-019",
+        "relation": "implemented_by",
+        "declaredBy": ["REQ-012", "STEP-019"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-001:REVIEW-20260921T170700Z:STEP-001",
+        "source": "REVIEW:STEP-001:REVIEW-20260921T170700Z",
+        "target": "STEP-001",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-001:REVIEW-20260921T170700Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-001:REVIEW-20260921T173001Z:STEP-001",
+        "source": "REVIEW:STEP-001:REVIEW-20260921T173001Z",
+        "target": "STEP-001",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-001:REVIEW-20260921T173001Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-001:REVIEW-20260921T173400Z:STEP-001",
+        "source": "REVIEW:STEP-001:REVIEW-20260921T173400Z",
+        "target": "STEP-001",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-001:REVIEW-20260921T173400Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-002:REVIEW-20260921T180853Z:STEP-002",
+        "source": "REVIEW:STEP-002:REVIEW-20260921T180853Z",
+        "target": "STEP-002",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-002:REVIEW-20260921T180853Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-002:REVIEW-20260921T182245Z:STEP-002",
+        "source": "REVIEW:STEP-002:REVIEW-20260921T182245Z",
+        "target": "STEP-002",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-002:REVIEW-20260921T182245Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-002:REVIEW-20260921T183152Z:STEP-002",
+        "source": "REVIEW:STEP-002:REVIEW-20260921T183152Z",
+        "target": "STEP-002",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-002:REVIEW-20260921T183152Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-002:REVIEW-20260921T184919Z:STEP-002",
+        "source": "REVIEW:STEP-002:REVIEW-20260921T184919Z",
+        "target": "STEP-002",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-002:REVIEW-20260921T184919Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-002:REVIEW-20260922T050932Z:STEP-002",
+        "source": "REVIEW:STEP-002:REVIEW-20260922T050932Z",
+        "target": "STEP-002",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-002:REVIEW-20260922T050932Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-002:REVIEW-20260922T064041Z:STEP-002",
+        "source": "REVIEW:STEP-002:REVIEW-20260922T064041Z",
+        "target": "STEP-002",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-002:REVIEW-20260922T064041Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-002:REVIEW-20260922T065700Z:STEP-002",
+        "source": "REVIEW:STEP-002:REVIEW-20260922T065700Z",
+        "target": "STEP-002",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-002:REVIEW-20260922T065700Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-003:REVIEW-20260922T165202Z:STEP-003",
+        "source": "REVIEW:STEP-003:REVIEW-20260922T165202Z",
+        "target": "STEP-003",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-003:REVIEW-20260922T165202Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-003:REVIEW-20260922T172659Z:STEP-003",
+        "source": "REVIEW:STEP-003:REVIEW-20260922T172659Z",
+        "target": "STEP-003",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-003:REVIEW-20260922T172659Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-003:REVIEW-20260922T183900Z:STEP-003",
+        "source": "REVIEW:STEP-003:REVIEW-20260922T183900Z",
+        "target": "STEP-003",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-003:REVIEW-20260922T183900Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-003:REVIEW-20260922T191500Z:STEP-003",
+        "source": "REVIEW:STEP-003:REVIEW-20260922T191500Z",
+        "target": "STEP-003",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-003:REVIEW-20260922T191500Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-003:REVIEW-20260922T213000Z:STEP-003",
+        "source": "REVIEW:STEP-003:REVIEW-20260922T213000Z",
+        "target": "STEP-003",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-003:REVIEW-20260922T213000Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-003:REVIEW-20260922T222000Z:STEP-003",
+        "source": "REVIEW:STEP-003:REVIEW-20260922T222000Z",
+        "target": "STEP-003",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-003:REVIEW-20260922T222000Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-003:REVIEW-20260923T090000Z:STEP-003",
+        "source": "REVIEW:STEP-003:REVIEW-20260923T090000Z",
+        "target": "STEP-003",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-003:REVIEW-20260923T090000Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-004:REVIEW-20260923T053851Z:STEP-004",
+        "source": "REVIEW:STEP-004:REVIEW-20260923T053851Z",
+        "target": "STEP-004",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-004:REVIEW-20260923T053851Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-004:REVIEW-20260923T060500Z:STEP-004",
+        "source": "REVIEW:STEP-004:REVIEW-20260923T060500Z",
+        "target": "STEP-004",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-004:REVIEW-20260923T060500Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-004:REVIEW-20260923T062600Z:STEP-004",
+        "source": "REVIEW:STEP-004:REVIEW-20260923T062600Z",
+        "target": "STEP-004",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-004:REVIEW-20260923T062600Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-005:REVIEW-20260923T155615Z:STEP-005",
+        "source": "REVIEW:STEP-005:REVIEW-20260923T155615Z",
+        "target": "STEP-005",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-005:REVIEW-20260923T155615Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-005:REVIEW-20260923T160850Z:STEP-005",
+        "source": "REVIEW:STEP-005:REVIEW-20260923T160850Z",
+        "target": "STEP-005",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-005:REVIEW-20260923T160850Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-005:REVIEW-20260923T161500Z:STEP-005",
+        "source": "REVIEW:STEP-005:REVIEW-20260923T161500Z",
+        "target": "STEP-005",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-005:REVIEW-20260923T161500Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-006:REVIEW-20260923T165013Z:STEP-006",
+        "source": "REVIEW:STEP-006:REVIEW-20260923T165013Z",
+        "target": "STEP-006",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-006:REVIEW-20260923T165013Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-007:REVIEW-20260923T201940Z:STEP-007",
+        "source": "REVIEW:STEP-007:REVIEW-20260923T201940Z",
+        "target": "STEP-007",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-007:REVIEW-20260923T201940Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-007:REVIEW-20260923T203536Z:STEP-007",
+        "source": "REVIEW:STEP-007:REVIEW-20260923T203536Z",
+        "target": "STEP-007",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-007:REVIEW-20260923T203536Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-007:REVIEW-20260923T205645Z:STEP-007",
+        "source": "REVIEW:STEP-007:REVIEW-20260923T205645Z",
+        "target": "STEP-007",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-007:REVIEW-20260923T205645Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-008:REVIEW-20260921T202606Z:STEP-008",
+        "source": "REVIEW:STEP-008:REVIEW-20260921T202606Z",
+        "target": "STEP-008",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-008:REVIEW-20260921T202606Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-008:REVIEW-20260921T204202Z:STEP-008",
+        "source": "REVIEW:STEP-008:REVIEW-20260921T204202Z",
+        "target": "STEP-008",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-008:REVIEW-20260921T204202Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-009:REVIEW-20260922T062731Z:STEP-009",
+        "source": "REVIEW:STEP-009:REVIEW-20260922T062731Z",
+        "target": "STEP-009",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-009:REVIEW-20260922T062731Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-010:REVIEW-20260924T051505Z:STEP-010",
+        "source": "REVIEW:STEP-010:REVIEW-20260924T051505Z",
+        "target": "STEP-010",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-010:REVIEW-20260924T051505Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-010:REVIEW-20260924T053123Z:STEP-010",
+        "source": "REVIEW:STEP-010:REVIEW-20260924T053123Z",
+        "target": "STEP-010",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-010:REVIEW-20260924T053123Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-011:REVIEW-20260924T064132Z:STEP-011",
+        "source": "REVIEW:STEP-011:REVIEW-20260924T064132Z",
+        "target": "STEP-011",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-011:REVIEW-20260924T064132Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-012:REVIEW-20260924T065518Z:STEP-012",
+        "source": "REVIEW:STEP-012:REVIEW-20260924T065518Z",
+        "target": "STEP-012",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-012:REVIEW-20260924T065518Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-013:REVIEW-20260924T070901Z:STEP-013",
+        "source": "REVIEW:STEP-013:REVIEW-20260924T070901Z",
+        "target": "STEP-013",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-013:REVIEW-20260924T070901Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-014:REVIEW-20260924T080433Z:STEP-014",
+        "source": "REVIEW:STEP-014:REVIEW-20260924T080433Z",
+        "target": "STEP-014",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-014:REVIEW-20260924T080433Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-014:REVIEW-20260924T081438Z:STEP-014",
+        "source": "REVIEW:STEP-014:REVIEW-20260924T081438Z",
+        "target": "STEP-014",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-014:REVIEW-20260924T081438Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-014:REVIEW-20260924T083346Z:STEP-014",
+        "source": "REVIEW:STEP-014:REVIEW-20260924T083346Z",
+        "target": "STEP-014",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-014:REVIEW-20260924T083346Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-016:REVIEW-20260925T080920Z:STEP-016",
+        "source": "REVIEW:STEP-016:REVIEW-20260925T080920Z",
+        "target": "STEP-016",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-016:REVIEW-20260925T080920Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-016:REVIEW-20260925T081829Z:STEP-016",
+        "source": "REVIEW:STEP-016:REVIEW-20260925T081829Z",
+        "target": "STEP-016",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-016:REVIEW-20260925T081829Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-017:REVIEW-20261003T091125Z:STEP-017",
+        "source": "REVIEW:STEP-017:REVIEW-20261003T091125Z",
+        "target": "STEP-017",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-017:REVIEW-20261003T091125Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-018:REVIEW-20261003T120646Z:STEP-018",
+        "source": "REVIEW:STEP-018:REVIEW-20261003T120646Z",
+        "target": "STEP-018",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-018:REVIEW-20261003T120646Z"]
+      },
+      {
+        "id": "reviews:REVIEW:STEP-018:REVIEW-20261003T123541Z:STEP-018",
+        "source": "REVIEW:STEP-018:REVIEW-20261003T123541Z",
+        "target": "STEP-018",
+        "relation": "reviews",
+        "declaredBy": ["REVIEW:STEP-018:REVIEW-20261003T123541Z"]
+      }
+    ]
+  },
+  "insights": {
+    "blockers": [{ "nodeId": "STEP-019", "kind": "blocked_step", "affects": [], "impactCount": 0 }],
+    "uncoveredRequirements": [],
+    "traceabilityCoverage": {
+      "requirements": [
+        {
+          "id": "REQ-001",
+          "priority": "high",
+          "status": "verified",
+          "stepCoverage": [
+            "STEP-001",
+            "STEP-002",
+            "STEP-003",
+            "STEP-004",
+            "STEP-005",
+            "STEP-006",
+            "STEP-007",
+            "STEP-018"
+          ],
+          "executableSteps": [
+            "STEP-001",
+            "STEP-002",
+            "STEP-003",
+            "STEP-004",
+            "STEP-005",
+            "STEP-006",
+            "STEP-007",
+            "STEP-018"
+          ],
+          "evidenceCoverage": [
+            "STEP-001",
+            "STEP-002",
+            "STEP-003",
+            "STEP-004",
+            "STEP-005",
+            "STEP-006",
+            "STEP-007",
+            "STEP-018"
+          ],
+          "staleEvidence": [],
+          "blockingOpenQuestions": [],
+          "releaseRelevant": true
+        },
+        {
+          "id": "REQ-002",
+          "priority": "high",
+          "status": "verified",
+          "stepCoverage": ["STEP-002", "STEP-007", "STEP-008", "STEP-009", "STEP-018"],
+          "executableSteps": ["STEP-002", "STEP-007", "STEP-008", "STEP-009", "STEP-018"],
+          "evidenceCoverage": ["STEP-002", "STEP-007", "STEP-008", "STEP-009", "STEP-018"],
+          "staleEvidence": [],
+          "blockingOpenQuestions": [],
+          "releaseRelevant": true
+        },
+        {
+          "id": "REQ-003",
+          "priority": "high",
+          "status": "verified",
+          "stepCoverage": ["STEP-003", "STEP-007"],
+          "executableSteps": ["STEP-003", "STEP-007"],
+          "evidenceCoverage": ["STEP-003", "STEP-007"],
+          "staleEvidence": [],
+          "blockingOpenQuestions": [],
+          "releaseRelevant": true
+        },
+        {
+          "id": "REQ-004",
+          "priority": "high",
+          "status": "verified",
+          "stepCoverage": ["STEP-004", "STEP-007", "STEP-016", "STEP-017", "STEP-018"],
+          "executableSteps": ["STEP-004", "STEP-007", "STEP-016", "STEP-017", "STEP-018"],
+          "evidenceCoverage": ["STEP-004", "STEP-007", "STEP-016", "STEP-017", "STEP-018"],
+          "staleEvidence": [],
+          "blockingOpenQuestions": [],
+          "releaseRelevant": true
+        },
+        {
+          "id": "REQ-005",
+          "priority": "high",
+          "status": "verified",
+          "stepCoverage": ["STEP-005", "STEP-007"],
+          "executableSteps": ["STEP-005", "STEP-007"],
+          "evidenceCoverage": ["STEP-005", "STEP-007"],
+          "staleEvidence": [],
+          "blockingOpenQuestions": [],
+          "releaseRelevant": true
+        },
+        {
+          "id": "REQ-006",
+          "priority": "high",
+          "status": "verified",
+          "stepCoverage": ["STEP-005", "STEP-007"],
+          "executableSteps": ["STEP-005", "STEP-007"],
+          "evidenceCoverage": ["STEP-005", "STEP-007"],
+          "staleEvidence": [],
+          "blockingOpenQuestions": [],
+          "releaseRelevant": true
+        },
+        {
+          "id": "REQ-007",
+          "priority": "high",
+          "status": "stale_evidence",
+          "stepCoverage": ["STEP-006", "STEP-007", "STEP-015"],
+          "executableSteps": ["STEP-006", "STEP-007", "STEP-015"],
+          "evidenceCoverage": ["STEP-006", "STEP-007"],
+          "staleEvidence": [
+            { "stepId": "STEP-015", "reasons": ["trusted PASS review is missing"] }
+          ],
+          "blockingOpenQuestions": [],
+          "releaseRelevant": true
+        },
+        {
+          "id": "REQ-008",
+          "priority": "medium",
+          "status": "verified",
+          "stepCoverage": [
+            "STEP-001",
+            "STEP-002",
+            "STEP-003",
+            "STEP-004",
+            "STEP-005",
+            "STEP-006",
+            "STEP-007",
+            "STEP-008",
+            "STEP-014",
+            "STEP-018"
+          ],
+          "executableSteps": [
+            "STEP-001",
+            "STEP-002",
+            "STEP-003",
+            "STEP-004",
+            "STEP-005",
+            "STEP-006",
+            "STEP-007",
+            "STEP-008",
+            "STEP-014",
+            "STEP-018"
+          ],
+          "evidenceCoverage": [
+            "STEP-001",
+            "STEP-002",
+            "STEP-003",
+            "STEP-004",
+            "STEP-005",
+            "STEP-006",
+            "STEP-007",
+            "STEP-008",
+            "STEP-014",
+            "STEP-018"
+          ],
+          "staleEvidence": [],
+          "blockingOpenQuestions": [],
+          "releaseRelevant": false
+        },
+        {
+          "id": "REQ-009",
+          "priority": "medium",
+          "status": "verified",
+          "stepCoverage": ["STEP-003", "STEP-007", "STEP-018"],
+          "executableSteps": ["STEP-003", "STEP-007", "STEP-018"],
+          "evidenceCoverage": ["STEP-003", "STEP-007", "STEP-018"],
+          "staleEvidence": [],
+          "blockingOpenQuestions": [],
+          "releaseRelevant": false
+        },
+        {
+          "id": "REQ-010",
+          "priority": "high",
+          "status": "verified",
+          "stepCoverage": ["STEP-001", "STEP-007", "STEP-010", "STEP-011", "STEP-012", "STEP-013"],
+          "executableSteps": [
+            "STEP-001",
+            "STEP-007",
+            "STEP-010",
+            "STEP-011",
+            "STEP-012",
+            "STEP-013"
+          ],
+          "evidenceCoverage": [
+            "STEP-001",
+            "STEP-007",
+            "STEP-010",
+            "STEP-011",
+            "STEP-012",
+            "STEP-013"
+          ],
+          "staleEvidence": [],
+          "blockingOpenQuestions": [],
+          "releaseRelevant": true
+        },
+        {
+          "id": "REQ-011",
+          "priority": "high",
+          "status": "covered",
+          "stepCoverage": ["STEP-018", "STEP-019"],
+          "executableSteps": ["STEP-018", "STEP-019"],
+          "evidenceCoverage": ["STEP-018"],
+          "staleEvidence": [],
+          "blockingOpenQuestions": [],
+          "releaseRelevant": true
+        },
+        {
+          "id": "REQ-012",
+          "priority": "high",
+          "status": "covered",
+          "stepCoverage": ["STEP-019"],
+          "executableSteps": ["STEP-019"],
+          "evidenceCoverage": [],
+          "staleEvidence": [],
+          "blockingOpenQuestions": [],
+          "releaseRelevant": true
+        }
+      ],
+      "orphanSteps": [],
+      "invalidReferences": [],
+      "blockingOpenQuestions": []
+    },
+    "isolatedArtifacts": [],
+    "dependency": {
+      "longestChain": [
+        "STEP-001",
+        "STEP-002",
+        "STEP-003",
+        "STEP-004",
+        "STEP-007",
+        "STEP-010",
+        "STEP-011",
+        "STEP-013",
+        "STEP-014",
+        "STEP-015"
+      ],
+      "cycles": []
+    }
+  },
+  "diagnostics": [
+    {
+      "code": "MISSING_REFERENCE",
+      "source": "STEP-019",
+      "target": "STEP-9999",
+      "relation": "depends_on"
+    },
+    {
+      "code": "INVALID_REVIEW",
+      "path": "planning/reviews/STEP-015/REVIEW-20260924T114015Z.md",
+      "errors": ["frontmatter kind must be step_review", "step_id must be STEP-NNN"]
+    }
+  ],
+  "sources": {
+    "requirements": "docs/requirements",
+    "adrs": "docs/adr",
+    "steps": "planning/tasks",
+    "openQuestions": "docs/open-questions",
+    "reviews": "planning/reviews",
+    "skills": ".agents/skills"
+  }
+}

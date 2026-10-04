@@ -24,6 +24,8 @@ export class DependencyGraphPanel implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private disposed = false;
   private initialized = false;
+  // Revision отличает внешний reveal от echo selection и обычного refresh.
+  private navigationRevision = 0;
   private model: DependencyGraphPresentation = {
     state: 'error',
     nodes: [],
@@ -62,6 +64,7 @@ export class DependencyGraphPanel implements vscode.Disposable {
     if (graphs.get(folder) === undefined) void graphs.refresh(folder);
   }
   reveal(focusId?: string): void {
+    this.navigationRevision++;
     this.focusId = focusId;
     this.selectedId = focusId;
     this.panel.reveal();
@@ -82,6 +85,7 @@ export class DependencyGraphPanel implements vscode.Disposable {
     const model = presentDependencyGraph(snapshot, this.focusId);
     this.model = {
       ...model,
+      navigationRevision: this.navigationRevision,
       ...(this.selectedId === undefined ? {} : { selectedId: this.selectedId }),
       ...(model.error === undefined
         ? {}
@@ -99,7 +103,7 @@ export class DependencyGraphPanel implements vscode.Disposable {
         this.panel.webview,
         this.model,
         labels,
-        this.folder.uri.fsPath,
+        this.folder.name,
       );
       this.initialized = true;
     } else void this.panel.webview.postMessage({ type: 'model', model: this.model });
