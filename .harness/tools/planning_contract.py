@@ -143,8 +143,8 @@ def adr_ids(task: dict[str, Any]) -> list[str]:
     return _list(task["frontmatter"], "adrs")
 
 
-def _adr_status_allows_readiness(task: dict[str, Any], status: Any) -> bool:
-    """Разрешить ADR prerequisite для Ready/IMPLEMENT boundary.
+def adr_status_allows_readiness(task: dict[str, Any], status: Any) -> bool:
+    """Разрешить ADR prerequisite для PLAN readiness / IMPLEMENT boundary.
 
     Обычный STEP может опираться только на accepted ADR. Для STEP type=adr
     linked proposed ADR является результатом самого шага: требовать accepted
@@ -610,7 +610,7 @@ def implementation_prerequisite_failures(root: Path, step_id: str) -> list[str]:
         except (DocumentError, OSError, ValueError) as exc:
             failures.append(f"adr-unavailable:{adr_id}:{exc}")
             continue
-        if not _adr_status_allows_readiness(
+        if not adr_status_allows_readiness(
             task,
             adr["frontmatter"].get("status"),
         ):
@@ -900,7 +900,7 @@ def _validate_task(root: Path, step_id: str, task: dict[str, Any], errors: list[
             adr = _parse_canonical_document(canonical_adr_path(root, adr_id), adr_id)
             if (
                 meta.get("plan", {}).get("status") == "ready"
-                and not _adr_status_allows_readiness(
+                and not adr_status_allows_readiness(
                     task,
                     adr["frontmatter"].get("status"),
                 )
@@ -1234,6 +1234,7 @@ def latest_matching_init_review(root: Path, stage: str) -> Path | None:
 
 
 __all__ = [
+    "adr_status_allows_readiness",
     "architecture_path",
     "canonical_adr_path",
     "canonical_requirement_path",

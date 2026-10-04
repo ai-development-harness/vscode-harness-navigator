@@ -61,25 +61,31 @@ def step_text(
     *,
     priority: str = "medium",
     status: str = "planned",
+    step_type: str = "implementation",
     depends: list[str] | None = None,
+    adrs: list[str] | None = None,
     risks: list[str] | None = None,
 ) -> str:
     deps = depends or []
+    linked_adrs = adrs or []
     flags = risks or ["none"]
     dep_yaml = "[]"
     if deps:
         dep_yaml = "\n" + "\n".join(f"  - {item}" for item in deps)
+    adr_yaml = "[]"
+    if linked_adrs:
+        adr_yaml = "\n" + "\n".join(f"  - {item}" for item in linked_adrs)
     risk_yaml = "\n" + "\n".join(f"  - {item}" for item in flags)
     return f"""---
 schema: 1
 id: {step_id}
 status: {status}
-type: implementation
+type: {step_type}
 priority: {priority}
 phase: test
 depends_on: {dep_yaml}
 requirements: []
-adrs: []
+adrs: {adr_yaml}
 architecture_refs: []
 risk_flags: {risk_yaml}
 plan:
@@ -155,6 +161,33 @@ def write_step(root: Path, step_id: str, **kwargs) -> None:
     path.write_text(step_text(step_id, **kwargs), encoding="utf-8", newline="\n")
 
 
+def write_adr(root: Path, adr_id: str, *, status: str = "proposed") -> None:
+    path = root / f"docs/adr/{adr_id}-synthetic.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"""---
+schema: 1
+id: {adr_id}
+status: {status}
+date: 2026-10-04
+deciders: []
+supersedes: []
+superseded_by: []
+requirements: []
+steps: []
+---
+
+# {adr_id} — Synthetic ADR
+
+## Context
+
+Synthetic STEP NEXT regression fixture.
+""",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
 def reset_steps(root: Path) -> None:
     directory = root / "planning/tasks"
     for path in directory.glob("STEP-*.md"):
@@ -192,6 +225,41 @@ def main() -> int:
         assert exact["status"] == "PASS", exact
         assert exact["stepType"] == "implementation", exact
         assert exact["command"] == "STEP PLAN STEP-001", exact
+
+        # ADR STEP owns its linked proposed ADR: requiring accepted before PLAN
+        # would create a cyclic prerequisite. Ordinary implementation STEPs
+        # remain blocked by the same proposed ADR status.
+        reset_steps(root)
+        write_adr(root, "ADR-1000", status="proposed")
+        write_adr(root, "ADR-1001", status="proposed")
+        write_step(
+            root,
+            "STEP-011",
+            priority="critical",
+            step_type="adr",
+            adrs=["ADR-1000"],
+        )
+        write_step(
+            root,
+            "STEP-012",
+            priority="high",
+            adrs=["ADR-1001"],
+        )
+
+        adr_action = resolve_step_action(root, "STEP-011")
+        assert adr_action["status"] == "PASS", adr_action
+        assert adr_action["stepType"] == "adr", adr_action
+        assert adr_action["command"] == "STEP PLAN STEP-011", adr_action
+
+        implementation_action = resolve_step_action(root, "STEP-012")
+        assert implementation_action["status"] == "BLOCKED", implementation_action
+        assert (
+            "adr-not-accepted:ADR-1001" in implementation_action["reasons"]
+        ), implementation_action
+
+        adr_next = resolve_step_next(root)
+        assert adr_next["status"] == "PASS", adr_next
+        assert adr_next["command"] == "STEP PLAN STEP-011", adr_next
 
         # Same priority: a STEP that unlocks more downstream active work wins.
         reset_steps(root)
