@@ -34,15 +34,15 @@ Accepted ADR не переписывай задним числом. Расхож
 python3 .harness/tools/harness-dispatch.py start --command '<raw canonical command>'
 ```
 
-Dispatcher сам выполняет structural validation, execution state, runtime preconditions и deterministic handlers. Для semantic node он возвращает единственный `skillPath` и, для STEP PLAN/IMPLEMENT/REVIEW, exact phase context. Читай только их.
+Dispatcher выполняет validation/state/preconditions/handlers и возвращает semantic `skillPath` + нужный STEP context. Читай только их.
 
 После semantic работы передай factual result обратно dispatcher:
 
 ```bash
-python3 .harness/tools/harness-dispatch.py complete --root '<root>' --command '<command>' --result PASS|SUCCESS|FAIL|BLOCKED
+python3 .harness/tools/harness-dispatch.py complete --root '<root>' --command '<command>' --execution-id '<executionId>' --result PASS|SUCCESS|FAIL|BLOCKED
 ```
 
-Dispatcher сам разрешит chain/orchestration continuation. Для interruption используй `harness-dispatch.py resume`; `HARNESS RESUME` отдельную root execution не создаёт. `PASS/BLOCKED` deterministic tools reasoning-ом не переопределяй.
+Верни exact `executionId` из handoff. Dispatcher commit-ит state/continuation; stale completion блокируется. Для interruption используй `harness-dispatch.py resume`; `HARNESS RESUME` отдельную root execution не создаёт. `PASS/BLOCKED` deterministic tools reasoning-ом не переопределяй.
 
 Machine details остаются pull-based в `.harness/docs/COMMAND_SYNTAX.md`, `EXECUTION_PROTOCOL.md`, `EXECUTION_STATUS.md` и `UPDATES.md`.
 

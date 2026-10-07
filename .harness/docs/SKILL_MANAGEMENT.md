@@ -4,7 +4,7 @@
 
 Skill — это не просто Markdown-справка. `SKILL.md` задаёт повторяемый workflow, а рядом могут лежать references, templates и scripts. Поэтому сторонний skill следует рассматривать примерно как dependency: сначала найти и изучить, затем осознанно установить. OpenAI Agent Skills используют папку с `SKILL.md` и supporting resources; это хорошо подходит для хранения в Git рядом с проектом.
 
-Каждый tracked skill bundle должен содержать `UPSTREAM.md`. Для project-native/core skill он фиксирует `Source: project-native`, дату фиксации provenance, references и rationale; для third-party skill — exact upstream/ref/license, inspection notes и локальные адаптации. Это provenance metadata, а не альтернативный источник workflow semantics: исполняемая инструкция остаётся в `SKILL.md`.
+Каждый tracked skill bundle должен содержать `UPSTREAM.md`. Для project-native/core skill он фиксирует `Source: project-native`, дату фиксации provenance, references и rationale. Для third-party skill рядом дополнительно создаётся machine-readable `PROVENANCE.json`: exact upstream/path/revisions/license, baseline hashes, intentional adaptations/fork state и update metadata. `UPSTREAM.md` остаётся человекочитаемым объяснением; `PROVENANCE.json` — deterministic input будущего update planner. Исполняемая инструкция остаётся в `SKILL.md`.
 
 
 ## Команды
@@ -91,4 +91,19 @@ Skill не имеет права отменить tests, security checks, sandbo
 
 ## Обновление сторонних skills
 
-`UPSTREAM.md` и Registry должны позволять вручную сравнить установленную копию с upstream. Не обновляй third-party skill молча только потому, что upstream изменился: новая версия снова считается внешним кодом и требует inspection.
+Новая версия upstream снова считается внешним кодом и сначала проходит inspection. До появления публичной команды `SKILL UPDATE` Harness уже имеет deterministic **update-plan contract**:
+
+1. resolve exact immutable upstream revision;
+2. статически inspect bundle, ничего из него не исполняя;
+3. положить candidate bytes под `.harness/local/**`;
+4. вызвать:
+   ```bash
+   python3 .harness/tools/skill-provenance.py plan <slug> \
+     --candidate-dir .harness/local/skill-update/<slug>/candidate \
+     --candidate-revision <commit> --pretty
+   ```
+5. использовать status/actions как факты, а не пересчитывать merge моделью.
+
+Planner сравнивает старый exact upstream BASE, текущий installed OURS и новый inspected THEIRS. Результаты: `clean | upstream-changed | local-fork | conflict | unavailable`.
+
+Первая итерация намеренно **не применяет update**: plan read-only. Поэтому local fork не может быть случайно перезаписан. Будущий `SKILL UPDATE` должен строиться поверх этого контракта и делать content + provenance/registry commit атомарно.

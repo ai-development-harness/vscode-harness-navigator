@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "defaultIterations": 20,
+  "scenarios": [
+    {
+      "id": "concurrent-authority-cleanup",
+      "description": "Repeatedly create, race and destroy the concurrent authority Git fixture from regression #256.",
+      "tool": "reliable-orchestration-fault-self-test.py",
+      "args": [
+        "--authority-stress-only",
+        "--authority-stress-iterations",
+        "{iterations}"
+      ],
+      "timeoutSeconds": 300
+    }
+  ]
+}

@@ -202,6 +202,16 @@ Canonical machine `type` определяет семантику выполне�
 
 ## Идентификаторы и артефакты
 
+### CRP — Core Reasoning Principle
+
+Harness-owned leaf capability `CRP-NNN`, описывающая **как** semantic agent должен рассуждать или организовывать работу при конкретном deterministic trigger. CRP не является пользовательской командой, project artifact или source of product/architecture truth.
+
+CRP доставляется через `Context Contract → coreReasoningPrinciples[]` только при применимости и не участвует в project traceability/planning freshness.
+
+### PRN — Project Principle
+
+Project-owned инженерный инвариант `PRN-NNN`, действующий на множество решений конкретного проекта. В отличие от CRP, PRN является canonical project artifact, может быть `blocking|advisory`, участвует в project governance и active blocking PRN входит в planning context basis.
+
 ### REQ — Requirement
 
 **REQ** — устойчивое проверяемое требование к продукту или системе: что должно быть истинно с точки зрения поведения, качества, безопасности, совместимости или другого продукта-контракта.
@@ -408,9 +418,17 @@ Release-oriented gate: готовность версии/развёртыван�
 
 Review report хранится отдельно и не переписывает task contract.
 
+### Hypothesis
+
+Новая reviewer-derived версия о возможном дефекте/угрозе, которая ещё не доказана для фактического project state. Hypothesis не является finding и сама по себе не разрешает regression test или FIX.
+
+### Evidence Gate
+
+Граница `hypothesis → material finding`. Reviewer сначала проверяет необходимые preconditions и, когда возможно, выполняет самый дешёвый falsification experiment. Только confirmed project-specific scenario становится durable finding. Подробно: [`EVIDENCE_GATE.md`](EVIDENCE_GATE.md).
+
 ### Finding
 
-Конкретная проблема, найденная review/audit. Хороший finding содержит severity, location, scenario/preconditions, impact и fix direction.
+Подтверждённая конкретная проблема, найденная review/audit. Review Contract v3 требует severity, location, scenario/preconditions, impact, evidence и `evidenceBasis`. Invalidated/unverified hypothesis finding-ом не является.
 
 ### Verdict
 

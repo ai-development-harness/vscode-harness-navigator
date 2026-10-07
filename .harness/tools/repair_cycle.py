@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic comparison of consecutive Review Contract v2 reports.
+"""Deterministic comparison of consecutive current Review Contract reports.
 
 Module does not own CTS transitions or execution persistence. It converts two
 immutable REVIEW artifacts into bounded repair-cycle telemetry and a conservative
@@ -37,8 +37,13 @@ def _snapshot(root: Path, report: str, *, expected_step_id: str) -> dict[str, An
     if meta.get("step_id") != expected_step_id:
         raise RepairCycleError(f"{report}: step_id mismatch")
     if meta.get("finding_contract") != FINDING_CONTRACT_VERSION:
-        raise RepairCycleError(f"{report}: Review Contract v2 is required")
-    findings = parse_machine_findings(document)
+        raise RepairCycleError(
+            f"{report}: current Review Contract v{FINDING_CONTRACT_VERSION} is required"
+        )
+    findings = parse_machine_findings(
+        document,
+        expected_version=FINDING_CONTRACT_VERSION,
+    )
     return {
         "report": report,
         "verdict": meta.get("verdict"),

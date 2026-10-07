@@ -20,7 +20,7 @@ import tempfile
 from typing import Callable
 
 
-from self_test_fixture import isolate_project_artifacts
+from self_test_fixture import copy_effective_harness_checkout, isolate_project_artifacts
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -57,22 +57,12 @@ def commit_all(root: Path, message: str) -> None:
 # --- Real template copy -------------------------------------------------------
 
 def copy_tracked(target: Path) -> None:
-    raw = run(SOURCE_ROOT, "git", "ls-files", "-z").stdout
-    for rel in raw.split("\0"):
-        if not rel:
-            continue
-        source = SOURCE_ROOT / rel
-        if not source.is_file():
-            continue
-        destination = target / rel
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
+    copy_effective_harness_checkout(SOURCE_ROOT, target)
     isolate_project_artifacts(target)
 
 
 # #110 (setext heading) исправлен и перенесён в repository-hardening-self-test.py.
 KNOWN_ISSUES: list[tuple[int, str, Callable[[Path], None]]] = []
-
 
 
 def main() -> int:

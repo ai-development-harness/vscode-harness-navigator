@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from command_transitions import (
+    authority_contract,
     dispatch_spec,
     load_transition_table,
     parse_canonical_command,
@@ -30,6 +31,7 @@ from execution_status import (
     begin_command,
     block_execution,
     complete_command,
+    execution_state_lock,
     git_commit_completion_proven,
     load_status,
     resolve_execution,
@@ -56,7 +58,7 @@ from harness_ux import (
 from planning_contract import step_completion_proof
 from step_context import build_step_context
 from step_next import resolve_step_action, resolve_step_next
-from verification import run_step_verification
+from verification import run_step_verification, write_verification_evidence
 
 
 SCHEMA_VERSION = 1
@@ -103,6 +105,7 @@ def route_command(root: Path, command: str) -> dict[str, Any]:
         "target": parsed.get("target"),
         "input": parsed.get("input"),
         "dispatch": spec,
+        "authority": authority_contract(table),
     }
 
 
@@ -118,6 +121,7 @@ def _block_recording_error(
     root_command: str,
     *,
     command: str | None,
+    expected_execution_id: str | None = None,
 ) -> str | None:
     """Зафиксировать blocker; вернуть ошибку записи state вместо её сокрытия.
 
@@ -125,7 +129,12 @@ def _block_recording_error(
     обязан сообщить это в BLOCKED ответе (`stateWriteError`), а не молчать (#117).
     """
     try:
-        block_execution(root, root_command, command=command)
+        block_execution(
+            root,
+            root_command,
+            command=command,
+            expected_execution_id=expected_execution_id,
+        )
     except (OSError, ValueError) as exc:
         return str(exc)
     return None
@@ -184,6 +193,8 @@ def _verification_before_completion(
     command: str,
     result: str,
     details: dict[str, Any] | None,
+    *,
+    expected_execution_id: str,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Enforce Verification before IMPLEMENT/FIX SUCCESS.
 
@@ -216,24 +227,71 @@ def _verification_before_completion(
         )
 
     manual_results = None
+    product_results = None
     if isinstance(details, dict):
         value = details.get("manualVerification")
         if value is not None:
             manual_results = value
+        product_value = details.get("productVerification")
+        if product_value is not None:
+            product_results = product_value
 
     verification = run_step_verification(
         root,
         step_id,
         manual_results=manual_results,
-        write_evidence=True,
+        product_results=product_results,
+        write_evidence=False,
     )
+
+    # Verification commands may be long-running, so they execute without the
+    # global execution lock. Evidence publication is short and stateful: bind it
+    # to the same execution under lock, then complete_command performs the final
+    # CAS again at the execution-state commit point.
+    with execution_state_lock(root):
+        active_after_verification = _active_execution(root, root_command)
+        if (
+            active_after_verification is None
+            or active_after_verification.get("executionId") != expected_execution_id
+        ):
+            current_id = (
+                active_after_verification.get("executionId")
+                if isinstance(active_after_verification, dict)
+                else None
+            )
+            return (
+                {
+                    "schemaVersion": SCHEMA_VERSION,
+                    "status": "BLOCKED",
+                    "rootCommand": root_command,
+                    "command": command,
+                    "executionId": current_id,
+                    "reasonCode": "STALE_SEMANTIC_RESULT",
+                    "message": (
+                        f"semantic result belongs to execution {expected_execution_id!r}, "
+                        f"but current execution is {current_id!r}"
+                    ),
+                },
+                None,
+            )
+        if verification.get("status") in {"PASS", "FAIL", "MANUAL_REQUIRED"}:
+            try:
+                write_verification_evidence(root, step_id, verification)
+            except (OSError, ValueError) as exc:
+                verification = {
+                    **verification,
+                    "status": "BLOCKED",
+                    "reasonCode": "EVIDENCE_WRITE_FAILED",
+                    "message": str(exc),
+                }
+
     verification_status = verification.get("status")
 
     if verification_status == "PASS":
         compact = {
             key: value
             for key, value in (details or {}).items()
-            if key != "manualVerification"
+            if key not in {"manualVerification", "productVerification"}
         }
         compact["verification"] = {
             "status": "PASS",
@@ -243,7 +301,7 @@ def _verification_before_completion(
         return None, compact
 
     if verification_status in {"FAIL", "MANUAL_REQUIRED"}:
-        execution = _active_execution(root, root_command)
+        execution = active_after_verification
         if execution is None:
             return (
                 {
@@ -261,7 +319,12 @@ def _verification_before_completion(
         handoff["verification"] = verification
         return handoff, None
 
-    state_error = _block_recording_error(root, root_command, command=command)
+    state_error = _block_recording_error(
+        root,
+        root_command,
+        command=command,
+        expected_execution_id=expected_execution_id,
+    )
     return (
         {
             "schemaVersion": SCHEMA_VERSION,
@@ -365,7 +428,24 @@ def _semantic_handoff(
             "target": route.get("target"),
             "input": route.get("input"),
         },
+        "authority": {
+            **route["authority"],
+            "completionBinding": "executionId",
+        },
     }
+    current_state = execution.get("current")
+    recovery_context = (
+        current_state.get("context")
+        if isinstance(current_state, dict)
+        else None
+    )
+    intent_basis = (
+        recovery_context.get("intentBasis")
+        if isinstance(recovery_context, dict)
+        else None
+    )
+    if isinstance(intent_basis, dict):
+        result["intentBasis"] = intent_basis
     if context is not None:
         result["context"] = context
     return result
@@ -420,6 +500,7 @@ def _finish_machine_result(
         str(execution["rootCommand"]),
         command,
         str(status),
+        expected_execution_id=str(execution["executionId"]),
         details=_machine_completion_details(handler=handler, result=result),
     )
     resolved = resolve_execution(root, completed)
@@ -430,6 +511,7 @@ def _finish_machine_result(
             root,
             str(execution["rootCommand"]),
             next_command,
+            expected_execution_id=str(completed["executionId"]),
         )
         return _dispatch_running(root, next_execution, next_command)
 
@@ -443,7 +525,12 @@ def _finish_machine_result(
         and str(execution.get("rootCommand", "")).startswith("STEP RUN ")
     ):
         root_command = str(execution["rootCommand"])
-        root_execution = begin_command(root, root_command, root_command)
+        root_execution = begin_command(
+            root,
+            root_command,
+            root_command,
+            expected_execution_id=str(completed["executionId"]),
+        )
         return _dispatch_running(root, root_execution, root_command)
 
     return _terminal(completed, resolved, result=result)
@@ -577,6 +664,7 @@ def _dispatch_step_run(
         root,
         str(execution["rootCommand"]),
         child,
+        expected_execution_id=str(execution["executionId"]),
     )
     return _dispatch_running(root, child_execution, child)
 
@@ -813,12 +901,17 @@ def start_dispatch(root: Path, raw_command: str) -> dict[str, Any]:
     try:
         execution = start_execution(root, raw_command)
     except (OSError, ValueError) as exc:
-        return {
+        value = {
             "schemaVersion": SCHEMA_VERSION,
             "status": "BLOCKED",
-            "reasonCode": "EXECUTION_START_BLOCKED",
+            "reasonCode": getattr(exc, "code", "EXECUTION_START_BLOCKED"),
             "message": str(exc),
         }
+        details = getattr(exc, "details", None)
+        if isinstance(details, dict):
+            value["details"] = details
+            value["remediation"] = details.get("remediation")
+        return value
 
     current = execution.get("current") or {}
     command = current.get("command")
@@ -846,6 +939,7 @@ def start_dispatch(root: Path, raw_command: str) -> dict[str, Any]:
             root,
             str(execution["rootCommand"]),
             command=command,
+            expected_execution_id=str(execution["executionId"]),
         )
         return {
             "schemaVersion": SCHEMA_VERSION,
@@ -855,6 +949,17 @@ def start_dispatch(root: Path, raw_command: str) -> dict[str, Any]:
             **({"stateWriteError": state_error} if state_error else {}),
             "reasonCode": getattr(exc, "code", "DISPATCH_BLOCKED"),
             "message": str(exc),
+            **(
+                {"details": getattr(exc, "details")}
+                if isinstance(getattr(exc, "details", None), dict)
+                else {}
+            ),
+            **(
+                {"remediation": getattr(exc, "details").get("remediation")}
+                if isinstance(getattr(exc, "details", None), dict)
+                and getattr(exc, "details").get("remediation")
+                else {}
+            ),
         }
 
 
@@ -864,14 +969,44 @@ def complete_dispatch(
     command: str,
     result: str,
     *,
+    execution_id: str,
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Зафиксировать semantic result и сразу dispatch-нуть continuation."""
+    """Зафиксировать execution-bound semantic result и dispatch-нуть continuation."""
+
+    if not isinstance(execution_id, str) or not execution_id:
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "status": "BLOCKED",
+            "rootCommand": root_command,
+            "command": command,
+            "reasonCode": "EXECUTION_ID_REQUIRED",
+            "message": "semantic completion requires executionId from the exact handoff",
+        }
+
+    # Semantic result является proposal, а не authority. Completion допустим
+    # только для той invocation, которая выдала handoff: старый ответ не может
+    # закрыть более новую execution с тем же rootCommand/current command.
+    active = _active_execution(root, root_command)
+    if (
+        active is not None
+        and str(active.get("executionId") or "") != execution_id
+    ):
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "status": "BLOCKED",
+            **_execution_identity(active),
+            "command": command,
+            "reasonCode": "STALE_SEMANTIC_RESULT",
+            "message": (
+                f"semantic result belongs to execution {execution_id!r}, "
+                f"but current execution is {active.get('executionId')!r}"
+            ),
+        }
 
     # The PUSH fast-path is allowed only when the preceding COMMIT has a
     # deterministic repository postcondition. This prevents a semantic
     # SUCCESS claim from skipping the scope boundary without an actual commit.
-    active = _active_execution(root, root_command)
     if active is not None and result == "SUCCESS":
         route = route_command(root, command)
         sequence = active.get("sequence")
@@ -890,8 +1025,28 @@ def complete_dispatch(
             and not git_commit_completion_proven(root, active)
         ):
             try:
-                blocked = block_execution(root, root_command, command=command)
-            except (OSError, ValueError):
+                blocked = block_execution(
+                    root,
+                    root_command,
+                    command=command,
+                    expected_execution_id=execution_id,
+                )
+            except (OSError, ValueError) as exc:
+                if getattr(exc, "code", None) == "STALE_SEMANTIC_RESULT":
+                    current = _active_execution(root, root_command)
+                    return {
+                        "schemaVersion": SCHEMA_VERSION,
+                        "status": "BLOCKED",
+                        **(_execution_identity(current) if current else {}),
+                        "command": command,
+                        "reasonCode": "STALE_SEMANTIC_RESULT",
+                        "message": str(exc),
+                        **(
+                            {"details": getattr(exc, "details")}
+                            if isinstance(getattr(exc, "details", None), dict)
+                            else {}
+                        ),
+                    }
                 blocked = active
             return {
                 "schemaVersion": SCHEMA_VERSION,
@@ -911,7 +1066,14 @@ def complete_dispatch(
         if running is None:
             # Нет running команды: complete_command гарантированно отклонит
             # completion с точной причиной (already complete/blocked/not found).
-            complete_command(root, root_command, command, result, details=details)
+            complete_command(
+                root,
+                root_command,
+                command,
+                result,
+                expected_execution_id=execution_id,
+                details=details,
+            )
             raise ValueError("execution has no running command")
         if running != normalized_command:
             return {
@@ -933,6 +1095,7 @@ def complete_dispatch(
             command,
             result,
             details,
+            expected_execution_id=execution_id,
         )
         if early is not None:
             return early
@@ -942,26 +1105,43 @@ def complete_dispatch(
             root_command,
             command,
             result,
+            expected_execution_id=execution_id,
             details=completion_details,
         )
         resolved = resolve_execution(root, execution)
     except (OSError, ValueError) as exc:
+        details_value = getattr(exc, "details", None)
         return {
             "schemaVersion": SCHEMA_VERSION,
             "status": "BLOCKED",
             "rootCommand": root_command,
             "command": command,
-            "reasonCode": "EXECUTION_COMPLETE_BLOCKED",
+            "reasonCode": getattr(exc, "code", "EXECUTION_COMPLETE_BLOCKED"),
             "message": str(exc),
+            **(
+                {"details": details_value}
+                if isinstance(details_value, dict)
+                else {}
+            ),
         }
 
     if resolved.get("status") == "NEXT" and resolved.get("command"):
         next_command = str(resolved["command"])
         try:
-            execution = begin_command(root, root_command, next_command)
+            execution = begin_command(
+                root,
+                root_command,
+                next_command,
+                expected_execution_id=str(execution["executionId"]),
+            )
             return _dispatch_running(root, execution, next_command)
         except (DispatchError, OSError, ValueError) as exc:
-            state_error = _block_recording_error(root, root_command, command=next_command)
+            state_error = _block_recording_error(
+                root,
+                root_command,
+                command=next_command,
+                expected_execution_id=str(execution["executionId"]),
+            )
             return {
                 **({"stateWriteError": state_error} if state_error else {}),
                 "schemaVersion": SCHEMA_VERSION,
@@ -970,6 +1150,8 @@ def complete_dispatch(
                 "command": next_command,
                 "reasonCode": getattr(exc, "code", "NEXT_DISPATCH_BLOCKED"),
                 "message": str(exc),
+                **({"details": getattr(exc, "details")} if isinstance(getattr(exc, "details", None), dict) else {}),
+                **({"remediation": getattr(exc, "details").get("remediation")} if isinstance(getattr(exc, "details", None), dict) and getattr(exc, "details").get("remediation") else {}),
             }
 
     if (
@@ -978,10 +1160,20 @@ def complete_dispatch(
         and root_command.startswith("STEP RUN ")
     ):
         try:
-            execution = begin_command(root, root_command, root_command)
+            execution = begin_command(
+                root,
+                root_command,
+                root_command,
+                expected_execution_id=str(execution["executionId"]),
+            )
             return _dispatch_running(root, execution, root_command)
         except (DispatchError, OSError, ValueError) as exc:
-            state_error = _block_recording_error(root, root_command, command=root_command)
+            state_error = _block_recording_error(
+                root,
+                root_command,
+                command=root_command,
+                expected_execution_id=str(execution["executionId"]),
+            )
             return {
                 **({"stateWriteError": state_error} if state_error else {}),
                 "schemaVersion": SCHEMA_VERSION,
@@ -990,6 +1182,8 @@ def complete_dispatch(
                 "command": root_command,
                 "reasonCode": getattr(exc, "code", "ORCHESTRATION_DISPATCH_BLOCKED"),
                 "message": str(exc),
+                **({"details": getattr(exc, "details")} if isinstance(getattr(exc, "details", None), dict) else {}),
+                **({"remediation": getattr(exc, "details").get("remediation")} if isinstance(getattr(exc, "details", None), dict) and getattr(exc, "details").get("remediation") else {}),
             }
 
     return _terminal(execution, resolved)
@@ -1018,10 +1212,28 @@ def resume_dispatch(
 
     command = str(resolved["command"])
     try:
-        execution = begin_command(root, root_command, command)
+        execution = begin_command(
+            root,
+            root_command,
+            command,
+            expected_execution_id=(
+                str(resolved["executionId"])
+                if resolved.get("executionId")
+                else None
+            ),
+        )
         return _dispatch_running(root, execution, command)
     except (DispatchError, OSError, ValueError) as exc:
-        state_error = _block_recording_error(root, root_command, command=command)
+        state_error = _block_recording_error(
+            root,
+            root_command,
+            command=command,
+            expected_execution_id=(
+                str(resolved["executionId"])
+                if resolved.get("executionId")
+                else None
+            ),
+        )
         return {
             **({"stateWriteError": state_error} if state_error else {}),
             "schemaVersion": SCHEMA_VERSION,
@@ -1030,6 +1242,8 @@ def resume_dispatch(
             "command": command,
             "reasonCode": getattr(exc, "code", "RESUME_DISPATCH_BLOCKED"),
             "message": str(exc),
+            **({"details": getattr(exc, "details")} if isinstance(getattr(exc, "details", None), dict) else {}),
+            **({"remediation": getattr(exc, "details").get("remediation")} if isinstance(getattr(exc, "details", None), dict) and getattr(exc, "details").get("remediation") else {}),
         }
 
 

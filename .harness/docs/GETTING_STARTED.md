@@ -41,8 +41,10 @@ cp PROJECT_BRIEF.example.md PROJECT_BRIEF.local.md
 - `sources.*`;
 - `protocol.*`;
 - `execution.maxFixReviewCycles`;
+- `execution.maxPlanReviewCycles`;
 - `execution.verificationCommandTimeoutSeconds`;
 - `review.security/tests`;
+- `highRigor.*`;
 - `skills.search.maxResults`.
 
 Specialized language key может отсутствовать: тогда реально используется `language.default`.
@@ -201,6 +203,8 @@ python3 .harness/tools/review_gates.py STEP-001 --json
 ```
 
 `review.security/tests=auto` не означает «решает модель»: preselector использует risk flags, STEP type и factual changed surface.
+
+`highRigor.arena/interrogate=explicit` не делает fan-out автоматически. `risk` разрешает deterministic activation только по machine-readable high-risk STEP flags; `disabled` полностью выключает capability. Подробности: [`HIGH_RIGOR.md`](HIGH_RIGOR.md).
 
 Review report относится к exact repository revision:
 

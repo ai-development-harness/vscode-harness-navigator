@@ -17,6 +17,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run deterministic STEP Verification contract.")
     parser.add_argument("step_id")
     parser.add_argument("--manual-json")
+    parser.add_argument("--product-json")
     parser.add_argument("--no-write-evidence", action="store_true")
     parser.add_argument("--pretty", action="store_true")
     args = parser.parse_args()
@@ -24,11 +25,15 @@ def main() -> int:
     manual = json.loads(args.manual_json) if args.manual_json else None
     if manual is not None and not isinstance(manual, list):
         parser.error("--manual-json must decode to an array")
+    product = json.loads(args.product_json) if args.product_json else None
+    if product is not None and not isinstance(product, list):
+        parser.error("--product-json must decode to an array")
 
     result = run_step_verification(
         repo_root(),
         args.step_id,
         manual_results=manual,
+        product_results=product,
         write_evidence=not args.no_write_evidence,
     )
     if args.pretty:

@@ -32,7 +32,7 @@ from semantic_artifacts import (
 )
 
 
-from self_test_fixture import isolate_project_artifacts
+from self_test_fixture import copy_effective_harness_checkout, isolate_project_artifacts
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -55,25 +55,7 @@ def run(root: Path, *args: str) -> None:
 
 
 def copy_tracked(target: Path) -> None:
-    raw = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=SOURCE_ROOT,
-        stdout=subprocess.PIPE,
-        check=True,
-    ).stdout
-    for token in raw.split(b"\0"):
-        if not token:
-            continue
-        rel = token.decode("utf-8")
-        source = SOURCE_ROOT / rel
-        # Tracked path, удалённый из working tree, но не из index (обычный `rm`
-        # без `git rm`), fixture не нужен — пропускаем вместо traceback.
-        if not source.is_file():
-            continue
-        destination = target / rel
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-
+    copy_effective_harness_checkout(SOURCE_ROOT, target)
 
 def task() -> str:
     tick = chr(96)
@@ -411,6 +393,7 @@ def main() -> int:
         else:
             raise AssertionError("multiline plan title was accepted")
 
+        planning_execution = start_execution(root, "STEP PLAN STEP-001")
         planning_review = write_planning_review(
             root,
             "STEP-001",
@@ -431,6 +414,100 @@ def main() -> int:
         assert ready["frontmatter"]["plan"]["reviewed_report"] == planning_review["report"]
         assert list(ready["frontmatter"]["plan"]["execution_groups"]) == ["writer", "regression", "integration"]
         ready_text = step_path.read_text(encoding="utf-8")
+
+        complete_command(
+            root,
+            planning_execution["rootCommand"],
+            "STEP PLAN STEP-001",
+            "SUCCESS",
+            expected_execution_id=planning_execution["executionId"],
+        )
+
+        # Regression #249: budget belongs to one active STEP PLAN execution,
+        # not to the lifetime count of immutable reports for the STEP.
+        current = read_task(root, "STEP-001")
+        text = current["path"].read_text(encoding="utf-8")
+        text = text.replace("status: ready", "status: draft", 1)
+        text = text.replace(
+            "reviewed_report: " + str(current["frontmatter"]["plan"]["reviewed_report"]),
+            "reviewed_report: null",
+            1,
+        )
+        text = text.replace(
+            "planned_at: " + str(current["frontmatter"]["plan"]["planned_at"]),
+            "planned_at: null",
+            1,
+        )
+        current["path"].write_text(text, encoding="utf-8", newline="\n")
+
+        bounded_execution = start_execution(root, "STEP PLAN STEP-001")
+        for ordinal in (1, 2, 3):
+            blocked_round = write_planning_review(
+                root,
+                "STEP-001",
+                {
+                    "verdict": "blocked",
+                    "findings": [f"Material blocker round {ordinal}."],
+                    "rationale": "Synthetic bounded planning-review regression.",
+                },
+            )
+            assert blocked_round["status"] == "BLOCKED", blocked_round
+            assert blocked_round["executionId"] == bounded_execution["executionId"]
+            assert blocked_round["planReviewCycles"] == ordinal, blocked_round
+
+        reports_before_limit = set(
+            (root / "planning/plan-reviews/STEP-001").glob("PLAN-REVIEW-*.md")
+        )
+        limited = write_planning_review(
+            root,
+            "STEP-001",
+            {
+                "verdict": "blocked",
+                "findings": ["Remaining material blocker."],
+                "rationale": "Must stop at configured per-execution limit.",
+            },
+        )
+        assert limited["status"] == "BLOCKED", limited
+        assert limited["reasonCode"] == "PLAN_REVIEW_LIMIT_REACHED", limited
+        assert limited["executionId"] == bounded_execution["executionId"]
+        assert limited["planReviewCycles"] == 3, limited
+        assert limited["maxPlanReviewCycles"] == 3, limited
+        assert set(
+            (root / "planning/plan-reviews/STEP-001").glob("PLAN-REVIEW-*.md")
+        ) == reports_before_limit
+
+        block_execution(
+            root,
+            bounded_execution["rootCommand"],
+            expected_execution_id=bounded_execution["executionId"],
+        )
+        fresh_execution = start_execution(root, "STEP PLAN STEP-001")
+        fresh_round = write_planning_review(
+            root,
+            "STEP-001",
+            {
+                "verdict": "blocked",
+                "findings": ["Fresh episode blocker."],
+                "rationale": "Historical reviews must not consume a new PLAN budget.",
+            },
+        )
+        assert fresh_round["status"] == "BLOCKED", fresh_round
+        assert fresh_round["executionId"] == fresh_execution["executionId"]
+        assert fresh_round["executionId"] != bounded_execution["executionId"]
+        assert fresh_round["planReviewCycles"] == 1, fresh_round
+        block_execution(
+            root,
+            fresh_execution["rootCommand"],
+            expected_execution_id=fresh_execution["executionId"],
+        )
+
+        # Restore the original Ready STEP fixture and its single PASS review
+        # before unrelated regressions below. Synthetic BLOCKED reports belong
+        # only to the bounded-loop scenario and must not affect STEP IMPLEMENT.
+        for report in (root / "planning/plan-reviews/STEP-001").glob("PLAN-REVIEW-*.md"):
+            if report != planning_report:
+                report.unlink()
+        step_path.write_text(ready_text, encoding="utf-8", newline="\n")
         step_path.write_text(ready_text.replace("src/group-writer", "src/group-writer-changed"), encoding="utf-8", newline="\n")
         stale_group_errors = validate_planning_contracts(root)
         assert any("content_hash is stale" in item for item in stale_group_errors), stale_group_errors

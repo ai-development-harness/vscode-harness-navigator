@@ -49,6 +49,7 @@ from planning_contract import read_task
 from review_gates import required_reviewers
 from review_findings import (
     FINDING_CONTRACT_VERSION,
+    SUPPORTED_FINDING_CONTRACT_VERSIONS,
     FindingContractError,
     parse_machine_findings,
 )
@@ -394,26 +395,37 @@ def _is_step_review_report_rel(root: Path, rel: str) -> bool:
     return suffix is not None and re.fullmatch(r"STEP-\d{3,}/REVIEW-.+\.md", suffix) is not None
 
 
+def _index_entry_identities(
+    root: Path,
+    rels: list[str],
+) -> dict[str, tuple[str, str]]:
+    """Вернуть stage-0 Git index identities батчами вместо subprocess на path."""
+    result: dict[str, tuple[str, str]] = {}
+    unique = sorted(set(rels))
+    chunk_size = 128
+    for offset in range(0, len(unique), chunk_size):
+        chunk = unique[offset : offset + chunk_size]
+        code, raw = _git(root, "ls-files", "--stage", "-z", "--", *chunk)
+        if code != 0:
+            continue
+        for entry in (item for item in raw.split(b"\0") if item):
+            meta, sep, path_raw = entry.partition(b"\t")
+            if not sep:
+                continue
+            parts = meta.split()
+            if len(parts) != 3 or parts[2] != b"0":
+                continue
+            path_value = path_raw.decode("utf-8", errors="surrogateescape")
+            result[path_value] = (
+                parts[0].decode("ascii", errors="strict"),
+                parts[1].decode("ascii", errors="strict"),
+            )
+    return result
+
+
 def _index_entry_identity(root: Path, rel: str) -> tuple[str, str] | None:
-    """Вернуть stage-0 Git index mode + object id для exact path."""
-    code, raw = _git(root, "ls-files", "--stage", "-z", "--", rel)
-    if code != 0:
-        return None
-    for entry in (item for item in raw.split(b"\0") if item):
-        meta, sep, path_raw = entry.partition(b"\t")
-        if not sep:
-            continue
-        parts = meta.split()
-        if len(parts) != 3 or parts[2] != b"0":
-            continue
-        path_value = path_raw.decode("utf-8", errors="surrogateescape")
-        if path_value != rel:
-            continue
-        return (
-            parts[0].decode("ascii", errors="strict"),
-            parts[1].decode("ascii", errors="strict"),
-        )
-    return None
+    """Compatibility wrapper для exact path."""
+    return _index_entry_identities(root, [rel]).get(rel)
 
 
 def _worktree_git_mode(path: Path, *, index_mode: str | None) -> str | None:
@@ -535,6 +547,10 @@ def repository_revision(
     if not changed:
         return {"git_head": git_head, "worktree_hash": None}
 
+    index_identities = _index_entry_identities(
+        root,
+        [rel for _, rel, _ in changed],
+    )
     digest = hashlib.sha256()
     for xy, rel, source_rel in sorted(changed, key=lambda item: (item[1], item[2] or "")):
         digest.update(xy)
@@ -552,7 +568,7 @@ def repository_revision(
 
         # Exact index identity — mode + object id. Blob bytes одни и те же при
         # 100644/100755, поэтому content-only fingerprint не различает chmod.
-        index_identity = _index_entry_identity(root, rel)
+        index_identity = index_identities.get(rel)
         index_mode: str | None = None
         if index_identity is None:
             digest.update(b"INDEX_ABSENT\0")
@@ -592,6 +608,93 @@ def repository_revision(
             digest.update(b"DELETED\0")
         digest.update(b"\0")
     return {"git_head": git_head, "worktree_hash": "sha256:" + digest.hexdigest()}
+
+
+def repository_activity_fingerprint(
+    root: Path,
+    *,
+    included_paths: set[str] | frozenset[str] | None = None,
+) -> str:
+    """Hash repository activity, optionally restricted to safe path prefixes.
+
+    included_paths=None preserves conservative whole-repository behavior.
+    Empty set intentionally means this semantic phase has no product-file
+    activity signal; material progress must come from canonical artifacts.
+    """
+    if included_paths is None:
+        revision = repository_revision(root)
+        payload = json.dumps(
+            revision,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+    normalized: list[str] = []
+    for value in sorted(included_paths):
+        path = _normalize_git_rel(value)
+        if path is None:
+            raise ValueError(f"invalid activity scope path: {value}")
+        normalized.append(path)
+    if not normalized:
+        return "sha256:" + hashlib.sha256(b"SEMANTIC_ONLY").hexdigest()
+
+    digest = hashlib.sha256()
+    digest.update(b"SCOPED_ACTIVITY_V1\0")
+    for path in normalized:
+        digest.update(path.encode("utf-8", errors="surrogateescape"))
+        digest.update(b"\0")
+
+    code, tree = _git(root, "ls-tree", "-r", "-z", "HEAD", "--", *normalized)
+    digest.update(b"TREE\0")
+    digest.update(str(code).encode("ascii"))
+    digest.update(b"\0")
+    digest.update(tree)
+
+    code, diff = _git(
+        root,
+        "diff",
+        "--binary",
+        "--no-ext-diff",
+        "HEAD",
+        "--",
+        *normalized,
+    )
+    digest.update(b"DIFF\0")
+    digest.update(str(code).encode("ascii"))
+    digest.update(b"\0")
+    digest.update(diff)
+
+    code, untracked = _git(
+        root,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        *normalized,
+    )
+    digest.update(b"UNTRACKED\0")
+    digest.update(str(code).encode("ascii"))
+    digest.update(b"\0")
+    for raw in sorted(item for item in untracked.split(b"\0") if item):
+        rel = raw.decode("utf-8", errors="surrogateescape")
+        path = root / rel
+        digest.update(raw)
+        digest.update(b"\0")
+        if path.is_symlink():
+            digest.update(b"SYMLINK\0")
+            digest.update(
+                str(path.readlink()).encode("utf-8", errors="surrogateescape")
+            )
+        elif path.is_file():
+            digest.update(b"FILE\0")
+            digest.update(path.read_bytes())
+        else:
+            digest.update(b"OTHER\0")
+        digest.update(b"\0")
+    return "sha256:" + digest.hexdigest()
 
 
 def _parse_findings(document: dict[str, Any]) -> list[dict[str, str]]:
@@ -828,15 +931,19 @@ def validate_review_report(
             for field in ("Location", "Scenario", "Impact", "Fix direction"):
                 if not finding.get(field):
                     errors.append(f"{prefix}: missing {field}")
-    elif finding_contract == FINDING_CONTRACT_VERSION:
+    elif finding_contract in SUPPORTED_FINDING_CONTRACT_VERSIONS:
+        label = f"Review Contract v{finding_contract}"
         try:
-            structured_findings = parse_machine_findings(document)
+            structured_findings = parse_machine_findings(
+                document,
+                expected_version=int(finding_contract),
+            )
         except FindingContractError as exc:
-            errors.append(f"Review Contract v2: {exc}")
+            errors.append(f"{label}: {exc}")
             structured_findings = []
         if len(human_findings) != len(structured_findings):
             errors.append(
-                "Review Contract v2: human and machine finding counts must match"
+                f"{label}: human and machine finding counts must match"
             )
         for index, (human, machine) in enumerate(
             zip(human_findings, structured_findings), 1
@@ -848,7 +955,8 @@ def validate_review_report(
                 errors.append(f"{prefix}: human Category differs from machine finding")
     else:
         errors.append(
-            f"finding_contract must be omitted for legacy v1 or equal {FINDING_CONTRACT_VERSION}"
+            "finding_contract must be omitted for legacy v1 or one of "
+            + str(sorted(SUPPORTED_FINDING_CONTRACT_VERSIONS))
         )
         structured_findings = []
 

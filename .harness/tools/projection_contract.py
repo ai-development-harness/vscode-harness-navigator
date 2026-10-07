@@ -360,6 +360,10 @@ def validate_projections(root: Path) -> list[str]:
     Возвращает обычный DRIFT как errors list; derivation failure сворачивается
     в отдельную диагностическую ошибку, чтобы caller не принял partial state.
     """
+    # Manifest path accessors canonicalize repository root through resolve().
+    # Normalize caller root as well: Windows TEMP can expose the same directory
+    # through an 8.3 alias (RUNNER~1) while resolved paths use runneradmin.
+    root = root.resolve()
     errors: list[str] = []
     try:
         targets = projection_targets(root)
@@ -384,6 +388,8 @@ def write_projections(
     *,
     extra_legacy_review_pins: dict[str, str] | None = None,
 ) -> list[str]:
+    # Keep reporting in the same canonical path namespace as manifest_path().
+    root = root.resolve()
     changed: list[str] = []
     for path, expected in projection_targets(
         root,

@@ -70,6 +70,8 @@ Contract v1 фиксирует следующие capability keys:
 
 Нельзя молча считать unsupported capability доступной. Consumer обязан проверить snapshot до использования.
 
+Optional High-Rigor Arena/Interrogate использует существующие `subagents`, `modelEffort` и `sessionExecutionIds`; новый provider-specific capability key не вводится. Если runtime не может выделить дополнительный independent seat/model, high-rigor trace обязан зафиксировать `unsupported`/fallback и вернуть `DEGRADED`. Core Harness не хранит canonical model slugs для fan-out.
+
 ## Normalized events
 
 Control plane/client работают с закрытым набором событий:

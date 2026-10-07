@@ -30,7 +30,7 @@ from typing import Any
 from harness_update import UpdateError, adopt_legacy, apply_update, check_update
 
 
-from self_test_fixture import isolate_project_artifacts
+from self_test_fixture import copy_effective_harness_checkout, isolate_project_artifacts
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -953,17 +953,7 @@ def test_git_line_endings_do_not_create_release_drift(tmp: Path) -> None:
 # --- Real template copy: pre-INIT template change (#101) ----------------------
 
 def copy_tracked(target: Path) -> None:
-    raw = run(SOURCE_ROOT, "git", "ls-files", "-z").stdout
-    for rel in raw.split("\0"):
-        if not rel:
-            continue
-        source = SOURCE_ROOT / rel
-        if not source.is_file():
-            continue
-        destination = target / rel
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-
+    copy_effective_harness_checkout(SOURCE_ROOT, target)
 
 def set_release(root: Path, release: str, edge: tuple[str, str]) -> None:
     manifest_path = root / ".harness/manifest.yaml"

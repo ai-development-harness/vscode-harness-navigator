@@ -60,6 +60,14 @@ python3 .harness/tools/impact-analysis.py --changed REQ-007 --json
 
 Impact tool ничего не мутирует.
 
+## Semantic blast radius
+
+Deterministic impact analysis отвечает только за **explicit** canonical links/fingerprints. Для STEP с material `risk_flags` planner/reviewer дополнительно запускает internal `semantic-blast-radius`: explicit impact остаётся immutable fact, а model judgement используется только для implicit API/data/behavior contracts, indirect consumers, compatibility/concurrency/runtime assumptions и необходимого proof surface.
+
+Semantic hypothesis не добавляется автоматически в dependency graph. Если hypothesis выявляет реальный durable contract/dependency gap, его нужно оформить через canonical ADR/REQ/OQ/STEP, после чего deterministic impact analysis увидит новую explicit связь.
+
+На REVIEW отсутствие fresh executable proof для critical hypothesis не превращается в PASS.
+
 ## Flow forward
 
 ```text

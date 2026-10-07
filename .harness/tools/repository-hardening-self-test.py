@@ -8,7 +8,8 @@ import subprocess
 import tempfile
 
 
-from self_test_fixture import isolate_project_artifacts
+from self_test_fixture import copy_effective_harness_checkout, isolate_project_artifacts
+from template_contract import template_targets
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -30,26 +31,8 @@ def run(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
 
 
 def copy_tracked_files(target: Path) -> None:
-    """Скопировать tracked checkout без изменения project-owned state."""
-    raw = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=SOURCE_ROOT,
-        stdout=subprocess.PIPE,
-        check=True,
-    ).stdout
-    for token in raw.split(b"\0"):
-        if not token:
-            continue
-        rel = token.decode("utf-8")
-        source = SOURCE_ROOT / rel
-        # Tracked path, удалённый из working tree, но не из index (обычный `rm`
-        # без `git rm`), fixture не нужен — пропускаем вместо traceback.
-        if not source.is_file():
-            continue
-        destination = target / rel
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-
+    """Скопировать effective Harness checkout без project-owned untracked state."""
+    copy_effective_harness_checkout(SOURCE_ROOT, target)
 
 def init_git(target: Path) -> None:
     """Подготовить isolated fixture как самостоятельный Git repository."""
@@ -84,8 +67,15 @@ def require_failure(proc: subprocess.CompletedProcess[str], needle: str) -> None
 
 
 def test_initialized_project_fixture_isolation(root: Path) -> None:
-    """Regression #191: post-INIT project state не протекает в synthetic fixture."""
+    """Regression #191/#254: post-INIT state не протекает в pre-INIT fixture."""
     copy_tracked_files(root)
+
+    # Helper получает только temporary copy. Зафиксируем host templates, чтобы
+    # regression явно доказывал отсутствие mutation исходного checkout.
+    host_templates_before = {
+        path.relative_to(SOURCE_ROOT).as_posix(): path.read_bytes()
+        for path in template_targets(SOURCE_ROOT)
+    }
 
     manifest_path = root / ".harness/manifest.yaml"
     manifest = manifest_path.read_text(encoding="utf-8")
@@ -103,7 +93,6 @@ def test_initialized_project_fixture_isolation(root: Path) -> None:
     (root / "docs/requirements/REQ-001-template.md").unlink(missing_ok=True)
 
     principles = root / "docs/principles"
-    template_before = (principles / "TEMPLATE.md").read_bytes()
     principle = principles / "PRN-999-fixture.md"
     principle.write_text(
         """---
@@ -140,6 +129,36 @@ None.
         encoding="utf-8",
     )
 
+    # Regression #254: initialized downstream может законно хранить migrated /
+    # customized project-owned templates. Имитируем оба наблюдавшихся типа drift:
+    # изменённый Findings prose и metadata, добавленную миграцией с иным порядком.
+    review_template = root / "planning/reviews/TEMPLATE.md"
+    review_text = review_template.read_text(encoding="utf-8")
+    review_text = review_text.replace(
+        "finding_contract: 3\nstep_id: STEP-NNN\n",
+        "step_id: STEP-NNN\nfinding_contract: 3\n",
+        1,
+    )
+    review_text = review_text.replace(
+        "При PASS material findings отсутствуют.",
+        "Project-specific review guidance retained after additive migration.",
+        1,
+    )
+    review_template.write_text(review_text, encoding="utf-8")
+
+    planning_template = root / "planning/plan-reviews/TEMPLATE.md"
+    planning_text = planning_template.read_text(encoding="utf-8")
+    planning_text = planning_text.replace(
+        "step_id: STEP-NNN\nexecution_id: exec-...\nverdict: pass\n",
+        "step_id: STEP-NNN\nverdict: pass\nexecution_id: exec-...\n",
+        1,
+    )
+    planning_template.write_text(planning_text, encoding="utf-8")
+
+    expected_before_isolation = template_targets(root)
+    assert review_template.read_text(encoding="utf-8") != expected_before_isolation[review_template]
+    assert planning_template.read_text(encoding="utf-8") != expected_before_isolation[planning_template]
+
     isolate_project_artifacts(root)
 
     normalized = manifest_path.read_text(encoding="utf-8")
@@ -147,7 +166,25 @@ None.
     assert "  name: null" in normalized
     assert "  initializedAt: null" in normalized
     assert not list(principles.glob("PRN-*.md"))
-    assert (principles / "TEMPLATE.md").read_bytes() == template_before
+
+    # Pre-INIT fixture снова обязана совпадать с exact current protocol baseline
+    # для всех configured templates, а не только для двух reproducer paths.
+    normalized_templates = {
+        path: path.read_text(encoding="utf-8")
+        for path in template_targets(root)
+    }
+    for path, expected in template_targets(root).items():
+        assert normalized_templates[path] == expected, path
+
+    # Повторная isolation не должна менять уже нормализованный fixture.
+    isolate_project_artifacts(root)
+    assert {
+        path: path.read_text(encoding="utf-8")
+        for path in template_targets(root)
+    } == normalized_templates
+
+    for rel, expected in host_templates_before.items():
+        assert (SOURCE_ROOT / rel).read_bytes() == expected, rel
 
     init_git(root)
     baseline = validate(root)
@@ -292,6 +329,37 @@ def main() -> int:
         require_failure(validate(root), "harness-policy: unsupported settings: required_filez")
         require_failure(validate(root), "harness-policy: required_files must be a string array")
         harness_policy_path.write_text(harness_policy_original, encoding="utf-8")
+
+        # Regression #275: required Harness file обязан быть installable через
+        # ровно один updater ownership class.
+        update_policy_path = root / ".harness/harness-update.toml"
+        update_policy_original = update_policy_path.read_text(encoding="utf-8")
+        update_policy_path.write_text(
+            update_policy_original.replace(
+                '  ".harness/stress-tests.json",\n',
+                "",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        require_failure(
+            validate(root),
+            "required file is not covered by updater ownership: .harness/stress-tests.json",
+        )
+
+        update_policy_path.write_text(
+            update_policy_original.replace(
+                'shared = [\n',
+                'shared = [\n  ".harness/stress-tests.json",\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        require_failure(
+            validate(root),
+            "required file matches multiple updater ownership classes: .harness/stress-tests.json",
+        )
+        update_policy_path.write_text(update_policy_original, encoding="utf-8")
 
         # Codex role config не может выйти за canonical .codex/agents даже если
         # target существует и resolve() успешно его находит.

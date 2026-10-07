@@ -34,6 +34,7 @@ report_directory = "planning/harness-updates"
 # Пример: .harness/docs/**, `.agents/skills/run-step/**` и runtime adapter README.
 harness_owned = [
   ".harness/harness-update-graph.json",
+  ".harness/stress-tests.json",
   ".harness/command-transitions.json",
   ".harness/reasoning-boundaries.json",
   ".harness/runtime-adapter-contract.json",
@@ -49,6 +50,15 @@ harness_owned = [
   ".agents/skills/fix-step/**",
   ".agents/skills/run-step/**",
   ".agents/skills/audit-step/**",
+  ".agents/skills/codebase-grounding/**",
+  ".agents/skills/semantic-blast-radius/**",
+  ".agents/skills/decision-archaeology/**",
+  ".agents/skills/core-reasoning-principles/**",
+  ".agents/skills/structural-enforcement/**",
+  ".agents/skills/structured-reflection/**",
+  ".agents/skills/high-rigor/**",
+  ".agents/skills/benchmark-methodology/**",
+  ".agents/skills/pr-maintenance/**",
   ".agents/skills/project-status/**",
   ".agents/skills/reconcile-project/**",
   ".agents/skills/release-check/**",

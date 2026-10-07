@@ -254,6 +254,7 @@ jobs:
           python .harness/tools/document-contract-self-test.py
           python .harness/tools/execution-self-test.py
           python .harness/tools/verification-self-test.py
+          python .harness/tools/reliable-orchestration-fault-self-test.py
           python .harness/tools/update-engine-self-test.py
 
   # Проверить нижнюю документированную границу Python отдельно от основного 3.13 job.
@@ -309,3 +310,12 @@ jobs:
         run: |
           python3 .harness/tools/validate.py --mode ci
           python3 .harness/tools/run-self-tests.py
+
+      # Лёгкий PR-mode общего bounded stress contract.
+      # Release Qualification использует тот же manifest с полным budget=20.
+      # Пример: 5 fresh fixtures достаточно для compatibility smoke без удвоения release cost.
+      - name: Run bounded stress smoke suite
+        # Любой intermittent failure остаётся failure; runner не делает retry.
+        # Regression #256 является первым scenario canonical stress manifest.
+        # Пример: explicit PR budget = 5, release default остаётся 20.
+        run: python3 .harness/tools/run-stress-tests.py --iterations 5

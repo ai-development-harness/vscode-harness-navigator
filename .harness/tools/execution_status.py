@@ -50,6 +50,7 @@ from command_transitions import (
 from completion_gate import finalize_step_completion
 from document_contract import render_document
 from harness_config import ConfigError, get, load_git_policy, update_lock_path
+from impact_analysis import ImpactAnalysisError, compare_component_sets
 from planning_contract import (
     implementation_prerequisite_failures,
     latest_matching_planning_review,
@@ -57,12 +58,23 @@ from planning_contract import (
     plan_content_hash,
     planning_context_basis,
     planning_context_components,
+    planning_context_fingerprints,
     read_task as read_planning_task,
     step_completion_proof,
     task_contract_snapshot,
     task_path as configured_task_path,
 )
 from repair_cycle import RepairCycleError, compare_review_reports
+from progress_guard import (
+    MAX_PROGRESS_SAMPLES,
+    PROGRESS_SCHEMA_VERSION,
+    PROGRESS_TELEMETRY_VERSION,
+    ProgressGuardError,
+    capture_progress,
+    new_telemetry,
+    observe_resume,
+    observe_transition,
+)
 from review_findings import FindingContractError, latest_structured_findings
 from review_contract import latest_review as latest_valid_review
 from side_effect_recovery import checkpoint as build_side_effect_checkpoint
@@ -84,6 +96,10 @@ STATUS_SCHEMA_VERSION = 2
 LEGACY_STATUS_SCHEMA_VERSION = 1
 RECENT_TERMINAL_LIMIT = 100
 MAX_DETAILS_BYTES = 16 * 1024
+INTENT_BASIS_SCHEMA_VERSION = 1
+MAX_INTENT_BASIS_BYTES = 16 * 1024
+INTENT_AWARE_STEP_OPERATIONS = {"PLAN", "IMPLEMENT", "REVIEW", "FIX"}
+PLAN_BOUND_STEP_OPERATIONS = {"IMPLEMENT", "REVIEW", "FIX"}
 
 EXECUTION_MODES = {"single", "chain", "orchestration"}
 EXECUTION_STATUSES = {"running", "complete", "blocked"}
@@ -286,6 +302,591 @@ def _validate_baseline(value: Any, prefix: str) -> list[str]:
     return errors
 
 
+class IntentResumeError(ValueError):
+    """Unsafe semantic resume blocked by the durable Intent Basis."""
+
+    def __init__(self, code: str, message: str, *, details: dict[str, Any]):
+        super().__init__(message)
+        self.code = code
+        self.details = details
+
+
+class ProgressExecutionError(ValueError):
+    """Long-running execution is trapped in deterministic progress state."""
+
+    def __init__(self, code: str, message: str, *, details: dict[str, Any]):
+        super().__init__(message)
+        self.code = code
+        self.details = details
+
+
+class StaleSemanticResultError(ValueError):
+    """Semantic completion no longer owns the current execution invocation."""
+
+    code = "STALE_SEMANTIC_RESULT"
+
+    def __init__(
+        self,
+        expected_execution_id: str,
+        current_execution_id: str | None,
+    ):
+        super().__init__(
+            f"semantic result belongs to execution {expected_execution_id!r}, "
+            f"but current execution is {current_execution_id!r}"
+        )
+        self.details = {
+            "expectedExecutionId": expected_execution_id,
+            "currentExecutionId": current_execution_id,
+        }
+
+
+def _sha256_value(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is not None
+
+
+def _intent_basis_errors(value: Any, *, prefix: str) -> list[str]:
+    """Validate the bounded versioned envelope without rejecting future schema versions.
+
+    Unknown versions remain readable so the resume boundary can return an exact
+    INTENT_BASIS_SCHEMA_UNSUPPORTED blocker instead of making all execution
+    state unparsable. They are never considered resumable.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, dict):
+        return [f"{prefix} must be an object"]
+    try:
+        size = _details_size_bytes(value)
+    except (TypeError, ValueError) as exc:
+        return [f"{prefix} must be JSON-serializable: {exc}"]
+    if size > MAX_INTENT_BASIS_BYTES:
+        return [f"{prefix} exceeds {MAX_INTENT_BASIS_BYTES} UTF-8 JSON bytes: {size}"]
+
+    version = value.get("schemaVersion")
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        return [f"{prefix}.schemaVersion must be >= 1"]
+    if version != INTENT_BASIS_SCHEMA_VERSION:
+        return []
+
+    errors: list[str] = []
+    if not isinstance(value.get("stepId"), str) or re.fullmatch(r"STEP-\d{3,}", str(value.get("stepId") or "")) is None:
+        errors.append(f"{prefix}.stepId must be STEP-NNN")
+    if not isinstance(value.get("command"), str) or not value.get("command"):
+        errors.append(f"{prefix}.command must be non-empty")
+    if value.get("operation") not in INTENT_AWARE_STEP_OPERATIONS:
+        errors.append(f"{prefix}.operation is invalid")
+    if not _sha256_value(value.get("contextBasis")):
+        errors.append(f"{prefix}.contextBasis must be sha256")
+    components = value.get("contextComponents")
+    if not isinstance(components, list) or any(
+        not isinstance(item, str)
+        or "=" not in item
+        or not _sha256_value(item.rsplit("=", 1)[1])
+        for item in components
+    ):
+        errors.append(f"{prefix}.contextComponents must be COMPONENT=sha256 strings")
+    elif len(components) != len(set(components)):
+        errors.append(f"{prefix}.contextComponents must be unique")
+    plan_required = value.get("planContentRequired")
+    if not isinstance(plan_required, bool):
+        errors.append(f"{prefix}.planContentRequired must be boolean")
+    plan_hash = value.get("planContentHash")
+    if plan_required is True and not _sha256_value(plan_hash):
+        errors.append(f"{prefix}.planContentHash must be sha256 when required")
+    if plan_required is False and plan_hash is not None:
+        errors.append(f"{prefix}.planContentHash must be null when not required")
+    plan_revision = value.get("planRevision")
+    if plan_revision is not None and (
+        not isinstance(plan_revision, int)
+        or isinstance(plan_revision, bool)
+        or plan_revision < 0
+    ):
+        errors.append(f"{prefix}.planRevision must be null or non-negative integer")
+    if not isinstance(value.get("capturedAt"), str) or not value.get("capturedAt"):
+        errors.append(f"{prefix}.capturedAt must be non-empty")
+    return errors
+
+
+def _capture_intent_basis(root: Path, command: str) -> dict[str, Any] | None:
+    """Capture only canonical semantic inputs needed to prove safe STEP resume."""
+    parsed = normalize_single_command(root, command)
+    if (
+        parsed.get("domain") != "STEP"
+        or parsed.get("operation") not in INTENT_AWARE_STEP_OPERATIONS
+        or not isinstance(parsed.get("target"), str)
+    ):
+        return None
+
+    step_id = str(parsed["target"])
+    operation = str(parsed["operation"])
+    task = read_task(root, step_id)
+    plan = task["frontmatter"].get("plan")
+    plan_value = plan if isinstance(plan, dict) else {}
+    requires_plan = operation in PLAN_BOUND_STEP_OPERATIONS
+
+    context_basis, context_components = planning_context_fingerprints(
+        root,
+        step_id,
+    )
+    value = {
+        "schemaVersion": INTENT_BASIS_SCHEMA_VERSION,
+        "stepId": step_id,
+        "command": parsed["normalized"],
+        "operation": operation,
+        # schema-v4 planning basis already includes semantic STEP/REQ/ADR/OQ,
+        # referenced architecture and active blocking Project Principles.
+        "contextBasis": context_basis,
+        "contextComponents": context_components,
+        # plan_content_hash includes canonical executionGroups when present.
+        # PLAN itself is allowed to change this output, so PLAN does not bind it.
+        "planContentRequired": requires_plan,
+        "planContentHash": plan_content_hash(root, step_id) if requires_plan else None,
+        "planRevision": plan_value.get("revision"),
+        "capturedAt": utc_now(),
+    }
+    errors = _intent_basis_errors(value, prefix="intentBasis")
+    if errors:
+        raise ValueError("; ".join(errors))
+    return value
+
+
+def _intent_reason(causes: list[dict[str, str]]) -> str:
+    components = {
+        str(item.get("component") or "")
+        for item in causes
+        if isinstance(item, dict)
+    }
+    if any(value.startswith("ADR@") or value.startswith("ARCH@") for value in components):
+        return "ARCHITECTURE_BASIS_CHANGED"
+    if any(value.startswith("STEP@") for value in components):
+        return "TASK_CONTRACT_CHANGED"
+    return "INTENT_BASIS_STALE"
+
+
+def _intent_resume_blocker(root: Path, execution: dict[str, Any]) -> dict[str, Any] | None:
+    current = execution.get("current")
+    if not isinstance(current, dict) or current.get("status") != "running":
+        return None
+    command = current.get("command")
+    if not isinstance(command, str) or not command:
+        return None
+    parsed = normalize_single_command(root, command)
+    if (
+        parsed.get("domain") != "STEP"
+        or parsed.get("operation") not in INTENT_AWARE_STEP_OPERATIONS
+        or not isinstance(parsed.get("target"), str)
+    ):
+        return None
+
+    step_id = str(parsed["target"])
+    remediation = f"STEP PLAN {step_id}"
+    context = current.get("context")
+    stored = context.get("intentBasis") if isinstance(context, dict) else None
+    if stored is None:
+        capture_error = (
+            context.get("intentBasisError")
+            if isinstance(context, dict)
+            else None
+        )
+        if isinstance(capture_error, dict):
+            return {
+                "reasonCode": "INTENT_BASIS_UNAVAILABLE",
+                "message": str(
+                    capture_error.get("message")
+                    or "Intent Basis was unavailable when semantic execution started"
+                ),
+                "remediation": remediation,
+                "stepId": step_id,
+                "captureError": capture_error,
+            }
+        return {
+            "reasonCode": "INTENT_BASIS_MISSING",
+            "message": "interrupted semantic STEP execution has no durable Intent Basis",
+            "remediation": remediation,
+            "stepId": step_id,
+        }
+    if not isinstance(stored, dict):
+        return {
+            "reasonCode": "INTENT_BASIS_INVALID",
+            "message": "stored Intent Basis is not an object",
+            "remediation": remediation,
+            "stepId": step_id,
+        }
+    version = stored.get("schemaVersion")
+    if version != INTENT_BASIS_SCHEMA_VERSION:
+        return {
+            "reasonCode": "INTENT_BASIS_SCHEMA_UNSUPPORTED",
+            "message": f"unsupported Intent Basis schemaVersion {version!r}",
+            "remediation": remediation,
+            "stepId": step_id,
+            "storedSchemaVersion": version,
+            "supportedSchemaVersion": INTENT_BASIS_SCHEMA_VERSION,
+        }
+    errors = _intent_basis_errors(stored, prefix="intentBasis")
+    if errors:
+        return {
+            "reasonCode": "INTENT_BASIS_INVALID",
+            "message": "; ".join(errors),
+            "remediation": remediation,
+            "stepId": step_id,
+        }
+
+    try:
+        current_basis = _capture_intent_basis(root, command)
+    except (ImpactAnalysisError, OSError, UnicodeError, ValueError) as exc:
+        return {
+            "reasonCode": "INTENT_BASIS_UNAVAILABLE",
+            "message": str(exc),
+            "remediation": remediation,
+            "stepId": step_id,
+        }
+    if current_basis is None:
+        return {
+            "reasonCode": "INTENT_BASIS_UNAVAILABLE",
+            "message": "current command no longer resolves to an intent-aware STEP command",
+            "remediation": remediation,
+            "stepId": step_id,
+        }
+
+    if stored.get("contextBasis") != current_basis.get("contextBasis"):
+        try:
+            causes = compare_component_sets(
+                list(stored.get("contextComponents") or []),
+                list(current_basis.get("contextComponents") or []),
+            )
+        except ImpactAnalysisError:
+            causes = [{"component": "PLANNING_CONTEXT", "change": "changed"}]
+        if not causes:
+            causes = [{"component": "PLANNING_CONTEXT", "change": "changed"}]
+        return {
+            "reasonCode": _intent_reason(causes),
+            "message": "semantic intent changed after the execution started",
+            "remediation": remediation,
+            "stepId": step_id,
+            "causes": causes,
+            "storedContextBasis": stored.get("contextBasis"),
+            "currentContextBasis": current_basis.get("contextBasis"),
+        }
+
+    if (
+        stored.get("planContentRequired") is True
+        and stored.get("planContentHash") != current_basis.get("planContentHash")
+    ):
+        return {
+            "reasonCode": "PLAN_BASIS_STALE",
+            "message": "Ready Implementation plan or execution-group graph changed after execution start",
+            "remediation": remediation,
+            "stepId": step_id,
+            "storedPlanContentHash": stored.get("planContentHash"),
+            "currentPlanContentHash": current_basis.get("planContentHash"),
+        }
+    return None
+
+
+def _intent_blocked_resolution(
+    execution: dict[str, Any],
+    blocker: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "status": "BLOCKED",
+        "executionId": execution.get("executionId"),
+        "rootCommand": execution.get("rootCommand"),
+        "command": (execution.get("current") or {}).get("command"),
+        "reasonCode": blocker["reasonCode"],
+        "remediation": blocker.get("remediation"),
+        "intent": blocker,
+    }
+
+
+def _apply_intent_blocker(
+    execution: dict[str, Any],
+    blocker: dict[str, Any],
+) -> None:
+    current = execution.get("current")
+    if isinstance(current, dict) and current.get("status") == "running":
+        current["status"] = "blocked"
+        current["result"] = "BLOCKED"
+        current["completedAt"] = utc_now()
+    execution["blockedBy"] = {
+        "reasonCode": blocker["reasonCode"],
+        "command": current.get("command") if isinstance(current, dict) else None,
+        "remediation": blocker.get("remediation"),
+        "details": blocker,
+    }
+    _mark_root_complete(execution, blocked=True)
+
+
+def _raise_intent_resume_error(blocker: dict[str, Any]) -> None:
+    raise IntentResumeError(
+        str(blocker["reasonCode"]),
+        str(blocker.get("message") or blocker["reasonCode"]),
+        details=blocker,
+    )
+
+
+def _progress_sample_errors(value: Any, *, prefix: str) -> list[str]:
+    if not isinstance(value, dict):
+        return [f"{prefix} must be an object"]
+    errors: list[str] = []
+    if value.get("schemaVersion") != PROGRESS_SCHEMA_VERSION:
+        errors.append(f"{prefix}.schemaVersion must be {PROGRESS_SCHEMA_VERSION}")
+    step_id = value.get("stepId")
+    if not isinstance(step_id, str) or re.fullmatch(r"STEP-\d{3,}", step_id) is None:
+        errors.append(f"{prefix}.stepId must be STEP-NNN")
+    if not isinstance(value.get("command"), str) or not value.get("command"):
+        errors.append(f"{prefix}.command must be non-empty")
+    if value.get("operation") not in INTENT_AWARE_STEP_OPERATIONS:
+        errors.append(f"{prefix}.operation is invalid")
+    for key in ("materialFingerprint", "activityFingerprint", "fingerprint"):
+        if not _sha256_value(value.get(key)):
+            errors.append(f"{prefix}.{key} must be sha256")
+    metrics = value.get("metrics")
+    if not isinstance(metrics, dict):
+        errors.append(f"{prefix}.metrics must be an object")
+    else:
+        integer_metrics = (
+            "completionReasonCount",
+            "completionPrecheckFindingCount",
+            "reviewFindingCount",
+            "completionFindingCount",
+        )
+        for key in integer_metrics:
+            number = metrics.get(key)
+            if not isinstance(number, int) or isinstance(number, bool) or number < 0:
+                errors.append(f"{prefix}.metrics.{key} must be a non-negative integer")
+        if not isinstance(metrics.get("completionComplete"), bool):
+            errors.append(f"{prefix}.metrics.completionComplete must be boolean")
+        evidence_hash = metrics.get("evidenceHash")
+        if evidence_hash is not None and not _sha256_value(evidence_hash):
+            errors.append(f"{prefix}.metrics.evidenceHash must be null or sha256")
+        groups_hash = metrics.get("executionGroupsHash")
+        if groups_hash is not None and not _sha256_value(groups_hash):
+            errors.append(f"{prefix}.metrics.executionGroupsHash must be null or sha256")
+        verification = metrics.get("verificationStatus")
+        if verification not in {None, "UNKNOWN", "MISSING", "BLOCKED", "FAIL", "MANUAL_REQUIRED", "PASS"}:
+            errors.append(f"{prefix}.metrics.verificationStatus is invalid")
+    if not isinstance(value.get("capturedAt"), str) or not value.get("capturedAt"):
+        errors.append(f"{prefix}.capturedAt must be non-empty")
+    return errors
+
+
+def _progress_delta_errors(value: Any, *, prefix: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, dict):
+        return [f"{prefix} must be null or an object"]
+    errors: list[str] = []
+    if value.get("classification") not in {
+        "NO_CHANGE",
+        "ACTIVITY_ONLY",
+        "WORSENED",
+        "PROGRESS",
+    }:
+        errors.append(f"{prefix}.classification is invalid")
+    for key in ("materialChanged", "activityChanged"):
+        if not isinstance(value.get(key), bool):
+            errors.append(f"{prefix}.{key} must be boolean")
+    for key in ("changed", "unchanged", "improvements", "regressions"):
+        items = value.get(key)
+        if not isinstance(items, list) or any(
+            not isinstance(item, str) or not item for item in items
+        ):
+            errors.append(f"{prefix}.{key} must be a string array")
+    return errors
+
+
+def _progress_telemetry_errors(value: Any, *, prefix: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, dict):
+        return [f"{prefix} must be an object"]
+    errors = _details_errors(value, prefix=prefix, enforce_budget=True)
+    if errors:
+        return errors
+    if value.get("schemaVersion") != PROGRESS_TELEMETRY_VERSION:
+        errors.append(
+            f"{prefix}.schemaVersion must be {PROGRESS_TELEMETRY_VERSION}"
+        )
+    samples = value.get("samples")
+    if not isinstance(samples, list):
+        errors.append(f"{prefix}.samples must be an array")
+    else:
+        if len(samples) > MAX_PROGRESS_SAMPLES:
+            errors.append(
+                f"{prefix}.samples exceeds hard limit {MAX_PROGRESS_SAMPLES}"
+            )
+        for index, sample in enumerate(samples):
+            errors.extend(
+                _progress_sample_errors(
+                    sample,
+                    prefix=f"{prefix}.samples[{index}]",
+                )
+            )
+    errors.extend(
+        _progress_delta_errors(
+            value.get("lastDelta"),
+            prefix=f"{prefix}.lastDelta",
+        )
+    )
+    stop = value.get("stopDecision")
+    if stop not in {
+        "continue",
+        "EXECUTION_STAGNATION",
+        "EXECUTION_CYCLE",
+        "EXECUTION_DRIFT",
+    }:
+        errors.append(f"{prefix}.stopDecision is invalid")
+    for key in ("unchangedResumes", "driftStreak"):
+        number = value.get(key)
+        if not isinstance(number, int) or isinstance(number, bool) or number < 0:
+            errors.append(f"{prefix}.{key} must be a non-negative integer")
+    return errors
+
+
+def _progress_sample_for_command(
+    root: Path,
+    command: str,
+) -> dict[str, Any] | None:
+    parsed = normalize_single_command(root, command)
+    if (
+        parsed.get("domain") != "STEP"
+        or parsed.get("operation") not in INTENT_AWARE_STEP_OPERATIONS
+        or not isinstance(parsed.get("target"), str)
+    ):
+        return None
+    return capture_progress(
+        root,
+        str(parsed["target"]),
+        parsed["normalized"],
+        str(parsed["operation"]),
+    )
+
+
+def _repair_loop_progress_suppressed(
+    execution: dict[str, Any],
+    operation: str,
+    *,
+    previous_operation: str | None = None,
+) -> bool:
+    # #153 remains the sole stop policy once FIX↔REVIEW repair has started.
+    if operation == "FIX":
+        return True
+    if operation == "REVIEW" and (
+        previous_operation == "FIX"
+        or int(execution.get("fixReviewCycles", 0)) > 0
+        or isinstance(execution.get("repairTelemetry"), dict)
+    ):
+        return True
+    return False
+
+
+def _store_progress_error(execution: dict[str, Any], exc: Exception) -> None:
+    execution["progressTelemetryError"] = {
+        "reasonCode": "PROGRESS_SNAPSHOT_UNAVAILABLE",
+        "message": str(exc)[:2048],
+        "updatedAt": utc_now(),
+    }
+
+
+def _initialize_progress(
+    root: Path,
+    execution: dict[str, Any],
+    command: str,
+) -> None:
+    try:
+        sample = _progress_sample_for_command(root, command)
+    except (OSError, UnicodeError, ValueError, ProgressGuardError) as exc:
+        _store_progress_error(execution, exc)
+        return
+    if sample is None:
+        return
+    execution["progressTelemetry"] = new_telemetry(sample)
+    execution.pop("progressTelemetryError", None)
+
+
+def _apply_progress_blocker(
+    execution: dict[str, Any],
+    blocker: dict[str, Any],
+    *,
+    command: str,
+    block_current: bool,
+) -> None:
+    current = execution.get("current")
+    if block_current and isinstance(current, dict) and current.get("status") == "running":
+        current["status"] = "blocked"
+        current["result"] = "BLOCKED"
+        current["completedAt"] = utc_now()
+    execution["blockedBy"] = {
+        "reasonCode": blocker["reasonCode"],
+        "command": command,
+        "remediation": blocker.get("remediation"),
+        "details": blocker,
+    }
+    _mark_root_complete(execution, blocked=True)
+
+
+def _raise_progress_error(blocker: dict[str, Any]) -> None:
+    raise ProgressExecutionError(
+        str(blocker["reasonCode"]),
+        str(blocker.get("message") or blocker["reasonCode"]),
+        details=blocker,
+    )
+
+
+def _observe_progress_resume(
+    root: Path,
+    execution: dict[str, Any],
+    command: str,
+) -> dict[str, Any] | None:
+    try:
+        sample = _progress_sample_for_command(root, command)
+    except (OSError, UnicodeError, ValueError, ProgressGuardError) as exc:
+        _store_progress_error(execution, exc)
+        return None
+    if sample is None:
+        return None
+    operation = str(sample.get("operation") or "")
+    observed = observe_resume(
+        execution.get("progressTelemetry"),
+        sample,
+        suppress_stop=_repair_loop_progress_suppressed(execution, operation),
+    )
+    execution["progressTelemetry"] = observed["telemetry"]
+    execution.pop("progressTelemetryError", None)
+    blocker = observed.get("blocker")
+    return blocker if isinstance(blocker, dict) else None
+
+
+def _observe_progress_transition(
+    root: Path,
+    execution: dict[str, Any],
+    command: str,
+    *,
+    previous_operation: str | None,
+) -> dict[str, Any] | None:
+    try:
+        sample = _progress_sample_for_command(root, command)
+    except (OSError, UnicodeError, ValueError, ProgressGuardError) as exc:
+        _store_progress_error(execution, exc)
+        return None
+    if sample is None:
+        return None
+    operation = str(sample.get("operation") or "")
+    observed = observe_transition(
+        execution.get("progressTelemetry"),
+        sample,
+        suppress_stop=_repair_loop_progress_suppressed(
+            execution,
+            operation,
+            previous_operation=previous_operation,
+        ),
+    )
+    execution["progressTelemetry"] = observed["telemetry"]
+    execution.pop("progressTelemetryError", None)
+    blocker = observed.get("blocker")
+    return blocker if isinstance(blocker, dict) else None
+
+
 def _details_size_bytes(value: dict[str, Any]) -> int:
     """Размер durable details в точном compact UTF-8 JSON transport."""
     encoded = json.dumps(
@@ -401,10 +1002,37 @@ def _validate_execution_record(
                     prefix=f"{prefix}: current.context.sideEffect",
                 )
             )
+            errors.extend(
+                _intent_basis_errors(
+                    context.get("intentBasis"),
+                    prefix=f"{prefix}: current.context.intentBasis",
+                )
+            )
+            errors.extend(
+                _details_errors(
+                    context.get("intentBasisError"),
+                    prefix=f"{prefix}: current.context.intentBasisError",
+                    enforce_budget=True,
+                )
+            )
 
     attempt = current.get("attempt")
     if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
         errors.append(f"{prefix}: current.attempt must be >= 1")
+
+    errors.extend(
+        _progress_telemetry_errors(
+            execution.get("progressTelemetry"),
+            prefix=f"{prefix}: progressTelemetry",
+        )
+    )
+    errors.extend(
+        _details_errors(
+            execution.get("progressTelemetryError"),
+            prefix=f"{prefix}: progressTelemetryError",
+            enforce_budget=True,
+        )
+    )
 
     repair_telemetry = execution.get("repairTelemetry")
     if repair_telemetry is not None:
@@ -1039,6 +1667,22 @@ def _active_execution_for_command(
     return matches[0] if matches else None
 
 
+def active_execution_for_command(
+    root: Path,
+    command: str,
+) -> dict[str, Any] | None:
+    """Вернуть snapshot единственной active execution для canonical command.
+
+    Semantic writers используют этот read-only boundary, чтобы durable artifact
+    был связан с exact execution episode, а не с chat/session memory или всей
+    историей STEP.
+    """
+    normalized = normalize_single_command(root, command)["normalized"]
+    status = load_status(root)
+    execution = _active_execution_for_command(status, normalized)
+    return deepcopy(execution) if execution is not None else None
+
+
 def read_side_effect_checkpoint(
     root: Path,
     command: str,
@@ -1267,8 +1911,22 @@ def _command_context(
 
     if parsed.get("domain") == "STEP" and parsed.get("target"):
         step_id = parsed["target"]
-        if parsed.get("operation") in {"PLAN", "IMPLEMENT", "REVIEW", "FIX"}:
+        if parsed.get("operation") in INTENT_AWARE_STEP_OPERATIONS:
+            # Durable semantic intent lives as hashes/components of canonical
+            # artifacts, never as copied REQ/ADR/STEP prose or chat history.
             try:
+                context["intentBasis"] = _capture_intent_basis(root, command)
+            except (ImpactAnalysisError, OSError, UnicodeError, ValueError) as exc:
+                # Fresh semantic start remains compatible with legacy/diagnostic
+                # fixtures that intentionally have incomplete knowledge state.
+                # The original failure is persisted so a later resume cannot
+                # silently invent a new basis from whatever state exists then.
+                context["intentBasisError"] = {
+                    "reasonCode": "INTENT_BASIS_UNAVAILABLE",
+                    "message": str(exc)[:2048],
+                }
+            try:
+                # Compatibility diagnostic retained for existing tools/UI.
                 context["planBasisAtStart"] = contract_basis(root, step_id)
             except (OSError, ValueError, FileNotFoundError):
                 pass
@@ -1323,6 +1981,25 @@ def start_execution(root: Path, raw_command: str) -> dict[str, Any]:
         ):
             current = existing["current"]
             if current.get("status") == "running":
+                blocker = _intent_resume_blocker(root, existing)
+                if blocker is not None:
+                    _apply_intent_blocker(existing, blocker)
+                    save_status(root, status)
+                    _raise_intent_resume_error(blocker)
+                progress_blocker = _observe_progress_resume(
+                    root,
+                    existing,
+                    str(current["command"]),
+                )
+                if progress_blocker is not None:
+                    _apply_progress_blocker(
+                        existing,
+                        progress_blocker,
+                        command=str(current["command"]),
+                        block_current=True,
+                    )
+                    save_status(root, status)
+                    _raise_progress_error(progress_blocker)
                 current["attempt"] = int(current.get("attempt", 1)) + 1
                 current["startedAt"] = utc_now()
                 existing["updatedAt"] = utc_now()
@@ -1373,6 +2050,7 @@ def start_execution(root: Path, raw_command: str) -> dict[str, Any]:
         current_command,
         baseline,
     )
+    _initialize_progress(root, execution, current_command)
     status["executions"].append(execution)
     save_status(root, status)
     return execution
@@ -1605,6 +2283,7 @@ def complete_command(
     command: str,
     result: str,
     *,
+    expected_execution_id: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if result not in RESULTS:
@@ -1624,6 +2303,14 @@ def complete_command(
     if latest is None:
         raise ValueError(f"execution not found for {normalized_root}")
     invocation_kind, execution = latest
+    if (
+        expected_execution_id is not None
+        and execution.get("executionId") != expected_execution_id
+    ):
+        raise StaleSemanticResultError(
+            expected_execution_id,
+            str(execution.get("executionId") or "") or None,
+        )
     if invocation_kind == "terminal":
         if execution.get("status") == "complete":
             raise ValueError(f"execution is already complete for {normalized_root}")
@@ -1713,6 +2400,8 @@ def begin_command(
     root: Path,
     root_command: str,
     command: str,
+    *,
+    expected_execution_id: str | None = None,
 ) -> dict[str, Any]:
     normalized_root = _normalize_root(root, root_command)["rootCommand"]
     normalized_command = normalize_single_command(root, command)["normalized"]
@@ -1729,6 +2418,8 @@ def begin_command(
         else None
     )
     if execution is None:
+        if expected_execution_id is not None:
+            raise StaleSemanticResultError(expected_execution_id, None)
         execution = start_execution(root, root_command)
         status = load_status(root)
         latest = _latest_invocation(
@@ -1738,16 +2429,40 @@ def begin_command(
         assert latest is not None and latest[0] == "active"
         execution = latest[1]
 
+    if (
+        expected_execution_id is not None
+        and execution.get("executionId") != expected_execution_id
+    ):
+        raise StaleSemanticResultError(
+            expected_execution_id,
+            str(execution.get("executionId") or "") or None,
+        )
+
     current = execution["current"]
     if current.get("command") == normalized_command and current.get("status") == "running":
+        blocker = _intent_resume_blocker(root, execution)
+        if blocker is not None:
+            _apply_intent_blocker(execution, blocker)
+            save_status(root, status)
+            _raise_intent_resume_error(blocker)
+        progress_blocker = _observe_progress_resume(
+            root,
+            execution,
+            normalized_command,
+        )
+        if progress_blocker is not None:
+            _apply_progress_blocker(
+                execution,
+                progress_blocker,
+                command=normalized_command,
+                block_current=True,
+            )
+            save_status(root, status)
+            _raise_progress_error(progress_blocker)
         current["attempt"] = int(current.get("attempt", 1)) + 1
         current["startedAt"] = utc_now()
-        baseline = execution.get("implementationBaseline")
-        current["context"] = _command_context(
-            root,
-            normalized_command,
-            baseline if isinstance(baseline, dict) else None,
-        )
+        # Preserve the original crash-recovery context. Recomputing it here
+        # would overwrite the Intent Basis and make stale resume undetectable.
         execution["updatedAt"] = utc_now()
         save_status(root, status)
         return execution
@@ -1827,6 +2542,29 @@ def begin_command(
         and next_parsed.get("operation") == "REVIEW"
     ):
         execution["fixReviewCycles"] = int(execution.get("fixReviewCycles", 0)) + 1
+
+    progress_blocker = _observe_progress_transition(
+        root,
+        execution,
+        normalized_command,
+        previous_operation=(
+            str(previous_parsed.get("operation"))
+            if previous_parsed.get("operation") is not None
+            else None
+        ),
+    )
+    if progress_blocker is not None:
+        _apply_progress_blocker(
+            execution,
+            progress_blocker,
+            command=normalized_command,
+            block_current=False,
+        )
+        if execution["mode"] == "chain":
+            index = int(execution.get("currentIndex", 0))
+            execution["notExecuted"] = execution["sequence"][index:]
+        save_status(root, status)
+        _raise_progress_error(progress_blocker)
 
     baseline = _baseline_for_new_command(
         root,
@@ -1989,6 +2727,7 @@ def block_execution(
     root_command: str,
     *,
     command: str | None = None,
+    expected_execution_id: str | None = None,
 ) -> dict[str, Any]:
     normalized_root = _normalize_root(root, root_command)["rootCommand"]
     status = load_status(root)
@@ -2004,7 +2743,17 @@ def block_execution(
         else None
     )
     if execution is None:
+        if expected_execution_id is not None:
+            raise StaleSemanticResultError(expected_execution_id, None)
         raise ValueError(f"active execution not found for {normalized_root}")
+    if (
+        expected_execution_id is not None
+        and execution.get("executionId") != expected_execution_id
+    ):
+        raise StaleSemanticResultError(
+            expected_execution_id,
+            str(execution.get("executionId") or "") or None,
+        )
     current = execution["current"]
     if command is not None:
         normalized_command = normalize_single_command(root, command)["normalized"]
@@ -2302,16 +3051,40 @@ def resolve_execution(
             "reasonCode": "EXECUTION_COMPLETE",
         }
     if execution.get("status") == "blocked":
-        return {
+        blocked_by = execution.get("blockedBy")
+        reason = (
+            blocked_by.get("reasonCode")
+            if isinstance(blocked_by, dict)
+            else "EXECUTION_BLOCKED"
+        )
+        value = {
             "status": "BLOCKED",
             "executionId": execution["executionId"],
             "rootCommand": execution["rootCommand"],
             "command": None,
-            "reasonCode": "EXECUTION_BLOCKED",
+            "reasonCode": reason,
         }
+        if isinstance(blocked_by, dict):
+            value["remediation"] = blocked_by.get("remediation")
+            value["blocker"] = blocked_by
+        return value
 
     current = execution["current"]
     if current.get("status") == "running":
+        blocker = _intent_resume_blocker(root, execution)
+        if blocker is not None:
+            if mutate:
+                status = load_status(root)
+                stored = _latest_execution(
+                    status,
+                    execution_id=execution["executionId"],
+                )
+                if stored is not None and stored.get("status") == "running":
+                    _apply_intent_blocker(stored, blocker)
+                    save_status(root, status)
+                    execution = stored
+            return _intent_blocked_resolution(execution, blocker)
+
         # Базовое правило: running => RESUME той же command. Только узкий набор
         # доказуемых durable facts имеет право автоматически закрыть crash-window.
         recovered = _durable_recovery_result(root, execution)
@@ -2547,7 +3320,6 @@ def stamp_review_expectation(
     return dict(expectation)
 
 
-@execution_state_mutation
 @execution_state_mutation
 def record_review_report(root: Path, step_id: str, record: dict[str, Any]) -> bool:
     """Связать созданный writer-ом report с active STEP REVIEW execution.

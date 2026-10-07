@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Review Contract v2: deterministic structured findings for REVIEW → FIX.
+"""Review Contract v3: evidence-gated structured findings for REVIEW → FIX.
 
 Human-readable immutable Markdown remains the durable review artifact. This
 module owns the machine-readable finding envelope embedded into that report and
 provides a parser that FIX/orchestration can consume without reparsing prose.
 
-Schema v2 deliberately separates:
-- presentation fields such as title/id;
-- semantic identity used by the stable fingerprint;
-- repair guidance/evidence that may evolve without silently becoming a
-  different finding.
+Schema v3 adds an explicit evidence basis. A reviewer-derived risk is not a
+material finding until its necessary preconditions and a project-specific
+verification have confirmed the scenario. Invalidated hypotheses never enter
+the durable findings array.
 
 Historical schema-v1 reports remain readable by review_contract.py through the
-legacy Markdown parser. New reports should always emit finding_contract=2.
+legacy Markdown parser. Schema-v2 machine findings remain valid immutable
+history, while new reports emit finding_contract=3.
 """
 from __future__ import annotations
 
@@ -25,10 +25,12 @@ from typing import Any
 from document_contract import parse_document
 from harness_config import review_directory
 
-FINDING_CONTRACT_VERSION = 2
+FINDING_CONTRACT_VERSION = 3
+SUPPORTED_FINDING_CONTRACT_VERSIONS = {2, 3}
 MACHINE_SECTION = "Machine-readable findings"
 SEVERITIES = {"critical", "high", "medium", "low"}
 CATEGORIES = {"implementation", "evidence", "contract"}
+EVIDENCE_KINDS = {"contract", "reproduced", "inferred"}
 
 
 class FindingContractError(ValueError):
@@ -104,6 +106,64 @@ def _repair(value: Any) -> dict[str, Any]:
     }
 
 
+def _evidence_basis(value: Any, label: str) -> dict[str, Any]:
+    """Validate Review Contract v3 evidence gate for one material finding."""
+    if not isinstance(value, dict):
+        raise FindingContractError(f"{label} must be an object")
+    unknown = sorted(set(value) - {"kind", "source", "preconditions", "verification"})
+    if unknown:
+        raise FindingContractError(
+            f"{label} has unsupported keys: " + ", ".join(unknown)
+        )
+
+    kind = _single_line(value.get("kind"), f"{label}.kind")
+    if kind not in EVIDENCE_KINDS:
+        raise FindingContractError(
+            f"{label}.kind must be one of {sorted(EVIDENCE_KINDS)}"
+        )
+    preconditions = _string_list(value.get("preconditions"), f"{label}.preconditions")
+    if kind == "inferred" and not preconditions:
+        raise FindingContractError(
+            f"{label}.preconditions must not be empty for inferred findings"
+        )
+
+    verification = value.get("verification")
+    if not isinstance(verification, dict):
+        raise FindingContractError(f"{label}.verification must be an object")
+    verification_unknown = sorted(set(verification) - {"method", "result", "outcome"})
+    if verification_unknown:
+        raise FindingContractError(
+            f"{label}.verification has unsupported keys: "
+            + ", ".join(verification_unknown)
+        )
+    outcome = _single_line(
+        verification.get("outcome"),
+        f"{label}.verification.outcome",
+    )
+    if outcome != "confirmed":
+        raise FindingContractError(
+            f"{label}.verification.outcome must be confirmed; "
+            "invalidated/unverified hypotheses are not durable findings"
+        )
+
+    return {
+        "kind": kind,
+        "source": _text(value.get("source"), f"{label}.source"),
+        "preconditions": preconditions,
+        "verification": {
+            "method": _text(
+                verification.get("method"),
+                f"{label}.verification.method",
+            ),
+            "result": _text(
+                verification.get("result"),
+                f"{label}.verification.result",
+            ),
+            "outcome": outcome,
+        },
+    }
+
+
 def fingerprint_payload(finding: dict[str, Any]) -> dict[str, Any]:
     """Return semantic identity used to match a finding across repair cycles.
 
@@ -131,7 +191,16 @@ def finding_fingerprint(finding: dict[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(canonical).hexdigest()
 
 
-def normalize_finding(value: Any, index: int) -> dict[str, Any]:
+def normalize_finding(
+    value: Any,
+    index: int,
+    *,
+    contract_version: int = FINDING_CONTRACT_VERSION,
+) -> dict[str, Any]:
+    if contract_version not in SUPPORTED_FINDING_CONTRACT_VERSIONS:
+        raise FindingContractError(
+            f"unsupported finding contract version: {contract_version}"
+        )
     if not isinstance(value, dict):
         raise FindingContractError(f"findings[{index}] must be an object")
     allowed = {
@@ -149,6 +218,8 @@ def normalize_finding(value: Any, index: int) -> dict[str, Any]:
         "evidence",
         "fingerprint",
     }
+    if contract_version >= 3:
+        allowed.add("evidenceBasis")
     unknown = sorted(set(value) - allowed)
     if unknown:
         raise FindingContractError(
@@ -182,6 +253,13 @@ def normalize_finding(value: Any, index: int) -> dict[str, Any]:
 
     expected = _text(value.get("expected"), f"findings[{index}].expected")
     observed = _text(value.get("observed"), f"findings[{index}].observed")
+    evidence = _string_list(
+        value.get("evidence"), f"findings[{index}].evidence"
+    )
+    if contract_version >= 3 and not evidence:
+        raise FindingContractError(
+            f"findings[{index}].evidence must not be empty in Review Contract v3"
+        )
 
     result: dict[str, Any] = {
         "id": finding_id,
@@ -197,10 +275,14 @@ def normalize_finding(value: Any, index: int) -> dict[str, Any]:
         "constraints": _string_list(
             value.get("constraints"), f"findings[{index}].constraints"
         ),
-        "evidence": _string_list(
-            value.get("evidence"), f"findings[{index}].evidence"
-        ),
+        "evidence": evidence,
     }
+    if contract_version >= 3:
+        result["evidenceBasis"] = _evidence_basis(
+            value.get("evidenceBasis"),
+            f"findings[{index}].evidenceBasis",
+        )
+
     result["fingerprint"] = finding_fingerprint(result)
 
     supplied = value.get("fingerprint")
@@ -211,10 +293,17 @@ def normalize_finding(value: Any, index: int) -> dict[str, Any]:
     return result
 
 
-def normalize_findings(values: Any) -> list[dict[str, Any]]:
+def normalize_findings(
+    values: Any,
+    *,
+    contract_version: int = FINDING_CONTRACT_VERSION,
+) -> list[dict[str, Any]]:
     if not isinstance(values, list):
         raise FindingContractError("findings must be an array")
-    result = [normalize_finding(item, index) for index, item in enumerate(values, 1)]
+    result = [
+        normalize_finding(item, index, contract_version=contract_version)
+        for index, item in enumerate(values, 1)
+    ]
     fingerprints = [item["fingerprint"] for item in result]
     if len(fingerprints) != len(set(fingerprints)):
         raise FindingContractError("findings must not contain duplicate fingerprints")
@@ -237,7 +326,11 @@ def render_machine_findings(findings: list[dict[str, Any]]) -> str:
     )
 
 
-def parse_machine_findings(document: dict[str, Any]) -> list[dict[str, Any]]:
+def parse_machine_findings(
+    document: dict[str, Any],
+    *,
+    expected_version: int | None = None,
+) -> list[dict[str, Any]]:
     section = document.get("sections", {}).get(MACHINE_SECTION)
     if not isinstance(section, str) or not section.strip():
         raise FindingContractError(f"missing or empty section '## {MACHINE_SECTION}'")
@@ -257,11 +350,21 @@ def parse_machine_findings(document: dict[str, Any]) -> list[dict[str, Any]]:
         raise FindingContractError(
             "machine findings payload keys must be schemaVersion, findings"
         )
-    if payload.get("schemaVersion") != FINDING_CONTRACT_VERSION:
+    version = payload.get("schemaVersion")
+    if version not in SUPPORTED_FINDING_CONTRACT_VERSIONS:
         raise FindingContractError(
-            f"machine findings schemaVersion must be {FINDING_CONTRACT_VERSION}"
+            "machine findings schemaVersion must be one of "
+            + str(sorted(SUPPORTED_FINDING_CONTRACT_VERSIONS))
         )
-    return normalize_findings(payload.get("findings"))
+    if expected_version is not None and version != expected_version:
+        raise FindingContractError(
+            f"machine findings schemaVersion {version} does not match "
+            f"frontmatter finding_contract {expected_version}"
+        )
+    return normalize_findings(
+        payload.get("findings"),
+        contract_version=int(version),
+    )
 
 
 def latest_structured_findings(root: Path, step_id: str) -> dict[str, Any]:
@@ -274,9 +377,13 @@ def latest_structured_findings(root: Path, step_id: str) -> dict[str, Any]:
     meta = document["frontmatter"]
     if meta.get("finding_contract") != FINDING_CONTRACT_VERSION:
         raise FindingContractError(
-            "latest review does not provide Review Contract v2 structured findings"
+            "latest review does not provide current Review Contract v3 "
+            "evidence-gated findings; run a fresh STEP REVIEW before FIX"
         )
-    findings = parse_machine_findings(document)
+    findings = parse_machine_findings(
+        document,
+        expected_version=FINDING_CONTRACT_VERSION,
+    )
     return {
         "schemaVersion": FINDING_CONTRACT_VERSION,
         "stepId": step_id,

@@ -25,11 +25,11 @@ Hard cap проверяется первым, поэтому существую�
 
 ## Источник данных
 
-Adaptive decision не использует chat history и не просит модель оценить «есть ли прогресс». Сравниваются два immutable Review Contract v2 report:
+Adaptive decision не использует chat history и не просит модель оценить «есть ли прогресс». Сравниваются два immutable Review Contract v3 report:
 
 - предыдущий report берётся из `current.context.reviewReportBefore`, зафиксированного при старте REVIEW;
 - текущий report — новый canonical REVIEW artifact;
-- findings сравниваются по stable `fingerprint` из Review Contract v2;
+- findings сравниваются по stable `fingerprint` из Review Contract v3;
 - repository delta берётся из `reviewed_revision`;
 - semantic scope сравнивается через `contract_basis`.
 
@@ -40,6 +40,8 @@ Adaptive decision не использует chat history и не просит м
 ### REPEATED_FINDINGS
 
 Contract scope не менялся, repository revision изменилась, но множество material finding fingerprints осталось тем же. FIX что-то изменил в repository, но не устранил ни один зафиксированный дефект.
+
+Это также strong trigger для internal `structural-enforcement`: следующий FIX не должен автоматически повторять локальный patch, если stable finding class уже доказан как recurring. Adaptive stop по-прежнему владеет orchestration decision; structural-enforcement только классифицирует systemic corrective mechanism.
 
 ### NO_PROGRESS
 
@@ -105,10 +107,14 @@ Telemetry записывается при completion второго и посл�
 
 Первый FAIL review (`fixReviewCycles=0`) никогда не создаёт adaptive stop.
 
+## Связь с generic Progress Guard
+
+[`PROGRESS_GUARD.md`](PROGRESS_GUARD.md) может сохранять compact progress samples во время FIX/REVIEW для общей observability, но generic stop decisions на repair loop подавляются. `NO_PROGRESS`, `REPEATED_FINDINGS`, `REGRESSION` и hard cap `FIX_REVIEW_LIMIT_REACHED` остаются единственной authoritative taxonomy FIX↔REVIEW.
+
 ## Граница ответственности
 
 - CTS определяет допустимость REVIEW → FIX;
-- Review Contract v2 определяет finding identity;
+- Review Contract v3 определяет finding identity;
 - `repair_cycle.py` вычисляет delta;
 - `execution_status.py` хранит последнюю telemetry и применяет stop;
 - `maxFixReviewCycles` остаётся hard upper bound.
