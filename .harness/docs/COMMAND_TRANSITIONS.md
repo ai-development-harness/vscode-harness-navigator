@@ -14,6 +14,8 @@ Machine-readable source of truth:
 .harness/command-transitions.json
 ```
 
+Тот же файл содержит versioned `authorityContract`: model/semantic runtime только предлагает semantic result, а execution/transition state commit-ит dispatcher. Canonical artifact/side-effect ownership описан в [`STATE_AUTHORITY.md`](STATE_AUTHORITY.md). Изменение или удаление authority contract делает CTS invalid до dispatch.
+
 Человекочитаемая таблица ниже должна полностью соответствовать этому JSON. Harness Integrity проверяет соответствие автоматически.
 
 ## Зачем существует отдельный transition graph

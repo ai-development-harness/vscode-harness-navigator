@@ -163,6 +163,18 @@ GIT CHECK > COMMIT > PUSH > PR
 
 Cross-domain chain запрещён: `STEP RUN STEP-NNN > GIT COMMIT` не является допустимой командой. Полная семантика — в [`COMMAND_SYNTAX.md`](COMMAND_SYNTAX.md).
 
+## PR maintenance после создания PR
+
+Для уже открытого PR Harness может использовать internal capability `pr-maintenance`:
+
+```bash
+python3 .harness/tools/pr-maintenance.py snapshot --selector <branch-or-pr-number> --pretty
+```
+
+Он читает provider facts — checks/statuses, comments, reviews и changed files — через тот же configured GitHub/Gitea adapter, сохраняет external IDs и строит exact `snapshotBasis`. Semantic слой может выполнить CI triage, классифицировать review feedback или подготовить reviewer guidance, но mutation по-прежнему проходит только через обычные STEP/QUICK FIX и GIT commands.
+
+Capability не имеет auto-merge authority, не делает force/history rewrite и ограничивает babysit refresh budget. Подробнее: [PR_MAINTENANCE.md](PR_MAINTENANCE.md).
+
 ## Safety defaults
 
 Harness никогда по умолчанию не выполняет:

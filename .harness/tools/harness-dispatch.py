@@ -37,6 +37,7 @@ def _dispatch(root: Path, args: argparse.Namespace) -> dict:
             args.root_command,
             args.command,
             args.result,
+            execution_id=args.execution_id,
             details=details,
         )
     return resume_dispatch(root, args.root_command)
@@ -60,11 +61,20 @@ def main() -> int:
     complete.add_argument("--root", required=True, dest="root_command")
     complete.add_argument("--command", required=True)
     complete.add_argument(
+        "--execution-id",
+        required=True,
+        dest="execution_id",
+        help="Exact executionId from the semantic handoff.",
+    )
+    complete.add_argument(
         "--result",
         required=True,
         choices=["SUCCESS", "PASS", "FAIL", "BLOCKED"],
     )
-    complete.add_argument("--details-json")
+    complete.add_argument(
+        "--details-json",
+        help="Inline JSON object string, not a file path. Example: --details-json '{\"reason\":\"done\"}'",
+    )
 
     resume = sub.add_parser("resume")
     resume.add_argument("--root", dest="root_command")

@@ -51,6 +51,8 @@ Family aliases в Claude Code выбраны намеренно: они позв
 
 Сначала сокращай **лишние агентные проходы и контекст**, а уже затем снижай effort.
 
+Optional High-Rigor Arena/Interrogate не является способом «всегда улучшить качество». Normal mode не fan-out-ит; запуск разрешает только `highRigor.*` policy + deterministic preflight. Core Harness не хранит provider-specific список моделей: runtime выбирает available seats нативно, а trace фиксирует requested/actual model, independent session id и fallback/dropout.
+
 Не запускай security/test reviewer для задачи, которой они не касаются. Planner можно пропустить внутри `RUN`, если task уже имеет свежий и достаточный Implementation plan. Механические изменения не должны уходить к самой дорогой reasoning-модели.
 
 ## Когда повышать implementer
@@ -92,7 +94,9 @@ Implementer получает готовый task/plan и решает задач
 - читать только релевантные skills/docs;
 - не пересказывать целиком task/ADR/REQ в финальном ответе;
 - отдавать короткий structured handoff;
-- не запускать параллельно несколько write-agents над одними файлами.
+- не запускать параллельно несколько write-agents над одними файлами;
+- для Arena использовать отдельные candidate outputs/worktrees и сериализовать shared synthesis только после fan-out;
+- для Interrogate сохранять reviewers read-only и не допускать cross-talk до lead synthesis.
 
 ## Как изменить модель
 

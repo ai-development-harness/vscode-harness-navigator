@@ -1,5 +1,13 @@
 {
   "schemaVersion": 1,
+  "authorityContract": {
+    "schemaVersion": 1,
+    "semanticResult": "proposal",
+    "executionStateCommit": "dispatcher",
+    "transitionCommit": "dispatcher",
+    "canonicalArtifactCommit": "deterministic-writer",
+    "sideEffectCommit": "deterministic-action"
+  },
   "validationOrder": [
     "tokenize",
     "normalize",

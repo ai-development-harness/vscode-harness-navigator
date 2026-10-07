@@ -164,6 +164,32 @@ def harness_resume(root: Path) -> dict[str, Any]:
     items = unresolved_executions(root)
     resumable = [item for item in items if item.get("status") in {"RESUME", "NEXT"}]
     if len(resumable) == 0:
+        intent_blockers = [
+            item
+            for item in items
+            if item.get("status") == "BLOCKED"
+            and (
+                str(item.get("reasonCode") or "").startswith(
+                    ("INTENT_", "PLAN_BASIS_", "TASK_CONTRACT_", "ARCHITECTURE_BASIS_")
+                )
+                or item.get("reasonCode") in {
+                    "EXECUTION_STAGNATION",
+                    "EXECUTION_CYCLE",
+                    "EXECUTION_DRIFT",
+                }
+            )
+        ]
+        if len(intent_blockers) == 1:
+            selected = intent_blockers[0]
+            return {
+                "status": "BLOCKED",
+                "reasonCode": selected.get("reasonCode"),
+                "executionId": selected.get("executionId"),
+                "rootCommand": selected.get("rootCommand"),
+                "command": selected.get("command"),
+                "remediation": selected.get("remediation"),
+                "intent": selected.get("intent") or selected.get("blocker"),
+            }
         return {
             "status": "BLOCKED",
             "reasonCode": "NO_RESUMABLE_EXECUTION",

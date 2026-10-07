@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 
-from harness_config import ConfigError, language_value, load_git_policy
+from harness_config import ConfigError, high_rigor_config, language_value, load_git_policy
 
 
 def write(path: Path, content: str) -> None:
@@ -36,6 +36,47 @@ def main() -> int:
 
         assert language_value(root, "documentation") == "ru"
         assert load_git_policy(root)["push"]["remote"] == "publish"
+        legacy_high_rigor = high_rigor_config(root)
+        assert legacy_high_rigor["arena"] == "disabled"
+        assert legacy_high_rigor["interrogate"] == "disabled"
+        assert legacy_high_rigor["seats"] == 3
+
+        write(
+            root / ".harness/manifest.yaml",
+            manifest()
+            + "highRigor:\n"
+            + "  arena: explicit\n"
+            + "  interrogate: risk\n"
+            + "  seats: 3\n"
+            + "  maxSeats: 5\n"
+            + "  maxInputCharsPerSeat: 80000\n"
+            + "  maxOutputCharsPerSeat: 24000\n"
+            + "  maxTotalChars: 400000\n",
+        )
+        configured = high_rigor_config(root)
+        assert configured["arena"] == "explicit"
+        assert configured["interrogate"] == "risk"
+
+        write(
+            root / ".harness/manifest.yaml",
+            manifest()
+            + "highRigor:\n"
+            + "  arena: invalid\n"
+            + "  interrogate: explicit\n"
+            + "  seats: 3\n"
+            + "  maxSeats: 5\n"
+            + "  maxInputCharsPerSeat: 80000\n"
+            + "  maxOutputCharsPerSeat: 24000\n"
+            + "  maxTotalChars: 400000\n",
+        )
+        try:
+            high_rigor_config(root)
+        except ConfigError as exc:
+            assert "disabled|explicit|risk" in str(exc), exc
+        else:
+            raise AssertionError("invalid high-rigor policy was accepted")
+
+        write(root / ".harness/manifest.yaml", manifest())
 
         write(root / ".harness/manifest.yaml", manifest("pt-BR", "en-US"))
         assert language_value(root, "documentation") == "en-US"

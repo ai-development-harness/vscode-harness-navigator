@@ -6,7 +6,7 @@ harness:
   version: "1"
   # Release Harness, от которого текущий project protocol layer синхронизирован.
   # Формат: "X.X.X"; immutable source ref хранится по state.lock_file из harness-update policy.
-  release: "0.10.4"
+  release: "0.11.3"
 
 # Состояние конкретного проекта, созданного из template.
 # Пример: до INIT initialized=false/name=null, после INIT finalize-init атомарно заполняет значения.
@@ -27,6 +27,9 @@ execution:
   # Максимальное число циклов FIX → REVIEW внутри одного STEP RUN STEP до остановки.
   # Пример: 3; допустимый диапазон 1..5.
   maxFixReviewCycles: 3
+  # Максимальное число semantic planning-review раундов для одного STEP PLAN до handoff пользователю.
+  # Пример: 3; допустимый диапазон 1..5.
+  maxPlanReviewCycles: 3
   # Максимальное время одной deterministic Verification command до принудительной остановки.
   # Пример: 300 секунд; допустимый диапазон 1..3600. Shell не используется.
   verificationCommandTimeoutSeconds: 300
@@ -40,6 +43,33 @@ review:
   # Когда test reviewer обязателен.
   # Пример: auto | always.
   tests: auto
+
+# Опциональный режим повышенной строгости. Normal mode не fan-out-ит агентов.
+# Policy: disabled полностью выключает capability; explicit требует явный запрос;
+# risk включает её только при deterministic high-risk STEP flags.
+# Пример: arena=explicit, interrogate=explicit, seats=3.
+highRigor:
+  # Arena: несколько независимых candidates + отдельный judge.
+  # Пример: explicit — запуск только по явному запросу.
+  arena: explicit
+  # Interrogate: несколько независимых readonly reviewers + lead synthesis.
+  # Пример: explicit | risk | disabled.
+  interrogate: explicit
+  # Целевое число candidate/reviewer seats.
+  # Пример: 3; допустимо 2..5.
+  seats: 3
+  # Жёсткий ceiling participant seats, не считая отдельного Arena judge.
+  # Пример: 5; допустимо 2..8.
+  maxSeats: 5
+  # Максимальный tokenizer-neutral размер exact input+rubric одного seat.
+  # Пример: 80000 Unicode chars.
+  maxInputCharsPerSeat: 80000
+  # Максимальный размер output одного completed seat.
+  # Пример: 24000 Unicode chars.
+  maxOutputCharsPerSeat: 24000
+  # Общий tokenizer-neutral input+output budget одного high-rigor run.
+  # Пример: 400000 Unicode chars.
+  maxTotalChars: 400000
 
 # Project-specific настройки управления repository skills.
 # Пример: search.maxResults ограничивает размер выдачи SKILL FIND.

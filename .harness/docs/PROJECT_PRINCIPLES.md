@@ -2,6 +2,8 @@
 
 Project Principle (`PRN-NNN`) — project-owned долгоживущий инженерный инвариант, который применяется ко множеству будущих решений и может блокировать PLAN/REVIEW.
 
+> Не путать с Harness-owned **Core Reasoning Principle** `CRP-NNN`. CRP задаёт способ reasoning/execution агента, хранится внутри Harness и не участвует в project traceability/freshness. Подробности: [`CORE_REASONING_PRINCIPLES.md`](CORE_REASONING_PRINCIPLES.md).
+
 ## PRN, ADR и REQ
 
 - **REQ** — что должна делать система или какой observable product outcome обязателен.

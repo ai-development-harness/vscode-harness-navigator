@@ -46,7 +46,7 @@ Always-on context — Harness instructions, которые runtime получа�
 - Codex: Harness-controlled часть `AGENTS.md`;
 - Claude Code: Harness-controlled часть `AGENTS.md` плюс `CLAUDE.md` adapter.
 
-Generated blocks `PROJECT-CONTEXT` и `SKILL-ROUTING` являются project-owned динамическим контекстом. Gate показывает их размер отдельно, но не включает их в core Harness budget: `PROJECT INIT` не должен становиться невалидным только из-за содержимого конкретного проекта.
+Generated blocks `PROJECT-CONTEXT` и `SKILL-ROUTING` являются project-owned динамическим контекстом. Gate показывает их размер отдельно, но не включает их в core Harness budget: `PROJECT INIT` не должен становиться невалидным только из-за содержимого конкретного проекта. **Project-specific process rules, которые действительно должны быть always-on, размещаются в `PROJECT-CONTEXT`**, а не добавляются в Harness-controlled bootstrap text. Так проект может расширять процесс без повышения core budget.
 
 Локальные/private overrides также не являются частью tracked Harness baseline.
 
@@ -80,6 +80,10 @@ Machine-readable config должен читать deterministic tool, когда
 Подробная документация хранится pull-based в `.harness/docs/**` и читается по необходимости. Always-on bootstrap должен оставаться картой/routing surface, а не полным manual.
 
 Для STEP workflow навигация тоже выполняется pull-based: `step-context.py STEP-NNN --phase plan|implement|review --json` разрешает deterministic phase facts и включает `contextContract` — exact role-specific artifacts/sections. Legacy `readPaths` остаётся compatibility surface; semantic role не обязана читать файл целиком. Context Contract публикует tokenizer-neutral `artifactCount`, `sectionCount`, `manifestChars` и `fullRepositoryPreload=false`, а дополнительный context допускается только через explicit expansion reason. Tool source `.harness/tools/**` не является normal semantic input.
+
+Harness-owned Core Reasoning Principles также pull-based: deterministic selector не кладёт восемь CRP leaves в always-on prompt и не передаёт model весь catalog. Context Contract возвращает только applicable `coreReasoningPrinciples[]` и отдельные `corePrincipleCount/corePrincipleChars`. Обычный небольшой PLAN может получить 0 CRP, REVIEW — только evidence-oriented leaf. Project `PRN-NNN` остаются отдельным project-owned contract.
+
+High-Rigor Arena/Interrogate — **не** always-on quality tax. Template policy `explicit` возвращает SKIP без явного запроса; `risk` активируется deterministic STEP flags. Fan-out измеряет per-seat/total Unicode chars через `high-rigor.py` и ограничен `highRigor.seats/max*Chars`. Model disagreement не разрешает автоматически увеличивать seats или context.
 
 Command bootstrap также не является reasoning-задачей. `harness-dispatch.py` объединяет CTS validation, execution state, continuation и routing. Deterministic commands, включая `PROJECT STATUS` и `HARNESS UPDATE CHECK/APPLY`, выполняются внутри dispatcher; semantic command возвращает только exact skill/context handoff. Root-модель не должна отдельно читать transition graph, выбирать skill или вызывать resolver по playbook.
 

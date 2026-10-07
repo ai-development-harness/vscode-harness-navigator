@@ -37,6 +37,19 @@ KNOWN_RUNTIME_PRECONDITIONS = {
     "git-pr-ready",
 }
 
+# Authority contract фиксирует ownership control-plane state независимо от
+# конкретного runtime/skill. Модель предлагает semantic result, но execution,
+# transitions, canonical protocol artifacts и external side effects commit-ят
+# только deterministic Harness boundaries.
+AUTHORITY_CONTRACT = {
+    "schemaVersion": 1,
+    "semanticResult": "proposal",
+    "executionStateCommit": "dispatcher",
+    "transitionCommit": "dispatcher",
+    "canonicalArtifactCommit": "deterministic-writer",
+    "sideEffectCommit": "deterministic-action",
+}
+
 DISPATCH_KINDS = {"deterministic", "semantic"}
 KNOWN_DISPATCH_HANDLERS = {
     "harness-help",
@@ -95,6 +108,12 @@ def validate_transition_table(table: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if table.get("schemaVersion") != 1:
         errors.append("command-transitions: schemaVersion must be 1")
+
+    authority = table.get("authorityContract")
+    if authority != AUTHORITY_CONTRACT:
+        errors.append(
+            "command-transitions: authorityContract must match canonical authority schema"
+        )
 
     order = table.get("validationOrder")
     expected_order = [
@@ -444,6 +463,11 @@ def dispatch_spec(
 ) -> dict[str, Any]:
     """Вернуть validated dispatch metadata одной canonical command."""
     return dict(table["domains"][domain]["commands"][operation]["dispatch"])
+
+
+def authority_contract(table: dict[str, Any]) -> dict[str, Any]:
+    """Вернуть validated global authority contract CTS."""
+    return dict(table["authorityContract"])
 
 
 def canonical_commands(table: dict[str, Any]) -> list[str]:

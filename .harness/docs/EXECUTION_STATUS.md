@@ -51,6 +51,8 @@ Per-STEP файлы запрещены.
 - `stepRecovery` — минимальные STEP recovery proofs, прежде всего durable implementation baseline; recovery key `STEP-NNN` обязан совпадать с `implementationBaseline.stepId`;
 - `recentTerminals` — compact terminal tombstones, hard limit **100**; tombstone сохраняет optional `current.details` как recent durable handoff metadata, причём один `details` ограничен **16 KiB compact UTF-8 JSON**;
 - `nextOrdinal` — monotonic invocation order, чтобы latest semantics не зависела от timestamp collision.
+- для running `STEP PLAN/IMPLEMENT/REVIEW/FIX` `current.context.intentBasis` хранит bounded versioned snapshot canonical semantic fingerprints (hard limit 16 KiB); это не копия REQ/ADR/STEP и не audit log.
+- active long-running STEP execution может хранить `progressTelemetry`: максимум 8 compact samples material/activity fingerprints, `unchangedResumes`, `driftStreak` и последний factual delta; полный trajectory/transcript не сохраняется.
 
 Completed execution не хранится в полном виде бесконечно. При terminal checkpoint full record превращается в tombstone. Historical blocked также перестаёт быть full operational state, когда появляется более новая invocation того же `rootCommand`.
 
@@ -226,7 +228,7 @@ Completion не доказан.
 RESUME current.command
 ```
 
-Повтор должен иметь resume-semantics: сначала проверить уже существующие artifacts/diff/state и не дублировать side effects вслепую.
+Для intent-aware STEP semantic commands resolver сначала сравнивает сохранённый `current.context.intentBasis` с текущими `planning_context_basis` / `plan_content_hash`. Если semantic input изменился, execution становится BLOCKED с точным reasonCode/remediation и **не получает новый snapshot поверх старого**. Только после этого применяются обычные resume-semantics: проверить существующие artifacts/diff/state и не дублировать side effects вслепую.
 
 ### `complete`
 
@@ -276,12 +278,13 @@ python3 .harness/tools/execution-state.py begin \
 python3 .harness/tools/harness-dispatch.py complete \
   --root 'STEP RUN STEP-001' \
   --command 'STEP IMPLEMENT STEP-001' \
+  --execution-id '<executionId from handoff>' \
   --result SUCCESS
 ```
 
 Низкоуровневый `execution-state.py complete` для `STEP IMPLEMENT/FIX` с `SUCCESS` возвращает `BLOCKED/VERIFICATION_REQUIRES_DISPATCH`: он не является обходным путём мимо Verification.
 
-Следующая command определяется resolver/CTS, а не chat history.
+Следующая command определяется resolver/CTS, а не chat history. Completion semantic command дополнительно связан с exact `executionId`: одинаковые `rootCommand/current.command` новой invocation не дают старому result права commit-ить её state.
 
 ## Resolver
 
@@ -448,6 +451,8 @@ planning-review.plan_content_hash = current content_hash
 ```
 
 `context_basis` schema v4 включает semantic STEP/dependency contracts, semantic linked REQ/ADR, explicit architecture refs и relevant OQ. Dependency completion state, reverse traceability и scheduling metadata не входят в fingerprint; completion proof проверяется отдельным runtime precondition непосредственно перед IMPLEMENT.
+
+Каждый новый planning-review, созданный writer-ом, сохраняет `execution_id` active `STEP PLAN`. `execution.maxPlanReviewCycles` считается только по immutable reports с тем же `execution_id`: restart той же execution сохраняет budget, а новый explicit `STEP PLAN` создаёт новый planning episode и не наследует historical counter.
 
 Изменение текста Implementation plan инвалидирует `content_hash` даже при неизменном context.
 

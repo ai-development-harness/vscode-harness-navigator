@@ -11,6 +11,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from core_reasoning_principles import (
+    CoreReasoningPrincipleError,
+    select_core_reasoning_principles,
+)
 from document_contract import DocumentError, parse_document
 from harness_config import get, load_manifest, resolve_repo_path
 from planning_contract import (
@@ -227,6 +231,21 @@ def _build_context_contract(root: Path, step_id: str, role: str) -> dict[str, An
             seen.add(key)
             unique.append(item)
 
+    artifact_count = len(unique)
+    section_count = sum(len(item.get("sections") or []) for item in unique)
+    try:
+        core_principles = select_core_reasoning_principles(
+            root,
+            task,
+            role=role,
+            artifact_count=artifact_count,
+            section_count=section_count,
+        )
+    except CoreReasoningPrincipleError as exc:
+        raise ContextContractError(
+            f"Core Reasoning Principles selection failed: {exc}"
+        ) from exc
+
     optional = [
         {
             "trigger": "material integration/security/domain boundary discovered",
@@ -246,12 +265,13 @@ def _build_context_contract(root: Path, step_id: str, role: str) -> dict[str, An
         "stepId": step_id,
         "repositoryRevision": repository_revision(root),
         "required": unique,
+        "coreReasoningPrinciples": core_principles,
         "optionalExpansions": optional,
         "forbiddenOrUnnecessary": [
             ".harness/tools/**",
             "planning/** unrelated to current STEP",
             "docs/** unrelated to explicit canonical links",
-            ".agents/skills/** except selected command skill",
+            ".agents/skills/** except selected command skill, listed coreReasoningPrinciples leaves, or explicitly invoked core capability",
         ],
     }
     manifest_chars = len(
@@ -263,8 +283,13 @@ def _build_context_contract(root: Path, step_id: str, role: str) -> dict[str, An
         )
     )
     contract["metrics"] = {
-        "artifactCount": len(unique),
-        "sectionCount": sum(len(item.get("sections") or []) for item in unique),
+        "artifactCount": artifact_count,
+        "sectionCount": section_count,
+        "corePrincipleCount": len(core_principles),
+        "corePrincipleChars": sum(
+            int(item.get("chars") or 0)
+            for item in core_principles
+        ),
         "manifestChars": manifest_chars,
         "fullRepositoryPreload": False,
     }

@@ -367,6 +367,10 @@ def main() -> int:
             '[state]\nreport_directory = "planning/harness-updates"\n',
         )
         shutil.copy2(source / ".harness/command-transitions.json", root / ".harness/command-transitions.json")
+        shutil.copytree(
+            source / ".agents/skills/core-reasoning-principles",
+            root / ".agents/skills/core-reasoning-principles",
+        )
         write(root / "docs/requirements/REQ-001-execution.md", requirement())
         write(root / "docs/architecture.md", "# Architecture\n")
         dependency = task().replace("id: STEP-001", "id: STEP-002").replace(

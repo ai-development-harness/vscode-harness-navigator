@@ -78,3 +78,8 @@ python3 .harness/tools/git-action.py pr --body-file .harness/local/git/pr-body.m
 Если side effect уже доказан, executor возвращает `SUCCESS` с `recovered: true` и не повторяет mutation. Если исходное состояние не изменилось, разрешается новая попытка. Если outcome неоднозначен, executor возвращает `SIDE_EFFECT_RECOVERY_AMBIGUOUS`.
 
 Не удаляй и не редактируй `.harness/local/execution/execution-status.json` ради retry и не обходи recovery ручным Git/provider CLI.
+
+
+## Existing PR maintenance
+
+Если пользователь просит разобрать failed CI, review comments, подготовить PR к review или ограниченно следить за уже открытым PR, используй internal `pr-maintenance` для read-only provider facts и semantic classification. Не выполняй mutations из этого capability: исправления возвращаются в обычный STEP/QUICK FIX flow, а публикация — в canonical GIT commands.

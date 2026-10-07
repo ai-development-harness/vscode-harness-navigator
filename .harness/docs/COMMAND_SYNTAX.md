@@ -410,3 +410,12 @@ python3 .harness/tools/check-command-references.py --json
 Исторические артефакты намеренно не переписываются и не входят в deterministic scope: immutable review/audit/release/update/search reports и ADR history могут сохранять синтаксис, который был корректен в момент создания записи.
 
 Finding этой проверки означает необходимость reconciliation, а не автоматическую mutation: `PROJECT RECONCILE` обязан отразить его в audit report и отличить реальный stale reference от намеренной исторической цитаты.
+
+
+## Operational CLI details
+
+- `semantic-writer.py --payload-file` принимает stdin (`-`) либо regular JSON file **только под `.harness/local/**`**. Это one-shot transport: после успешного writer call файл удаляется. Создавай payload после `harness-dispatch.py start`, если start может очистить local transport state.
+- `harness-dispatch.py complete --details-json` принимает **inline JSON object string**, не путь к JSON-файлу.
+- Для `semantic-writer.py planning-review` поле `findings` — массив непустых строк; structured objects относятся к STEP REVIEW contract, не planning-review.
+- Manual Verification result обязан передавать `check` точно как записано в STEP `## Verification`; несовпадение — `VERIFICATION_CONTRACT_INVALID`.
+- `harness-dispatch.py complete --root` принимает canonical root command string (например, `STEP RUN STEP-017`), а не `executionId`. Exact execution id передаётся отдельно через `--execution-id`.

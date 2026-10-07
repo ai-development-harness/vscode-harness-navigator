@@ -18,7 +18,7 @@ from command_transitions import load_transition_table, validate_transition_table
 from execution_status import load_status
 
 
-from self_test_fixture import isolate_project_artifacts
+from self_test_fixture import copy_effective_harness_checkout, isolate_project_artifacts
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -41,32 +41,13 @@ def run(root: Path, *args: str) -> None:
 
 
 def copy_tracked(target: Path) -> None:
-    raw = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=SOURCE_ROOT,
-        stdout=subprocess.PIPE,
-        check=True,
-    ).stdout
-    for token in raw.split(b"\0"):
-        if not token:
-            continue
-        rel = token.decode("utf-8")
-        source = SOURCE_ROOT / rel
-        # Tracked path, удалённый из working tree, но не из index (обычный `rm`
-        # без `git rm`), fixture не нужен — пропускаем вместо traceback.
-        if not source.is_file():
-            continue
-        destination = target / rel
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-
+    copy_effective_harness_checkout(SOURCE_ROOT, target)
     isolate_project_artifacts(target)
     run(target, "git", "init", "-q", "-b", "main")
     run(target, "git", "config", "user.email", "dispatcher@example.invalid")
     run(target, "git", "config", "user.name", "Dispatcher Test")
     run(target, "git", "add", ".")
     run(target, "git", "commit", "-qm", "fixture")
-
 
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="harness-dispatcher-") as tmp:
@@ -171,6 +152,14 @@ def main() -> int:
 
         # Удалённый dispatch metadata должен ломать graph fail-closed.
         table = load_transition_table(root)
+        authority_table = json.loads(json.dumps(table))
+        del authority_table["authorityContract"]
+        authority_errors = validate_transition_table(authority_table)
+        assert any(
+            "authorityContract must match canonical authority schema" in item
+            for item in authority_errors
+        ), authority_errors
+
         del table["domains"]["STEP"]["commands"]["PLAN"]["dispatch"]
         errors = validate_transition_table(table)
         assert any(
@@ -208,11 +197,16 @@ def main() -> int:
         assert quick["skill"] == "quick-fix", quick
         assert quick["skillPath"] == ".agents/skills/quick-fix/SKILL.md", quick
         assert quick["commandData"]["input"] == "исправить опечатку", quick
+        assert quick["authority"]["semanticResult"] == "proposal", quick
+        assert quick["authority"]["executionStateCommit"] == "dispatcher", quick
+        assert quick["authority"]["transitionCommit"] == "dispatcher", quick
+        assert quick["authority"]["completionBinding"] == "executionId", quick
         done = complete_dispatch(
             root,
             quick["rootCommand"],
             quick["command"],
             "SUCCESS",
+            execution_id=quick["executionId"],
         )
         assert done["status"] == "DONE", done
 
@@ -228,6 +222,7 @@ def main() -> int:
             first_shadow["rootCommand"],
             first_shadow["command"],
             "BLOCKED",
+            execution_id=first_shadow["executionId"],
         )
         assert first_blocked["status"] == "BLOCKED", first_blocked
 
@@ -237,11 +232,25 @@ def main() -> int:
             first_shadow,
             second_shadow,
         )
+
+        # #202: stale semantic result от предыдущей invocation не имеет права
+        # commit-ить более новую execution с тем же root/current command.
+        stale_shadow = complete_dispatch(
+            root,
+            second_shadow["rootCommand"],
+            second_shadow["command"],
+            "SUCCESS",
+            execution_id=first_shadow["executionId"],
+        )
+        assert stale_shadow["status"] == "BLOCKED", stale_shadow
+        assert stale_shadow["reasonCode"] == "STALE_SEMANTIC_RESULT", stale_shadow
+        assert stale_shadow["executionId"] == second_shadow["executionId"], stale_shadow
         second_done = complete_dispatch(
             root,
             second_shadow["rootCommand"],
             second_shadow["command"],
             "SUCCESS",
+            execution_id=second_shadow["executionId"],
         )
         assert second_done["status"] == "DONE", second_done
         assert second_done["executionId"] == second_shadow["executionId"], second_done
@@ -252,6 +261,7 @@ def main() -> int:
             second_shadow["rootCommand"],
             second_shadow["command"],
             "SUCCESS",
+            execution_id=second_shadow["executionId"],
         )
         assert repeated["status"] == "BLOCKED", repeated
         assert repeated["reasonCode"] == "EXECUTION_COMPLETE_BLOCKED", repeated
@@ -301,6 +311,7 @@ def main() -> int:
             first_chain["rootCommand"],
             first_chain["command"],
             "BLOCKED",
+            execution_id=first_chain["executionId"],
         )
         assert first_chain_blocked["status"] == "BLOCKED", first_chain_blocked
 
@@ -329,6 +340,7 @@ def main() -> int:
                 second_chain["rootCommand"],
                 second_chain["command"],
                 "SUCCESS",
+                execution_id=second_chain["executionId"],
             )
         finally:
             command_dispatch_module.execute_push = original_shadow_push
@@ -395,6 +407,7 @@ def main() -> int:
             special_run["rootCommand"],
             special_run["command"],
             "SUCCESS",
+            execution_id=special_run["executionId"],
         )
         assert special_done["status"] == "BLOCKED", special_done
         assert special_done["reasonCode"] == "STEP_COMPLETION_PROOF_FAILED", special_done
@@ -403,6 +416,7 @@ def main() -> int:
             special_run["rootCommand"],
             special_run["command"],
             "BLOCKED",
+            execution_id=special_run["executionId"],
         )
         assert special_blocked["status"] == "BLOCKED", special_blocked
 
@@ -415,10 +429,17 @@ def main() -> int:
             foreign["rootCommand"],
             "STEP IMPLEMENT STEP-001",
             "SUCCESS",
+            execution_id=foreign["executionId"],
         )
         assert foreign_done["status"] == "BLOCKED", foreign_done
         assert foreign_done["reasonCode"] == "COMMAND_NOT_CURRENT", foreign_done
-        foreign_ok = complete_dispatch(root, foreign["rootCommand"], foreign["command"], "SUCCESS")
+        foreign_ok = complete_dispatch(
+            root,
+            foreign["rootCommand"],
+            foreign["command"],
+            "SUCCESS",
+            execution_id=foreign["executionId"],
+        )
         assert foreign_ok["status"] == "DONE", foreign_ok
 
         # Deterministic CHECK должен автоматически пройти первый segment
@@ -433,6 +454,7 @@ def main() -> int:
             chain["rootCommand"],
             chain["command"],
             "SUCCESS",
+            execution_id=chain["executionId"],
         )
         assert chain_done["status"] == "DONE", chain_done
 
@@ -446,6 +468,7 @@ def main() -> int:
             standalone_push["rootCommand"],
             standalone_push["command"],
             "SUCCESS",
+            execution_id=standalone_push["executionId"],
         )
 
         # After canonical COMMIT in the same chain PUSH is purely mechanical:
@@ -470,6 +493,7 @@ def main() -> int:
                 git_chain["rootCommand"],
                 git_chain["command"],
                 "SUCCESS",
+                execution_id=git_chain["executionId"],
             )
         finally:
             command_dispatch_module.execute_push = original_push
@@ -490,6 +514,7 @@ def main() -> int:
                 unproven_chain["rootCommand"],
                 unproven_chain["command"],
                 "SUCCESS",
+                execution_id=unproven_chain["executionId"],
             )
         finally:
             command_dispatch_module.git_commit_completion_proven = original_commit_proof
@@ -582,6 +607,7 @@ def main() -> int:
             resumed["rootCommand"],
             resumed["command"],
             "SUCCESS",
+            execution_id=resumed["executionId"],
         )
 
     print("COMMAND DISPATCH SELF-TEST: PASS")

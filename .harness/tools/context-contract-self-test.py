@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 
@@ -12,6 +13,10 @@ from context_contracts import (
     build_context_contract,
     validate_expansion,
 )
+from core_reasoning_principles import load_core_reasoning_principles
+
+
+SOURCE_ROOT = Path(__file__).resolve().parents[2]
 
 
 MANIFEST = """sources:
@@ -296,6 +301,10 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         write(root, ".harness/manifest.yaml", MANIFEST)
+        shutil.copytree(
+            SOURCE_ROOT / ".agents/skills/core-reasoning-principles",
+            root / ".agents/skills/core-reasoning-principles",
+        )
         for directory in (
             "docs/requirements",
             "docs/adr",
@@ -337,12 +346,39 @@ def main() -> int:
         # Runtime neutrality is structural: resolver has no provider input.
         # Codex/Claude adapters therefore receive byte-equivalent semantic
         # selection for the same role/STEP/revision.
-        codex_selection = json.dumps(planner["required"], sort_keys=True)
+        codex_selection = json.dumps(
+            {
+                "required": planner["required"],
+                "coreReasoningPrinciples": planner["coreReasoningPrinciples"],
+            },
+            sort_keys=True,
+        )
+        second_planner = build_context_contract(root, "STEP-001", "planner")
         claude_selection = json.dumps(
-            build_context_contract(root, "STEP-001", "planner")["required"],
+            {
+                "required": second_planner["required"],
+                "coreReasoningPrinciples": second_planner["coreReasoningPrinciples"],
+            },
             sort_keys=True,
         )
         assert codex_selection == claude_selection
+
+        catalog = load_core_reasoning_principles(root)
+        assert len(catalog) == 8
+        planner_crp = planner["coreReasoningPrinciples"]
+        implementer_crp = implementer["coreReasoningPrinciples"]
+        reviewer_crp = reviewer["coreReasoningPrinciples"]
+        assert [item["id"] for item in planner_crp] == ["CRP-002"], planner_crp
+        assert [item["id"] for item in implementer_crp] == ["CRP-002"], implementer_crp
+        assert [item["id"] for item in reviewer_crp] == [
+            "CRP-002",
+            "CRP-003",
+        ], reviewer_crp
+        assert len(reviewer_crp) < len(catalog)
+        assert planner["metrics"]["corePrincipleCount"] == 1
+        assert planner["metrics"]["corePrincipleChars"] > 0
+        catalog_chars = sum(int(item["chars"]) for item in catalog)
+        assert reviewer["metrics"]["corePrincipleChars"] < catalog_chars
 
         planner_paths = required_paths(planner)
         reviewer_paths = required_paths(reviewer)
@@ -375,6 +411,18 @@ def main() -> int:
         )
         assert not any(
             item["artifact"] == "PRN-001" for item in implementer["required"]
+        )
+        assert all(
+            str(item["id"]).startswith("CRP-")
+            for item in planner["coreReasoningPrinciples"]
+        )
+        assert not any(
+            str(item.get("artifact", "")).startswith("CRP-")
+            for item in planner["required"]
+        )
+        assert not any(
+            str(item.get("id", "")).startswith("PRN-")
+            for item in planner["coreReasoningPrinciples"]
         )
 
         expanded = validate_expansion(

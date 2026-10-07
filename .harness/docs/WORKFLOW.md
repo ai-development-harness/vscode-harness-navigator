@@ -17,7 +17,7 @@ CODE / TESTS / CONFIG
 
 Новая сессия должна восстановить контекст из репозитория. Поэтому каждая стадия сохраняет durable handoff:
 
-- PLAN → draft `Implementation plan` + immutable semantic planning-review + Ready fingerprints;
+- PLAN → optional validated Codebase Grounding payload для сложной существующей подсистемы → draft `Implementation plan` + immutable semantic planning-review + Ready fingerprints;
 - REVIEW → immutable schema-valid exact-revision review report;
 - audit/reconcile → audit report;
 - completion → Evidence + status projections.
@@ -29,6 +29,10 @@ CODE / TESTS / CONFIG
 `STEP` — «какую ограниченную работу мы сейчас выполняем?».
 
 Смешивание этих сущностей приводит к тому, что roadmap превращается в ТЗ, ADR — в changelog, а требования — в список файлов.
+
+## Почему Codebase Grounding отдельный
+
+REQ/ADR/STEP задают intent и durable decisions, но complex change иногда требует восстановить фактический runtime/data flow существующего кода. `codebase-grounding` делает это отдельной read-only bounded capability: flow/ownership/boundaries строятся семантически, а revision/context budget/evidence paths проверяются детерминированно. Payload передаётся следующей semantic стадии как compact handoff и не становится новым canonical source of truth.
 
 ## Почему PLAN сохраняется в task
 

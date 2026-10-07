@@ -131,7 +131,11 @@ def main() -> int:
     for action in ("plan-draft", "planning-review", "step-review"):
         item = sub.add_parser(action)
         item.add_argument("step_id")
-        item.add_argument("--payload-file", required=True)
+        item.add_argument(
+            "--payload-file",
+            required=True,
+            help="Use '-' for stdin or a regular JSON file under .harness/local/**; payload files are one-shot transport.",
+        )
 
     args = parser.parse_args()
     root = repo_root()

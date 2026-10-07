@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import fnmatch
 import re
 import shutil
+import subprocess
 
 from document_contract import atomic_write_text
 from harness_config import (
@@ -20,9 +22,84 @@ from harness_config import (
     skill_search_directory,
     task_directory,
     update_report_directory,
+    load_update_policy,
 )
 from projection_contract import write_projections
+from template_contract import template_targets
 
+
+def _git_paths_z(root: Path, *args: str) -> list[str]:
+    """Прочитать Git path list через NUL framing без quoting/whitespace loss."""
+
+    proc = subprocess.run(
+        ["git", *args, "-z"],
+        cwd=root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"git {' '.join(args)} failed ({proc.returncode}): "
+            f"{proc.stderr.decode('utf-8', errors='replace')}"
+        )
+    return [
+        token.decode("utf-8")
+        for token in proc.stdout.split(b"\0")
+        if token
+    ]
+
+
+def _updater_owned(path: str, policy: dict) -> bool:
+    ownership = policy.get("ownership")
+    if not isinstance(ownership, dict):
+        raise ValueError("harness-update ownership must be a table")
+
+    for class_name in ("harness_owned", "shared", "marker_merge"):
+        patterns = ownership.get(class_name)
+        if not isinstance(patterns, list) or not all(
+            isinstance(item, str) and item for item in patterns
+        ):
+            raise ValueError(
+                f"harness-update ownership.{class_name} must be a string array"
+            )
+        if any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns):
+            return True
+    return False
+
+
+def copy_effective_harness_checkout(source_root: Path, target: Path) -> None:
+    """Скопировать effective Harness surface для synthetic fixture.
+
+    После HARNESS UPDATE новые managed files законно находятся в working tree
+    existing project как untracked: updater не должен самостоятельно stage-ить
+    пользовательский Git index. Поэтому одного git ls-files недостаточно.
+
+    В fixture попадают все tracked files и только updater-managed untracked
+    files. Произвольный project-owned untracked filesystem не копируется.
+    """
+
+    source_root = source_root.resolve()
+    target = target.resolve()
+    paths = set(_git_paths_z(source_root, "ls-files"))
+
+    update_policy = load_update_policy(source_root)
+    for rel in _git_paths_z(
+        source_root,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+    ):
+        if _updater_owned(rel, update_policy):
+            paths.add(rel)
+
+    for rel in sorted(paths):
+        source = source_root / rel
+        if not source.is_file():
+            continue
+        destination = target / rel
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
 
 def _remove_files(directory: Path, pattern: str, *, keep: set[str] | None = None) -> None:
     """Удалить canonical artifacts fixture, сохранив protocol scaffolding."""
@@ -75,6 +152,22 @@ def _reset_project_lifecycle(root: Path) -> None:
         atomic_write_text(path, updated)
 
 
+def _restore_pre_init_templates(root: Path) -> None:
+    """Восстановить exact protocol templates только внутри synthetic fixture.
+
+    После PROJECT INIT templates становятся project-owned и могут законно
+    отличаться от текущих protocol definitions. Но isolate_project_artifacts()
+    переводит временную копию обратно в pre-INIT, где validator требует exact
+    bootstrap baseline. Поэтому fixture должна нормализовать templates через
+    единственный configured source of truth, не меняя host checkout.
+    """
+    for path, expected in template_targets(root).items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        current = path.read_text(encoding="utf-8") if path.is_file() else None
+        if current != expected:
+            atomic_write_text(path, expected)
+
+
 def isolate_project_artifacts(root: Path) -> None:
     """Удалить inherited project artifacts из synthetic fixture.
 
@@ -106,4 +199,5 @@ def isolate_project_artifacts(root: Path) -> None:
         _clear_generated_directory(directory)
 
     _reset_project_lifecycle(root)
+    _restore_pre_init_templates(root)
     write_projections(root)

@@ -75,6 +75,7 @@ Validator проверяет protocol/repository invariants, но **не зам�
 - schema и обязательные ключи `.harness/harness-policy.toml`;
 - tracked files через реальный Git index;
 - update graph и release metadata consistency;
+- cross-contract `required_files ↔ updater ownership`: каждый обязательный Harness file должен совпадать ровно с одним из `harness_owned | shared | marker_merge`;
 - обязательные protocol files, skills, agents и commands;
 - для каждого `required_skills` — соседний `UPSTREAM.md` с `Source: project-native`, чтобы core workflow не терял provenance;
 - active project document model;
@@ -242,7 +243,7 @@ Canonical runtime boundary между raw Harness command и semantic модел
 
 ```bash
 python3 .harness/tools/harness-dispatch.py start --command '<raw command>'
-python3 .harness/tools/harness-dispatch.py complete --root '<root>' --command '<command>' --result PASS
+python3 .harness/tools/harness-dispatch.py complete --root '<root>' --command '<command>' --execution-id '<executionId>' --result PASS
 python3 .harness/tools/harness-dispatch.py resume [--root '<root>']
 python3 .harness/tools/harness-dispatch.py route --command '<canonical command>'
 ```
@@ -845,6 +846,147 @@ python3 .harness/tools/step-context.py STEP-NNN --phase review --json
 
 `--root <path>` предназначен для tests/tooling; обычный runtime использует repository root, содержащий tool. `--json` выдаёт компактный machine-readable JSON без pretty-print overhead.
 
+### Codebase Grounding payload validator
+
+Файлы:
+
+- `.harness/tools/codebase_grounding.py` — contract engine;
+- `.harness/tools/codebase-grounding.py` — CLI wrapper;
+- `.harness/tools/codebase-grounding-self-test.py` — bounded-context regressions.
+
+Validator не строит mental model и не читает repository произвольно. Он принимает уже сформированный semantic payload и Context Contract, затем fail-closed проверяет exact revision, explicit expansions, `simple|complex` budget, top-level `evidencePaths` и claim-level `evidence[]`; claim evidence обязано относиться к доступному context и индексироваться в `evidencePaths`.
+
+```bash
+python3 .harness/tools/codebase-grounding.py \
+  --context-file '<context-contract-json>' \
+  --payload-file '<grounding-json>' \
+  --json
+```
+
+PASS возвращает normalized payload с `contextBudget.baseMetrics`, фактическим числом expansion files/chars и hard limits. Invalid revision, forbidden expansion, ungrounded evidence path или превышение budget возвращает `BLOCKED`/non-zero.
+
+### Core Reasoning Principles selector
+
+Файлы:
+
+- selector/catalog validator: `.harness/tools/core_reasoning_principles.py`;
+- regression: `.harness/tools/core-reasoning-principles-self-test.py`;
+- leaves: `.agents/skills/core-reasoning-principles/leaves/CRP-*.md`.
+
+Standalone user command отсутствует. Selector вызывается Context Contract resolver-ом и детерминированно возвращает только applicable `CRP-NNN` refs.
+
+Проверяется:
+
+- catalog size 6–10 leaves;
+- stable namespace `CRP`, unique `CRP-NNN` IDs и slugs;
+- required leaf sections `Trigger / applicability`, `Rationale`, `Actionable pattern`;
+- closed-set roles/triggers;
+- max 4 000 chars на leaf;
+- deterministic applicability только из STEP/Context machine facts;
+- ordinary phase не получает весь catalog;
+- CRP остаётся отдельным полем `coreReasoningPrinciples[]` и не смешивается с project-owned `PRN-NNN` в `required`;
+- runtime neutrality: одинаковые facts дают одинаковую selection для Codex/Claude.
+
+Context Contract metrics отдельно публикуют `corePrincipleCount/corePrincipleChars`.
+
+Подробная policy: [`CORE_REASONING_PRINCIPLES.md`](CORE_REASONING_PRINCIPLES.md).
+
+### Structural Enforcement validator
+
+Файлы:
+
+- engine: `.harness/tools/structural_enforcement.py`;
+- CLI: `.harness/tools/structural-enforcement.py`;
+- regression: `.harness/tools/structural-enforcement-self-test.py`.
+
+Scan mode агрегирует Review Contract v2 findings по stable `category + fingerprint` и dedupe-ит duplicate reports той же `reviewed_revision`:
+
+```bash
+python3 .harness/tools/structural-enforcement.py --step STEP-024 --json
+```
+
+Дополнительный structured evidence envelope поддерживает repair/progress stops, audit/reconcile findings, validator failures и durable decisions. Closed source registry не содержит transcript/chat/session.
+
+Proposal validation enforce-ит:
+
+- recurring threshold = 2 distinct factual occurrences;
+- one-off class требует explicit caller `--explicit-single`;
+- exact enforcement ladder `architecture-ownership → schema-type → validator-lint → regression-test → durable-instruction`;
+- каждый weaker level обязан объяснить отказ от всех stronger levels;
+- deterministic mechanism обязан иметь regression fixture contract;
+- `--implemented` требует реально существующий regular fixture;
+- evidence refs обязаны принадлежать выбранному class;
+- architecture-level proposal требует explicit decision route;
+- `automaticMutationAllowed=false` всегда.
+
+Tool не исполняет regression command и не меняет architecture/code; фактический proof остаётся у canonical Verification/CI.
+
+Подробности: [`STRUCTURAL_ENFORCEMENT.md`](STRUCTURAL_ENFORCEMENT.md).
+
+### High-Rigor Arena / Interrogate validator
+
+Файлы:
+
+- engine: `.harness/tools/high_rigor.py`;
+- CLI: `.harness/tools/high-rigor.py`;
+- regression: `.harness/tools/high-rigor-self-test.py`.
+
+Activation mode проверяет `.harness/manifest.yaml → highRigor.*`, phase и deterministic STEP `risk_flags`:
+
+```bash
+python3 .harness/tools/high-rigor.py \
+  --mode arena \
+  --phase plan \
+  --step STEP-024 \
+  --json
+```
+
+`explicit` без `--requested` и `disabled` всегда возвращают `SKIP`; `risk` может вернуть `RUN` только по closed high-risk flags.
+
+Trace validation принимает local run под `.harness/local/high-rigor/**` и recompute-ит exact SHA-256/chars/bytes входов, rubric и outputs. Проверяется:
+
+- configured candidate/reviewer seat count;
+- минимум два independent completed seats;
+- unique completed `sessionExecutionId`;
+- одинаковый shared input для всех candidates/reviewers;
+- одинаковый rubric;
+- per-seat и total char budgets;
+- requested/actual model и visible fallback/dropout;
+- Arena: отдельный judge, completed base candidate, graft/disagreement/verification refs;
+- Interrogate: consensus/disagreement map и lead judgment;
+- `deterministicGatesReplaced=false`.
+
+Runtime/model shortfall возвращает `DEGRADED`, а не скрытый PASS. Core validator не запускает модели и не хранит provider-specific model slugs.
+
+Подробности: [`HIGH_RIGOR.md`](HIGH_RIGOR.md).
+
+---
+
+# 9D. Benchmark Methodology evidence gate
+
+## Файлы
+
+- engine: `.harness/tools/benchmark_methodology.py`
+- CLI: `.harness/tools/benchmark-methodology.py`
+- regression: `.harness/tools/benchmark-methodology-self-test.py`
+
+## Роль
+
+Проверяет достаточность performance evidence, не исполняя benchmark за модель. Вход — закрытый JSON contract с заранее сформулированным claim, exact revisions/argv/environment, raw samples, correctness counts и work-proof files.
+
+Validator вычисляет median/range/variation для baseline/candidate, direction-normalized effect и консервативный noise band. Work-proof files проверяются как regular non-symlink repository paths и получают SHA-256.
+
+## Результаты
+
+- `PASS` — сравнение сопоставимо, correctness не нарушен, есть минимум 3 runs на arm, effect превышает observed variation и declared minimum effect, bottleneck/sanity/end-to-end checks выполнены;
+- `INCONCLUSIVE` — evidence structurally valid, но недостаточен для claim: one/two-run ballpark, effect внутри variation, command/environment mismatch, correctness failure, missing relevance proof и т. п.;
+- `BLOCKED` — malformed/unsupported/unverifiable evidence contract.
+
+`INCONCLUSIVE` является валидным factual outcome и имеет exit code 0: caller обязан трактовать его буквально и не превращать reasoning-ом в performance PASS. Если STEP Acceptance зависит от quantitative claim, обычный Verification/Review остаётся незавершённым до достаточного evidence.
+
+Microbenchmark может доказать только narrow claim. Когда end-to-end relevance проверена и отсутствует, PASS возвращает `claimRestriction=microbenchmark-only` и warning `MICROBENCHMARK_ONLY`.
+
+Подробности: [`BENCHMARK_METHODOLOGY.md`](BENCHMARK_METHODOLOGY.md).
 
 ---
 
@@ -905,7 +1047,7 @@ python3 .harness/tools/verify-step.py STEP-NNN --manual-json '[{"check":"...","s
 Поддерживаются:
 
 - `plan-draft` — structured Implementation plan + Verification → mutation только соответствующих STEP sections и `plan.status=draft`;
-- `planning-review` — verdict/findings/rationale → immutable planning-review с exact fingerprints; PASS atomically handoff-ится в canonical Ready stamp;
+- `planning-review` — verdict/findings/rationale → immutable planning-review с exact fingerprints и `execution_id` active `STEP PLAN`; per-execution budget `execution.maxPlanReviewCycles` fail-closed блокирует следующий round после достижения лимита, historical reports других execution в счётчик не входят; PASS atomically handoff-ится в canonical Ready stamp;
 - `step-review` — structured findings/verdict/specialized results → immutable STEP review с exact repository revision и deterministic gate metadata.
 
 ## Payload boundary
@@ -1115,7 +1257,9 @@ Current execution state использует schema v2. Validator проверя
 - sequence;
 - current command/status/result;
 - attempt;
-- fix/review cycle counter.
+- fix/review cycle counter;
+- optional `current.context.intentBasis`: bounded 16 KiB versioned envelope для `STEP PLAN/IMPLEMENT/REVIEW/FIX`. Known schema v1 проверяет STEP/command/context fingerprints/plan binding; unknown future sub-schema остаётся parseable, но resume fail-closed возвращает `INTENT_BASIS_SCHEMA_UNSUPPORTED`; legacy/diagnostic fresh start, где basis вычислить нельзя, сохраняет bounded `intentBasisError`, который делает последующий resume `INTENT_BASIS_UNAVAILABLE`;
+- optional root `progressTelemetry`: schema v1, общий 16 KiB budget, максимум 8 samples, non-negative `unchangedResumes`/`driftStreak`, closed stopDecision `continue|EXECUTION_STAGNATION|EXECUTION_CYCLE|EXECUTION_DRIFT`; optional `progressTelemetryError` остаётся bounded diagnostic и не подменяет Intent Basis safety gate.
 
 `load_status()` и `save_status()` всегда вызывают schema validation, поэтому повреждённый local state не трактуется как пустой.
 
@@ -1397,7 +1541,7 @@ python3 .harness/tools/runtime_adapter_contract.py --runtime claude --json
 
 ---
 
-# Review Contract v2 structured findings
+# Review Contract v3 evidence-gated findings
 
 ## Файл / Файлы
 
@@ -1406,11 +1550,13 @@ python3 .harness/tools/runtime_adapter_contract.py --runtime claude --json
 
 ## Роль
 
-`review_findings.py` задаёт machine-readable handoff `REVIEW → FIX`. Новый STEP REVIEW по-прежнему хранится как immutable Markdown, но внутри него есть отдельный canonical JSON-блок `## Machine-readable findings`.
+`review_findings.py` задаёт machine-readable handoff `REVIEW → FIX`. Новый STEP REVIEW хранится как immutable Markdown с canonical JSON-блоком `## Machine-readable findings`.
 
 Human-readable `## Findings` нужен человеку. FIX/orchestration не должен повторно интерпретировать этот prose: он использует deterministic parser.
 
-## Contract finding v2
+Review Contract v3 добавляет **Evidence Gate**: новый reviewer-derived scenario не становится durable finding, пока его необходимые предпосылки и project-specific verification не подтвердили, что проблема действительно существует.
+
+## Contract finding v3
 
 Каждый finding содержит:
 
@@ -1423,10 +1569,19 @@ Human-readable `## Findings` нужен человеку. FIX/orchestration не
 - `impact`;
 - `repair.direction` и `repair.admissibleAlternatives[]`;
 - `constraints[]`;
-- `evidence[]`;
+- обязательный непустой `evidence[]`;
+- обязательный `evidenceBasis`:
+  - `kind: contract|reproduced|inferred`;
+  - `source`;
+  - `preconditions[]`; для `inferred` список не может быть пустым;
+  - `verification.method`;
+  - `verification.result`;
+  - `verification.outcome: confirmed`;
 - deterministic `fingerprint: sha256:...`.
 
-Fingerprint вычисляется из factual identity: `category + location + scenario + expected + observed`. ID, title и wording repair guidance не входят в fingerprint. Поэтому тот же дефект после FIX можно узнать даже при переформулировке текста.
+`invalidated` или `unverified` outcome запрещён в durable finding. Такая гипотеза остаётся ephemeral reasoning и при необходимости кратко упоминается только в rationale текущего review.
+
+Fingerprint вычисляется из factual identity: `category + location + scenario + expected + observed`. `evidenceBasis`, ID, title и wording repair guidance намеренно не входят в fingerprint: дополнительное подтверждение того же дефекта не создаёт новую defect identity.
 
 Duplicate fingerprints в одном report запрещены.
 
@@ -1436,30 +1591,46 @@ Duplicate fingerprints в одном report запрещены.
 python3 .harness/tools/review_findings.py --step STEP-NNN --json
 ```
 
-Команда возвращает latest Review Contract v2 report и normalized findings. Если latest review legacy v1, malformed или fingerprint не совпадает с содержимым, parser возвращает BLOCKED и non-zero exit code.
+Команда возвращает latest **current v3** review и normalized findings. Если latest review historical v1/v2, malformed, не прошёл evidence gate или fingerprint не совпадает с содержимым, deterministic FIX handoff возвращает BLOCKED и требует свежий `STEP REVIEW`.
 
 ## Совместимость
 
-Historical Review Contract v1 reports не переписываются и продолжают валидироваться старым human-readable contract. Writer новых STEP REVIEW всегда добавляет `finding_contract: 2` и canonical JSON section.
+Historical Review Contract v1 reports не переписываются и продолжают валидироваться старым human-readable contract.
 
-FIX не должен угадывать structured fields из legacy report. Для deterministic REVIEW→FIX handoff нужен свежий v2 REVIEW.
+Historical Review Contract v2 machine reports тоже остаются валидной immutable history и могут участвовать в historical/progress inspection.
+
+Writer новых STEP REVIEW всегда добавляет `finding_contract: 3` и machine `schemaVersion: 3`.
+
+FIX намеренно требует свежий v3 report. Это не позволяет старому v2 finding без `evidenceBasis` обойти Evidence Gate после обновления Harness.
 
 ## Fail-closed проверки
 
-Validator `review_contract.py` для v2 дополнительно проверяет:
+Validator `review_contract.py` для v3 дополнительно проверяет:
 
 - наличие и JSON-синтаксис machine section;
-- отсутствие legacy/partial transport forms внутри v2: `location` и `scenario` обязаны быть objects, `expected`/`observed` обязательны, legacy `fixDirection` не принимается;
-- exact schemaVersion;
+- exact agreement `finding_contract` ↔ machine `schemaVersion`;
 - supported fields/enums;
 - id sequence `F-001...`;
+- обязательный непустой evidence;
+- корректный `evidenceBasis`;
+- non-empty preconditions для inferred finding;
+- только `verification.outcome=confirmed`;
 - deterministic fingerprint;
 - отсутствие duplicate fingerprints;
 - совпадение количества human и machine findings;
 - совпадение `Severity` / `Category` между обеими формами;
 - прежние verdict composition rules PASS/FAIL/BLOCKED.
 
-Self-test отдельно доказывает stable fingerprint при rename/repair rewording и его изменение при factual change.
+Self-test отдельно доказывает:
+
+- stable fingerprint при rename/repair rewording;
+- изменение fingerprint при factual change;
+- rejection finding без `evidenceBasis`;
+- rejection inferred finding без preconditions;
+- rejection invalidated hypothesis;
+- чтение historical v2 machine report.
+
+Подробная политика и PEM/Vite example: [`EVIDENCE_GATE.md`](EVIDENCE_GATE.md).
 
 ---
 
@@ -1508,7 +1679,7 @@ Runtime reconciliation Git/provider подробно описан в [`SIDE_EFFE
 
 ## Роль
 
-Сравнивает два consecutive Review Contract v2 report по stable fingerprints, `reviewed_revision`, `contract_basis`, `verification_basis` и optional factual `verification_status`. Возвращает bounded telemetry и conservative stop decision `continue|NO_PROGRESS|REPEATED_FINDINGS|REGRESSION`.
+Сравнивает два consecutive current Review Contract v3 report по stable fingerprints, `reviewed_revision`, `contract_basis`, `verification_basis` и optional factual `verification_status`. Historical v2 остаётся валидной history, но adaptive FIX telemetry требует свежие evidence-gated v3 reports. Возвращает bounded telemetry и conservative stop decision `continue|NO_PROGRESS|REPEATED_FINDINGS|REGRESSION`.
 
 ## Self-test
 
@@ -1519,6 +1690,10 @@ python3 .harness/tools/repair-cycle-self-test.py
 Self-test покрывает progress, no-progress, repeated findings, higher-severity regression, worsening factual Verification status, historical report без status и scope-change guard. Resolver-level применение stored telemetry покрывается `execution-self-test.py`.
 
 Политика описана в [`ADAPTIVE_REPAIR_STOPPING.md`](ADAPTIVE_REPAIR_STOPPING.md).
+
+Generic long-running detector реализован в `.harness/tools/progress_guard.py`; regression suite `.harness/tools/progress-guard-self-test.py` покрывает STAGNATION/CYCLE/DRIFT, activity-only false-positive guard, execution-groups fingerprint и suppression FIX↔REVIEW. Политика: [`PROGRESS_GUARD.md`](PROGRESS_GUARD.md). Execution-state schema дополнительно валидирует каждый persisted progress sample и `lastDelta` fail-closed: command/STEP/operation, fingerprints, metrics, counters и classification не могут восстанавливаться из malformed defaults.
+
+Cross-process integration suite `.harness/tools/reliable-orchestration-fault-self-test.py` проверяет совместную работу state authority, Intent Basis и Progress Guard через реальные process boundaries: crash после durable snapshot, `STEP RUN` resume/stagnation после потери response и concurrent stale completion против current invocation.
 
 
 ---
@@ -1673,6 +1848,56 @@ python3 .harness/tools/impact-analysis.py --changed ADR-012 --changed REQ-007 --
 
 Impact analysis read-only: downstream artifacts, reviews и completed history не переписываются.
 
+### Semantic Blast Radius validator
+
+Файлы:
+
+- engine: `.harness/tools/semantic_blast_radius.py`;
+- CLI: `.harness/tools/semantic-blast-radius.py`;
+- regression: `.harness/tools/semantic-blast-radius-self-test.py`.
+
+Preflight возвращает deterministic trigger из STEP `risk_flags`, exact repository revision и explicit downstream STEP surface из existing impact analysis:
+
+```bash
+python3 .harness/tools/semantic-blast-radius.py STEP-024 --phase plan --json
+python3 .harness/tools/semantic-blast-radius.py STEP-024 --phase review --json
+```
+
+Validation mode дополнительно принимает Context Contract, validated grounding и semantic payload. Validator revalidates grounding, enforce-ит общий context budget, provenance evidence paths и 1–2 critical hypotheses. Semantic `PASS` возможен только при `proven` critical proofs, чьи commands реально присутствуют в STEP Verification и имеют fresh generated PASS evidence на current subject revision. Aggregate status `MANUAL_REQUIRED` допустим, если pending manual checks не являются proof этих hypotheses; существующие completion/review gates всё равно обязаны закрыть manual checks отдельно.
+
+### Decision Archaeology validator
+
+Файлы:
+
+- engine: `.harness/tools/decision_archaeology.py`;
+- CLI: `.harness/tools/decision-archaeology.py`;
+- regression: `.harness/tools/decision-archaeology-self-test.py`.
+
+Preflight фиксирует exact repository revision, concrete target path и bounded Git history target-файла. При existing Context Contract current revision обязан совпадать с его `repositoryRevision`.
+
+```bash
+python3 .harness/tools/decision-archaeology.py \
+  --target src/provider/retry.py \
+  --scope simple \
+  --json
+```
+
+Validation mode принимает semantic archaeology payload и optional Context Contract. Validator проверяет:
+
+- `documented | inference` claim boundary;
+- `high | medium | low` confidence;
+- repository-local artifact/commit provenance;
+- commit evidence только из bounded target history;
+- timestamped evidence map;
+- supplied issue/PR/docs evidence как explicit `supplied-not-locally-verifiable`, не как local proof;
+- explicit conflicts и gaps;
+- stale-ADR diagnostic assessments;
+- expansion/history/claim/source budgets.
+
+`PASS` запрещён, если есть inference без historical evidence. Такая inference допустима только как `low` confidence + explicit gap + `INCONCLUSIVE`. Conversation/transcript не является supported evidence category.
+
+Подробная semantic policy: [`DECISION_ARCHAEOLOGY.md`](DECISION_ARCHAEOLOGY.md).
+
 ## Exit codes
 
 - `0` — запрос корректно вычислен, даже если найден stale plan;
@@ -1680,3 +1905,119 @@ Impact analysis read-only: downstream artifacts, reviews и completed history н
 - `2` — argparse error.
 
 Подробная lifecycle policy: [`EVOLUTION_SEMANTICS.md`](EVOLUTION_SEMANTICS.md).
+
+
+---
+
+# Release Qualification entrypoint
+
+## Файл / Файлы
+
+- `.harness/tools/release-qualification.py`
+- `.harness/tools/release-qualification-self-test.py`
+
+## Роль
+
+Canonical deterministic entrypoint release-level проверки exact candidate checkout. Он не заменяет Harness Integrity: release orchestrator вызывает один и тот же executable в platform/runtime lanes и агрегирует результат с downstream/stress gates.
+
+## CLI
+
+```bash
+python3 .harness/tools/release-qualification.py \
+  --lane current \
+  --expect-sha '<exact-candidate-sha>' \
+  --expected-python 3.13 \
+  --json
+```
+
+`--lane` обязателен:
+
+- `current` — validator + полный discoverable self-test suite;
+- `minimum` — тот же core contract строго на Python 3.11;
+- `windows` — validator + targeted Windows-specific boundaries.
+
+`--expect-sha` обязателен и должен совпадать с фактическим `git rev-parse HEAD`. `--expected-python` опционально закрепляет exact major.minor runtime caller-а.
+
+## Exit codes
+
+- `0` — PASS;
+- `1` — qualification gate FAIL либо checkout был мутирован во время qualification;
+- `2` — BLOCKED до gates: SHA/runtime/platform mismatch, dirty checkout или недоступный Git state.
+
+## Fail-closed свойства
+
+- evidence всегда относится к exact repository revision;
+- dirty checkout не квалифицируется;
+- после gates повторно проверяется tracked/untracked state;
+- stdout/stderr в compact JSON представлены hash + byte count, полный вывод остаётся job log;
+- Windows lane нельзя случайно запустить на POSIX;
+- minimum lane нельзя засчитать не на Python 3.11.
+
+Подробный release contract: [`RELEASE_QUALIFICATION.md`](RELEASE_QUALIFICATION.md).
+
+
+---
+
+# Initialized Upgrade Qualification
+
+## Файл / Файлы
+
+- `.harness/tools/release-upgrade-qualification.py`
+- `.harness/tools/release-upgrade-qualification-self-test.py`
+
+## Роль
+
+Проверяет upgrade already initialized downstream baseline до exact release-prepared candidate SHA. Работает только с local checkouts и disposable clones; network/private authentication принадлежит external release workflow.
+
+## CLI
+
+```bash
+python3 .harness/tools/release-upgrade-qualification.py \
+  --baseline-project /path/to/release-canary \
+  --baseline-sha '<exact-baseline-sha>' \
+  --candidate-source /path/to/harness-candidate \
+  --candidate-sha '<exact-candidate-sha>' \
+  --json
+```
+
+## PASS contract
+
+- exact clean baseline/candidate inputs;
+- candidate tree имеет согласованные release lock + update graph;
+- previous stable → candidate выполняет реальный UPDATE, не первичный NO_UPDATE;
+- reload boundaries разрешаются bounded repeats;
+- pending project schema мигрирует deterministic owner-ом;
+- STATUS/DOCTOR/validator/full self-tests PASS;
+- Accepted ADR, INIT reports и canary project-owned customization сохранены;
+- повторный APPLY возвращает реальный `NO_UPDATE` без repository mutation;
+- source baseline/candidate host checkouts остаются неизменными.
+
+Подробно: [`INITIALIZED_UPGRADE_QUALIFICATION.md`](INITIALIZED_UPGRADE_QUALIFICATION.md).
+
+
+---
+
+# Bounded Stress Suite
+
+## Файл / Файлы
+
+- `.harness/stress-tests.json`
+- `.harness/tools/run-stress-tests.py`
+- `.harness/tools/run-stress-tests-self-test.py`
+
+## Роль
+
+Отдельный runner для intermittent concurrency/process/locking/cleanup regressions. Первый scenario — regression #256 concurrent authority fixture cleanup.
+
+## CLI
+
+```bash
+python3 .harness/tools/run-stress-tests.py --iterations 5
+python3 .harness/tools/run-stress-tests.py --json
+```
+
+Без `--iterations` используется release default из manifest: 20.
+
+Runner запускает каждый manifest scenario ровно один раз с bounded iteration count, не делает retry-on-failure, завершает process tree при timeout и сохраняет diagnostic hashes/byte counts/tails для failed scenario.
+
+Release Qualification/current всегда использует 20 iterations. Обычный PR CI использует explicit lightweight budget.
