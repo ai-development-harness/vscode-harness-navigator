@@ -6,6 +6,8 @@ description: Produce, independently review, fingerprint and persist a concrete i
 
 Используй для `STEP PLAN STEP-NNN`. Используй `context.contextContract` как минимальный runtime-neutral набор artifacts/sections; legacy `readPaths` остаётся compatibility surface и не означает «прочитать файл целиком». Дополнительный context загружай только через explicit expansion с material reason; `.harness/tools/**` не входит в normal semantic context. Human-readable prose Implementation plan и planning-review пиши на `.harness/manifest.yaml → language.documentation` с fallback на `language.default`; protocol headings/keys не локализуй.
 
+Если `context.contextReuse.status=REUSE_CANDIDATE`, используй summary как только навигационную подсказку к прежним подтверждённым источникам. Точные source hashes уже проверены Core; не перечитывай их целиком без нового вопроса, но спорные предпосылки перепроверяй из source of truth. При `STALE/MISSING` не доверяй прежнему reasoning. Результат значимого bounded grounding можешь зафиксировать через `context-reuse.py record` с явными source paths и коротким summary (не в transcript). Отвергнутые гипотезы можно сохранить там же только с concrete falsification evidence, чтобы другой агент не исследовал их заново при неизменных источниках. Эти заметки не являются grounds для PASS/BLOCKED.
+
 Execution Status ведёт global wrapper. Active legacy schema после Harness update является blocker: сначала `PROJECT RECONCILE`.
 
 ## Phase A — requirements quality / clarification
@@ -22,7 +24,7 @@ python3 .harness/tools/requirements-quality.py --payload-file '<local-json-or->'
 
 1. Запусти:
    ```bash
-   python3 .harness/tools/validate.py --mode manual
+   python3 .harness/tools/gate-reuse.py
    ```
 2. Используй только `context`, уже возвращённый canonical dispatcher handoff: `context.contextContract.required` задаёт exact artifacts/sections, а deterministic facts остаются в том же handoff. Если `context.contextContract.coreReasoningPrinciples` непуст, прочитай **только** перечисленные `path` leaves и примени их к reasoning; не сканируй каталог CRP. `CRP-NNN` — Harness-owned reasoning rule и не является project `PRN-NNN`; Project Principles по-прежнему приходят отдельными canonical artifacts. Повторно `step-context.py`/resolver не вызывай. Не preload-ь unrelated docs/REQ/ADR; затем исследуй только действительно relevant code/tests/config. Completion dependency для PLAN не вычисляй.
 3. Проверь semantic consistency:

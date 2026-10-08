@@ -115,11 +115,13 @@ def candidate_source(root: Path) -> tuple[str, str]:
     return stable, candidate
 
 
-def updater_source(*, mutate_project_owned: bool) -> str:
+def updater_source(*, mutate_project_owned: bool, mode: str = "reload_completed") -> str:
+    if mode not in {"reload_completed", "direct", "noop", "stalled_reload"}:
+        raise ValueError(f"invalid synthetic updater mode: {mode}")
     mutation = ""
     if mutate_project_owned:
         mutation = (
-            "        Path('planning/reviews/TEMPLATE.md').write_text("
+            "    Path('planning/reviews/TEMPLATE.md').write_text("
             "'mutated by updater\\n', encoding='utf-8')\n"
         )
     return f"""#!/usr/bin/env python3
@@ -158,25 +160,44 @@ local = root / ".harness" / "local"
 local.mkdir(parents=True, exist_ok=True)
 reload_marker = local / "reload-seen"
 
+
+def advance_lock():
+    lock_path = root / ".harness" / "harness.lock.json"
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    lock["release"] = args.to.removeprefix("v")
+    lock["source"]["ref"] = args.to
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+{mutation}
+
 if not reload_marker.exists():
     reload_marker.write_text("1", encoding="utf-8")
-    result = {{"status": "UPDATER_RELOAD_REQUIRED", "current": "v0.11.2"}}
+    if {mode!r} == "noop":
+        result = {{"status": "NO_UPDATE", "current": "v0.11.2", "repositoryMutated": False}}
+    elif {mode!r} == "stalled_reload":
+        result = {{"status": "UPDATER_RELOAD_REQUIRED", "current": "v0.11.2"}}
+    elif {mode!r} == "direct":
+        advance_lock()
+        result = {{"status": "UPDATED", "current": args.to}}
+    else:
+        # Реальный updater сначала применяет последний hop и только затем
+        # запрашивает reload. Следующая попытка закономерно вернёт NO_UPDATE.
+        advance_lock()
+        result = {{"status": "UPDATER_RELOAD_REQUIRED", "current": args.to}}
 else:
     lock_path = root / ".harness" / "harness.lock.json"
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     if lock["source"]["ref"] == args.to:
-        result = {{"status": "NO_UPDATE", "repositoryMutated": False}}
+        result = {{"status": "NO_UPDATE", "current": args.to, "repositoryMutated": False}}
     else:
-        lock["release"] = args.to.removeprefix("v")
-        lock["source"]["ref"] = args.to
-        lock_path.write_text(json.dumps(lock), encoding="utf-8")
-{mutation}        result = {{"status": "UPDATED", "current": args.to}}
+        advance_lock()
+        result = {{"status": "UPDATED", "current": args.to}}
 
 print(json.dumps(result))
 """
 
 
-def baseline_project(root: Path, *, mutate_project_owned: bool = False) -> str:
+
+def baseline_project(root: Path, *, mutate_project_owned: bool = False, mode: str = "reload_completed") -> str:
     root.mkdir()
     init_repo(root)
     write(
@@ -190,7 +211,7 @@ def baseline_project(root: Path, *, mutate_project_owned: bool = False) -> str:
             }
         ),
     )
-    write(root, ".harness/tools/harness-update.py", updater_source(mutate_project_owned=mutate_project_owned))
+    write(root, ".harness/tools/harness-update.py", updater_source(mutate_project_owned=mutate_project_owned, mode=mode))
     write(
         root,
         ".harness/tools/migrate-project-schema.py",
@@ -266,6 +287,28 @@ def main() -> int:
         assert git(baseline, "rev-parse", "HEAD") == baseline_head
         assert git(source, "status", "--porcelain=v1", "--untracked-files=all") == ""
         assert git(baseline, "status", "--porcelain=v1", "--untracked-files=all") == ""
+        # RELOAD_REQUIRED может означать, что последний hop уже применён:
+        # после restart NO_UPDATE подтверждает завершение, а не отсутствие
+        # первоначального обновления.
+        assert [stage["result"] for stage in payload["stages"] if stage["id"].startswith("apply-")][:2] == [
+            "UPDATER_RELOAD_REQUIRED", "NO_UPDATE"
+        ], payload
+
+        direct = root / "direct-baseline"
+        direct_sha = baseline_project(direct, mode="direct")
+        direct_pass = invoke(root, direct, direct_sha, source, candidate, expect=0)
+        assert direct_pass["status"] == "PASS", direct_pass
+        assert any(stage["result"] == "UPDATED" for stage in direct_pass["stages"] if stage["id"].startswith("apply-")), direct_pass
+
+        noop = root / "noop-baseline"
+        noop_sha = baseline_project(noop, mode="noop")
+        noop_result = invoke(root, noop, noop_sha, source, candidate, expect=1)
+        assert noop_result["reasonCode"] == "TARGET_NOT_REACHED", noop_result
+
+        stalled = root / "stalled-reload-baseline"
+        stalled_sha = baseline_project(stalled, mode="stalled_reload")
+        stalled_result = invoke(root, stalled, stalled_sha, source, candidate, expect=1)
+        assert stalled_result["reasonCode"] == "RELOAD_DID_NOT_ADVANCE", stalled_result
 
         bad = root / "bad-baseline"
         bad_sha = baseline_project(bad, mutate_project_owned=True)

@@ -191,6 +191,7 @@ def main() -> int:
             ],
         )
         assert passed["status"] == "PASS", passed
+        assert passed["automatedResumed"] is True, passed
         assert passed["commands"][0]["exitCode"] == 0, passed
         assert passed["manual"][0]["status"] == "PASS", passed
         evidence = step.read_text(encoding="utf-8")
@@ -237,6 +238,22 @@ def main() -> int:
         contract_stale = verification_freshness(root, "STEP-001")
         assert contract_stale["reasonCode"] == "VERIFICATION_CONTRACT_STALE", contract_stale
         step.write_text(original_text, encoding="utf-8", newline="\n")
+
+        # A modified subject invalidates cached automation even if manual
+        # observations arrive unchanged.
+        reset(root)
+        unconfirmed = run_step_verification(root, "STEP-001")
+        assert unconfirmed["status"] == "MANUAL_REQUIRED", unconfirmed
+        (root / "new-file.py").write_text("subject changed\\n", encoding="utf-8")
+        stale_continuation = run_step_verification(
+            root, "STEP-001",
+            manual_results=[{
+                "check": "Подтвердить semantic condition",
+                "status": "PASS", "observed": "Confirmed again.",
+            }],
+        )
+        assert stale_continuation["automatedResumed"] is False, stale_continuation
+        (root / "new-file.py").unlink()
 
         # Non-zero exit is factual FAIL, not LLM interpretation.
         reset(root)
@@ -326,35 +343,42 @@ def main() -> int:
         # Dispatcher enforces the runner before FIX/IMPLEMENT SUCCESS. Manual
         # pending returns the same semantic command; confirmed checks allow DONE.
         reset(root)
-        dispatch = start_dispatch(root, "STEP FIX STEP-001")
-        assert dispatch["status"] == "SEMANTIC", dispatch
-        first_complete = complete_dispatch(
-            root,
-            dispatch["rootCommand"],
-            dispatch["command"],
-            "SUCCESS",
-            execution_id=dispatch["executionId"],
-        )
-        assert first_complete["status"] == "SEMANTIC", first_complete
-        assert first_complete["reasonCode"] == "VERIFICATION_MANUAL_REQUIRED", first_complete
+        # This fixture isolates Verification, not REVIEW/FIX provenance.
+        # FIX normally requires an immutable FAIL review; the actual baseline
+        # capture has its own regression suite (incremental-review-self-test).
+        # Bypass only the snapshot boundary here so that the manual
+        # Verification continuation remains independently testable.
+        from unittest.mock import patch
+        with patch("command_dispatch.capture_fix", return_value={"testOnly": True}):
+            dispatch = start_dispatch(root, "STEP FIX STEP-001")
+            assert dispatch["status"] == "SEMANTIC", dispatch
+            first_complete = complete_dispatch(
+                root,
+                dispatch["rootCommand"],
+                dispatch["command"],
+                "SUCCESS",
+                execution_id=dispatch["executionId"],
+            )
+            assert first_complete["status"] == "SEMANTIC", first_complete
+            assert first_complete["reasonCode"] == "VERIFICATION_MANUAL_REQUIRED", first_complete
 
-        final = complete_dispatch(
-            root,
-            dispatch["rootCommand"],
-            dispatch["command"],
-            "SUCCESS",
-            execution_id=dispatch["executionId"],
-            details={
-                "manualVerification": [
-                    {
-                        "check": "Подтвердить semantic condition",
-                        "status": "PASS",
-                        "observed": "Confirmed by semantic reviewer.",
-                    }
-                ]
-            },
-        )
-        assert final["status"] == "DONE", final
+            final = complete_dispatch(
+                root,
+                dispatch["rootCommand"],
+                dispatch["command"],
+                "SUCCESS",
+                execution_id=dispatch["executionId"],
+                details={
+                    "manualVerification": [
+                        {
+                            "check": "Подтвердить semantic condition",
+                            "status": "PASS",
+                            "observed": "Confirmed by semantic reviewer.",
+                        }
+                    ]
+                },
+            )
+            assert final["status"] == "DONE", final
 
     print("VERIFICATION SELF-TEST: PASS")
     return 0

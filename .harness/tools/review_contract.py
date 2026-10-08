@@ -988,6 +988,43 @@ def validate_review_report(
                 "BLOCKED review requires a contract or blocking evidence finding"
             )
 
+    # Historical reports without a delta section remain valid. New FIX-delta
+    # reports carry durable exact scope and causal evidence.
+    delta_section = document["sections"].get("FIX delta provenance")
+    if delta_section is not None:
+        match = re.fullmatch(r"\s*```json\s*(\{.*\})\s*```\s*", delta_section, re.S)
+        if match is None:
+            errors.append("FIX delta provenance must contain one JSON object")
+        else:
+            try:
+                delta = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                errors.append("FIX delta provenance JSON is invalid")
+            else:
+                if not isinstance(delta, dict) or delta.get("schemaVersion") != 1 or delta.get("mode") != "fix_delta":
+                    errors.append("FIX delta provenance schema/mode is invalid")
+                else:
+                    previous = delta.get("previousFingerprints")
+                    changed = delta.get("changedPaths")
+                    reasons = delta.get("fixDeltaCausality")
+                    if not isinstance(previous, list) or any(not _valid_sha256(v) for v in previous):
+                        errors.append("FIX delta previousFingerprints is invalid")
+                    elif not isinstance(changed, list) or any(not isinstance(v, str) for v in changed):
+                        errors.append("FIX delta changedPaths is invalid")
+                    elif not isinstance(reasons, dict):
+                        errors.append("FIX delta causality must be a mapping")
+                    else:
+                        old_set = set(previous)
+                        changed_set = set(changed)
+                        for finding in structured_findings or []:
+                            if finding["fingerprint"] in old_set:
+                                continue
+                            if finding["location"]["path"] not in changed_set:
+                                errors.append("FIX delta finding outside changed paths")
+                            note = reasons.get(finding["id"])
+                            if not isinstance(note, str) or len(note.strip()) < 30:
+                                errors.append("FIX delta new finding missing causal evidence")
+
     specialized = meta.get("specialized_reviews")
     if not isinstance(specialized, dict):
         errors.append("specialized_reviews must be a mapping")

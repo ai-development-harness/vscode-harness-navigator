@@ -16,6 +16,7 @@ raw command
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,7 @@ from planning_contract import step_completion_proof
 from step_context import build_step_context
 from step_next import resolve_step_action, resolve_step_next
 from verification import run_step_verification, write_verification_evidence
+from fix_delta import capture_fix, complete_fix, review_scope, request_full_review, FixDeltaError
 
 
 SCHEMA_VERSION = 1
@@ -363,6 +365,17 @@ def _semantic_handoff(
             f"dispatch skill does not exist: {skill}",
         )
 
+    # FIX has no contextPhase in the canonical CTS: capture at the
+    # semantic-dispatch boundary, not inside phase-specific context resolution.
+    # No implementation mutations may occur before this exact pre-FIX tree.
+    if route.get("domain") == "STEP" and route.get("operation") == "FIX":
+        try:
+            capture_fix(
+                root, str(route["target"]), str(execution.get("executionId") or ""),
+            )
+        except (FixDeltaError, OSError, ValueError) as exc:
+            raise DispatchError("FIX_BASELINE_BLOCKED", str(exc)) from exc
+
     context: dict[str, Any] | None = None
     context_phase = dispatch.get("contextPhase")
     if context_phase is not None:
@@ -446,6 +459,13 @@ def _semantic_handoff(
     )
     if isinstance(intent_basis, dict):
         result["intentBasis"] = intent_basis
+    if context is not None and route.get("operation") == "REVIEW":
+        try:
+            if os.environ.get("HARNESS_REVIEW_FULL") == "1":
+                request_full_review(root, route["target"])
+            result["fixReview"] = review_scope(root, route["target"])
+        except (FixDeltaError, OSError, ValueError) as exc:
+            raise DispatchError("FIX_DELTA_BLOCKED", str(exc)) from exc
     if context is not None:
         result["context"] = context
     return result
@@ -1108,6 +1128,13 @@ def complete_dispatch(
             expected_execution_id=execution_id,
             details=completion_details,
         )
+        # Mark the FIX delta usable only after successful Verification and
+        # accepted execution completion; never after BLOCKED/manual pending.
+        completed_route = route_command(root, command)
+        if (completed_route.get("domain") == "STEP"
+                and completed_route.get("operation") == "FIX"
+                and result in {"SUCCESS", "PASS"}):
+            complete_fix(root, completed_route["target"], execution_id)
         resolved = resolve_execution(root, execution)
     except (OSError, ValueError) as exc:
         details_value = getattr(exc, "details", None)

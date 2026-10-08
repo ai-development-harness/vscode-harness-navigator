@@ -32,6 +32,7 @@ from project_verification import (
     validate_product_observations,
 )
 from review_contract import repository_revision
+from verification_resume import remember_pending, reuse_pending, forget_pending
 
 
 COMMAND_RE = re.compile(r"^- command:\s*\x60([^\x60]+)\x60\s*$")
@@ -565,6 +566,7 @@ def _evidence_block(result: dict[str, Any]) -> str:
         EVIDENCE_START,
         f"- Verification run: {result['runAt']}",
         f"- Status: {result['status']}",
+        f"- Automated resumed: {str(result.get('automatedResumed', False)).lower()}",
         f"- Git head: {revision.get('git_head') or 'none'}",
         f"- Worktree hash: {revision.get('worktree_hash') or 'clean'}",
         f"- Verification contract basis: {result['contractBasis']}",
@@ -720,9 +722,16 @@ def run_step_verification(
             "message": str(exc),
         }
 
-    commands: list[dict[str, Any]] = []
+    command_names = [item["value"] for item in entries if item["kind"] == "command"]
+    reused = None
+    if manual_results is not None or product_results is not None:
+        reused = reuse_pending(
+            root, step_id, contract=contract_basis,
+            subject=subject_revision, names=command_names, timeout=timeout,
+        )
+    commands: list[dict[str, Any]] = list(reused) if reused is not None else []
     try:
-        for entry in entries:
+        for entry in ([] if reused is not None else entries):
             if entry["kind"] != "command":
                 continue
             before = repository_revision(root)
@@ -792,9 +801,18 @@ def run_step_verification(
     else:
         status = "PASS"
 
+    if status == "MANUAL_REQUIRED" and reused is None:
+        remember_pending(
+            root, step_id, contract=contract_basis,
+            subject=subject_revision, commands=commands, timeout=timeout,
+        )
+    elif status != "MANUAL_REQUIRED":
+        forget_pending(root, step_id)
+
     result = {
         "schemaVersion": 1,
         "status": status,
+        "automatedResumed": reused is not None,
         "stepId": step_id,
         "runAt": utc_now(),
         "revision": revision,
