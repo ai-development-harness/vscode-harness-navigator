@@ -15,6 +15,7 @@ import argparse
 import json
 from pathlib import Path
 from typing import Any
+from context_reuse import lookup as lookup_context_reuse
 
 from context_contracts import build_context_contract
 from execution_groups import implementation_plan_step_count, normalize_execution_groups
@@ -219,6 +220,17 @@ def build_step_context(
             "specializedReviewGate": review_gate,
             "repositoryRevision": repository_revision(root),
         }
+
+    # Validated, optional semantic hints eliminate repeat onboarding without
+    # granting model-written notes any authority over actual project sources.
+    role = {"plan": "planner", "implement": "implementer", "review": "reviewer"}[phase]
+    required = _unique_paths(
+        read_paths + [
+            item["path"] for item in result["contextContract"].get("required", [])
+            if isinstance(item, dict) and isinstance(item.get("path"), str)
+        ]
+    )
+    result["contextReuse"] = lookup_context_reuse(root, step_id, role, required)
 
     return result
 

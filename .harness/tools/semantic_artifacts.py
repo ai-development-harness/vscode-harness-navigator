@@ -54,6 +54,7 @@ from review_findings import (
     render_machine_findings,
 )
 from review_gates import required_reviewers
+from fix_delta import review_scope, enforce_findings, clear_scope, FixDeltaError
 from verification import render_verification_entries, validate_verification_entries
 
 
@@ -426,7 +427,7 @@ def _step_review_payload(payload: Any) -> dict[str, Any]:
     data = _require_object(payload, "step review payload")
     _exact_keys(
         data,
-        {"verdict", "findings", "verificationObservations", "rationale", "specializedReviews", "completion"},
+        {"verdict", "findings", "verificationObservations", "rationale", "specializedReviews", "completion", "fixDeltaCausality"},
         "step review payload",
     )
     verdict = data.get("verdict")
@@ -453,6 +454,7 @@ def _step_review_payload(payload: Any) -> dict[str, Any]:
     return {
         "verdict": verdict,
         "findings": findings,
+        "fixDeltaCausality": data.get("fixDeltaCausality"),
         "verificationObservations": _text(
             data.get("verificationObservations"), "verificationObservations"
         ),
@@ -564,6 +566,17 @@ def _render_findings(findings: list[dict[str, Any]]) -> str:
 def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
     """Create one validated immutable implementation review for exact revision."""
     data = _step_review_payload(payload)
+    try:
+        fix_scope = review_scope(root, step_id)
+        causality = data.get("fixDeltaCausality")
+        if causality is not None and (
+            not isinstance(causality, dict)
+            or any(not isinstance(k, str) for k in causality)
+        ):
+            raise FixDeltaError("fixDeltaCausality must be an object keyed by finding fingerprint")
+        enforce_findings(fix_scope, data["findings"], causality)
+    except (FixDeltaError, ValueError, OSError) as exc:
+        raise SemanticArtifactError("FIX delta review invalid: " + str(exc)) from exc
     baseline = implementation_baseline_for_step(root, step_id)
     baseline_sha = (
         baseline.get("gitHead")
@@ -645,10 +658,33 @@ def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
             if convergence is not None
             else ""
         )
+        scope_label = (
+            "FIX delta only: " + fix_scope["sourceReport"]
+            if fix_scope.get("mode") == "fix_delta"
+            else "Initial full implementation review"
+        )
+        fix_delta_section = ""
+        if fix_scope.get("mode") == "fix_delta":
+            durable_delta = {
+                "schemaVersion": 1,
+                "mode": "fix_delta",
+                "sourceReport": fix_scope["sourceReport"],
+                "beforeTree": fix_scope["beforeTree"],
+                "afterTree": fix_scope["afterTree"],
+                "changedPaths": fix_scope["changedPaths"],
+                "previousFingerprints": fix_scope["previousFingerprints"],
+                "fixDeltaCausality": data.get("fixDeltaCausality") or {},
+            }
+            fix_delta_section = (
+                "\n## FIX delta provenance\n\n```json\n"
+                + json.dumps(durable_delta, sort_keys=True, ensure_ascii=False, indent=2)
+                + "\n```\n"
+            )
         body = f"""# STEP REVIEW {step_id} — {display}
 
 ## Scope checked
 
+- {scope_label}
 - Task contract
 - REQ/ADR/OQ/architecture refs
 - Implementation plan
@@ -672,7 +708,7 @@ def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
 ## Verdict rationale
 
 {data["rationale"]}
-{completion_section}"""
+{completion_section}{fix_delta_section}"""
         return render_document(frontmatter, body)
 
     path, _created_at = create_durable_report(
@@ -706,6 +742,7 @@ def write_step_review(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
         )
     except (OSError, ValueError):
         provenance_recorded = False
+    clear_scope(root, step_id)
     result = {
         "schemaVersion": 1,
         "reviewContractVersion": FINDING_CONTRACT_VERSION,

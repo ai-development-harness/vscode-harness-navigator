@@ -311,7 +311,14 @@ def _apply_until_settled(
     candidate_tag: str,
     mirror: Path,
     stages: list[dict[str, object]],
-) -> dict[str, object]:
+) -> tuple[dict[str, object], bool]:
+    """Довести updater до конечного статуса и подтвердить реальное продвижение.
+
+    На последнем hop updater может сначала вернуть UPDATER_RELOAD_REQUIRED:
+    обновление уже применено, но процесс нужно запустить заново. Поэтому
+    последующий NO_UPDATE допустим, только если ранее подтверждён переход
+    lock на новую версию и в итоге достигнут точный candidate_tag.
+    """
     command = [
         sys.executable,
         ".harness/tools/harness-update.py",
@@ -322,6 +329,8 @@ def _apply_until_settled(
         str(mirror),
         "--json",
     ]
+    previous_release = _baseline_tag(root)
+    advanced = False
     for attempt in range(1, MAX_RELOAD_REPEATS + 1):
         proc, item = _stage(f"apply-{attempt}", command, cwd=root)
         result = _json_result(proc, f"apply-{attempt}")
@@ -333,16 +342,46 @@ def _apply_until_settled(
                 f"apply attempt {attempt}: {result.get('reasonCode') or result.get('status')}",
             )
         status = result.get("status")
+        if status not in {"UPDATER_RELOAD_REQUIRED", "UPDATED", "NO_UPDATE"}:
+            raise QualificationError("UNKNOWN_UPDATE_RESULT", f"unexpected updater status: {status}")
+
+        installed_release = _baseline_tag(root)
+        reported_release = result.get("current")
+        if reported_release is not None and reported_release != installed_release:
+            raise QualificationError(
+                "UPDATE_STATE_MISMATCH",
+                f"updater reported {reported_release!r}, lock contains {installed_release!r}",
+            )
+
         if status == "UPDATER_RELOAD_REQUIRED":
+            if installed_release == previous_release:
+                raise QualificationError(
+                    "RELOAD_DID_NOT_ADVANCE",
+                    "reload requested without an applied release transition",
+                )
+            advanced = True
+            previous_release = installed_release
             continue
-        if status in {"UPDATED", "NO_UPDATE"}:
-            return result
-        raise QualificationError("UNKNOWN_UPDATE_RESULT", f"unexpected updater status: {status}")
+
+        if status == "UPDATED":
+            if installed_release == previous_release:
+                raise QualificationError(
+                    "UPDATE_DID_NOT_ADVANCE",
+                    "UPDATED reported without advancing the installed release",
+                )
+            advanced = True
+
+        if installed_release != candidate_tag:
+            raise QualificationError(
+                "TARGET_NOT_REACHED",
+                f"installed release {installed_release!r} != candidate {candidate_tag!r}",
+            )
+        return result, advanced
+
     raise QualificationError(
         "RELOAD_LIMIT_EXCEEDED",
         f"more than {MAX_RELOAD_REPEATS} reload repeats",
     )
-
 
 def _reconcile_schema(
     root: Path,
@@ -427,13 +466,13 @@ def qualify(
             )
             _clone_baseline(baseline_project, exact_baseline, work)
 
-            first = _apply_until_settled(
+            first, first_applied = _apply_until_settled(
                 work,
                 candidate_tag=candidate_tag,
                 mirror=mirror,
                 stages=stages,
             )
-            if first.get("status") == "NO_UPDATE":
+            if not first_applied:
                 raise QualificationError(
                     "PRIMARY_UPGRADE_WAS_NOOP",
                     "previous stable -> candidate did not perform an update",
@@ -488,13 +527,13 @@ def qualify(
                 }
             )
 
-            repeat = _apply_until_settled(
+            repeat, repeated_apply = _apply_until_settled(
                 work,
                 candidate_tag=candidate_tag,
                 mirror=mirror,
                 stages=stages,
             )
-            if repeat.get("status") != "NO_UPDATE":
+            if repeated_apply or repeat.get("status") != "NO_UPDATE":
                 raise QualificationError(
                     "REPEATED_APPLY_NOT_NO_UPDATE",
                     f"repeat status={repeat.get('status')}",
