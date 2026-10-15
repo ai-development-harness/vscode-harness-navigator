@@ -27,6 +27,7 @@ from harness_config import (
 )
 from planning_contract import (
     dependency_ids,
+    historical_completion_projection_proof,
     open_questions,
     read_task,
     relevant_open_questions,
@@ -143,7 +144,10 @@ def _requirement_status(
             )
         try:
             task = read_task(root, step_id)
-            proof = step_completion_proof(
+            # История REQ опирается на тогдашний immutable PASS. Он не
+            # становится current prerequisite: NEXT/IMPLEMENT используют
+            # строгий step_completion_proof(), без historical fallback.
+            proof = historical_completion_projection_proof(
                 root,
                 step_id,
                 extra_legacy_review_pins=extra_legacy_review_pins,

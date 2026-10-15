@@ -124,6 +124,12 @@ def validate_contract(contract: dict[str, Any]) -> list[str]:
             errors.append("invariants.unsupportedCapabilities must be explicit")
         if invariants.get("versioning") != "required":
             errors.append("invariants.versioning must be required")
+        if invariants.get("crossRuntimeCommands") != "seamless":
+            errors.append("invariants.crossRuntimeCommands must be seamless")
+        if invariants.get("nativeSessionReuse") != "best-effort":
+            errors.append("invariants.nativeSessionReuse must be best-effort")
+        if invariants.get("runtimeChangeInvalidatesIntent") is not False:
+            errors.append("invariants.runtimeChangeInvalidatesIntent must be false")
 
     adapters = contract.get("adapters")
     if not isinstance(adapters, dict) or not adapters:
@@ -212,6 +218,80 @@ def require_capability(
             f"runtime {snapshot.get('runtimeId')} does not support {capability}"
         )
     return state
+
+
+def plan_session_entry(
+    contract: dict[str, Any],
+    runtime_id: str,
+    *,
+    entry_kind: str,
+    previous_runtime_id: str | None = None,
+    native_session_handle: str | None = None,
+    native_session_compatible: bool | None = None,
+    canonical_reentry_safe: bool | None = None,
+    required_capabilities: list[str] | None = None,
+) -> dict[str, Any]:
+    """Решить только вопрос *нативной сессии*, не право выполнить STEP.
+
+    PLAN в Claude и IMPLEMENT в Codex — два независимых canonical commands.
+    Они не требуют совместимости runtime-сессий. При recovery Harness сначала
+    доказывает безопасность через CTS/intent/side-effect contracts; здесь
+    используется уже готовый результат, а не provider-specific предположение.
+
+    Не возвращаем native handle и не сохраняем account/provider credentials.
+    """
+    if entry_kind not in {"new-command", "recover-command"}:
+        raise RuntimeContractError("entry_kind must be new-command or recover-command")
+    snapshot = capability_snapshot(contract, runtime_id)
+    requirements = required_capabilities or []
+    if (
+        not isinstance(requirements, list)
+        or any(not isinstance(value, str) for value in requirements)
+    ):
+        raise RuntimeContractError("required_capabilities must be a string array")
+
+    def decision(action: str, reason: str, **extra: Any) -> dict[str, Any]:
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "runtimeId": runtime_id,
+            "action": action,
+            "reasonCode": reason,
+            **extra,
+        }
+
+    # Отсутствующий необязательный MCP/capability не является blocker.
+    # Проверяем только то, что конкретная команда действительно потребовала.
+    for capability in requirements:
+        try:
+            require_capability(snapshot, capability)
+        except RuntimeContractError as exc:
+            return decision(
+                "blocked", "REQUIRED_CAPABILITY_UNAVAILABLE",
+                capability=capability, message=str(exc),
+            )
+
+    if entry_kind == "new-command":
+        return decision("start", "NEW_CANONICAL_COMMAND")
+
+    # Внутреннюю сессию нельзя использовать как доказательство безопасного
+    # восстановления команды: этот guard полностью принадлежит Harness.
+    if canonical_reentry_safe is not True:
+        return decision("blocked", "CANONICAL_REENTRY_UNPROVEN")
+
+    same_runtime = previous_runtime_id == runtime_id
+    has_handle = isinstance(native_session_handle, str) and bool(native_session_handle.strip())
+    resume_support = snapshot["capabilities"]["resume"] != "unsupported"
+
+    if same_runtime and has_handle and native_session_compatible is True and resume_support:
+        return decision("resume", "NATIVE_SESSION_COMPATIBLE")
+
+    # Другая модель, обновлённый CLI, потерянный handle или неизвестная
+    # совместимость не должны запрещать восстановление STEP. Запускаем новую
+    # сессию и восстанавливаем только authoritative Harness context.
+    return decision(
+        "start", "CANONICAL_FRESH_SESSION",
+        contextSource="harness-authoritative-state",
+    )
 
 
 def normalize_event(value: Any) -> dict[str, Any]:

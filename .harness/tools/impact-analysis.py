@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from impact_analysis import affected_steps, plan_staleness
+from impact_analysis import affected_steps, selective_invalidation_preview, plan_staleness
 
 
 def main() -> int:
@@ -15,6 +15,7 @@ def main() -> int:
     )
     parser.add_argument("--changed", action="append", default=[])
     parser.add_argument("--step")
+    parser.add_argument("--preview", action="store_true", help="Read-only transitive impact and evidence decisions")
     parser.add_argument("--root", type=Path, default=None)
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
@@ -23,6 +24,8 @@ def main() -> int:
     try:
         if args.step and args.changed:
             parser.error("--step and --changed are mutually exclusive")
+        if args.step and args.preview:
+            parser.error("--preview requires --changed, not --step")
         if args.step:
             result = {
                 "schemaVersion": 1,
@@ -31,7 +34,10 @@ def main() -> int:
                 "plan": plan_staleness(root, args.step),
             }
         elif args.changed:
-            result = affected_steps(root, args.changed)
+            result = (
+                selective_invalidation_preview(root, args.changed)
+                if args.preview else affected_steps(root, args.changed)
+            )
         else:
             parser.error("use --step STEP-NNN or one/more --changed ARTIFACT-ID")
     except (OSError, UnicodeError, ValueError) as exc:

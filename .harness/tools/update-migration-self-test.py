@@ -1160,16 +1160,64 @@ def test_release_metadata(root: Path) -> None:
     require(lock["release"] == release, "lock release must match manifest release")
     require(lock["source"]["ref"] == f"v{release}", "lock source.ref must match manifest release")
 
-    # В каноническом source repository release snapshot не может содержать
-    # source.commit: SHA самого release commit появляется только после commit/tag.
-    # В пользовательском project lock этот pin, наоборот, корректен и записывается
-    # updater/adoption после разрешения реально существующего immutable tag.
-    source_repository = lock["source"].get("repository")
-    if os.environ.get("GITHUB_REPOSITORY") == source_repository:
+    # Этот self-test работает и внутри установленного downstream checkout.
+    # GITHUB_REPOSITORY является metadata ВНЕШНЕГО workflow и может указывать
+    # на ai-development-harness-template даже при запуске в release-canary.
+    # Поэтому нельзя по этой переменной требовать отсутствия source.commit.
+    # В установленном проекте updater ДОЛЖЕН записать exact source commit;
+    # release snapshot проверяется отдельно scripts/release.py verify в
+    # maintainer-tools, где контекст подготовки известен достоверно.
+    pinned = lock["source"].get("commit")
+    if pinned is not None:
         require(
-            "commit" not in lock["source"],
-            "canonical release snapshot lock must not contain source.commit",
+            isinstance(pinned, str)
+            and re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", pinned) is not None,
+            "installed source.commit must be an exact 40/64 hex Git object ID",
         )
+
+
+def test_release_metadata_initialized_downstream() -> None:
+    """CI GITHUB_REPOSITORY must not reinterpret installed lock as source.
+
+    A disposable initialized project may run self-tests under the Harness
+    workflow environment. Updater legitimately records the source commit.
+    """
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory(prefix="harness-updated-lock-test-") as td:
+        root = Path(td)
+        original = repo_root()
+        for relative in (
+            ".harness/manifest.yaml",
+            ".harness/harness.lock.json",
+            ".harness/harness-update-graph.json",
+            ".harness/harness-update.toml",
+        ):
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((original / relative).read_bytes())
+
+        lock_path = root / ".harness/harness.lock.json"
+        installed = json.loads(lock_path.read_text(encoding="utf-8"))
+        installed["source"]["commit"] = "a" * 40
+        lock_path.write_text(json.dumps(installed), encoding="utf-8")
+
+        with patch.dict(
+            os.environ,
+            {"GITHUB_REPOSITORY": "ai-development-harness/ai-development-harness-template"},
+        ):
+            # These bytes are a valid installed-project pin, not a release
+            # self-pin. Test the exact environment of release canary CI.
+            test_release_metadata(root)
+
+        installed["source"]["commit"] = "invalid-pin"
+        lock_path.write_text(json.dumps(installed), encoding="utf-8")
+        try:
+            test_release_metadata(root)
+        except AssertionError as exc:
+            require("installed source.commit" in str(exc), str(exc))
+        else:
+            raise AssertionError("invalid installed source.commit was accepted")
 
 
 # Releases до v0.8.2 поставляют update engine без журнала и с defects
@@ -1227,6 +1275,7 @@ def main() -> int:
         ("template schema bump migration", test_template_schema_bump),
         ("legacy migration is lossless", test_legacy_migration_lossless),
         ("release metadata", lambda: test_release_metadata(root)),
+        ("installed release metadata under Harness Actions", test_release_metadata_initialized_downstream),
         ("journaled-engine bridge release gate", lambda: test_bridge_release_gate(root)),
     ]
     for name, test in tests:

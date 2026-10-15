@@ -24,6 +24,7 @@ MANIFEST = """execution:
   verificationCommandTimeoutSeconds: 300
 sources:
   requirements: docs/requirements
+  openQuestions: docs/open-questions
 protocol:
   taskDirectory: planning/tasks
   reviewDirectory: planning/reviews

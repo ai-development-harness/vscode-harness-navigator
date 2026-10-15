@@ -28,6 +28,7 @@ from planning_contract import (
     canonical_adr_path,
     dependency_ids,
     implementation_prerequisite_failures,
+    dependency_completion_failures,
     read_task,
     relevant_open_questions,
 )
@@ -176,6 +177,27 @@ def _fresh_command(
 
     failures = implementation_prerequisite_failures(root, step_id)
     if failures:
+        # Historical Ready plans can become stale when linked REQ/ADR/STEP/PRN
+        # or architecture references change. Re-plan ONLY after this STEP has
+        # passed the dependency gate and is being considered for execution.
+        # Never downgrade actual malformed/unsafe plan state into executable.
+        recalculable = {
+            "plan-context-basis-is-stale",
+            "plan-content-hash-is-stale",
+            "matching-planning-review-pass-is-missing",
+        }
+        stale = {"plan-context-basis-is-stale", "plan-content-hash-is-stale"}
+        if (
+            any(reason in stale for reason in failures)
+            and set(failures).issubset(recalculable)
+            and isinstance(plan, dict)
+            and isinstance(plan.get("context_basis"), str)
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", plan["context_basis"]) is not None
+            and isinstance(plan.get("content_hash"), str)
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", plan["content_hash"]) is not None
+            and not _planning_blockers(root, task)
+        ):
+            return f"STEP PLAN {step_id}", []
         return None, failures
     return f"STEP IMPLEMENT {step_id}", []
 
@@ -207,13 +229,32 @@ def resolve_step_action(root: Path, step_id: str) -> dict[str, Any]:
             "lifecycleStatus": meta.get("status"),
             "reasons": reasons,
         }
-    return {
+    result = {
         "status": "PASS",
         "stepId": step_id,
         "stepType": meta.get("type"),
         "lifecycleStatus": meta.get("status"),
         "command": command,
     }
+    if command == f"STEP PLAN {step_id}":
+        # Explicit PLAN remains supported for manual use and as the internal
+        # first child of STEP RUN. Never silently redefine it as a new command.
+        # This advisory does not relax the normal STEP IMPLEMENT proof gate.
+        result["planningAdvisory"] = {
+            "policy": "just-in-time",
+            "preferredCommand": f"STEP RUN {step_id}",
+            "deferIfNotNext": True,
+            "staleReadyPlan": (
+                isinstance(meta.get("plan"), dict)
+                and meta["plan"].get("status") == "ready"
+            ),
+            "message": (
+                "Plan can go stale as REQ/ADR/STEP/architecture changes. "
+                "Prefer STEP NEXT then STEP RUN; defer standalone PLAN "
+                "until this STEP becomes next."
+            ),
+        }
+    return result
 
 
 def _step_id_from_execution(item: dict[str, Any]) -> str | None:
@@ -307,10 +348,13 @@ def resolve_step_next(root: Path) -> dict[str, Any]:
 
     candidates: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
+    # Общие зависимости многих STEP проверяем один раз за вызов NEXT.
+    proof_cache: dict[str, dict[str, Any]] = {}
+    dependency_cache: dict[str, list[str]] = {}
 
     # Existing STEP work always outranks starting another STEP.
     try:
-        executions = unresolved_executions(root)
+        executions = unresolved_executions(root, mutate=False)
     except (OSError, ValueError) as exc:
         return {
             "schemaVersion": 1,
@@ -324,27 +368,48 @@ def resolve_step_next(root: Path) -> dict[str, Any]:
         if item.get("status") not in {"RESUME", "NEXT"}:
             continue
         command = item.get("command")
-        if not isinstance(command, str) or not command.startswith("STEP "):
+        root_command = item.get("rootCommand")
+        if (
+            not isinstance(command, str)
+            or not command.startswith("STEP ")
+            or not isinstance(root_command, str)
+            or not root_command.startswith("STEP ")
+        ):
             continue
         step_id = _step_id_from_execution(item)
         if step_id is None or step_id not in tasks:
+            continue
+        try:
+            dependency_failures = dependency_completion_failures(
+                root, step_id,
+                proof_cache=proof_cache,
+                dependency_cache=dependency_cache,
+            )
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            dependency_failures = [f"dependency-state-invalid:{exc}"]
+        if dependency_failures:
+            blocked.append({"stepId": step_id, "reasons": dependency_failures})
+            seen_execution_steps.add(step_id)
             continue
         # Multiple local records for one STEP should not multiply candidates.
         if step_id in seen_execution_steps:
             continue
         seen_execution_steps.add(step_id)
-        candidates.append(
-            _candidate(
-                step_id=step_id,
-                task=tasks[step_id],
-                command=command,
-                source="execution",
-                lifecycle=str(item["status"]),
-                downstream=downstream[step_id],
-                roadmap_index=roadmap_index[step_id],
-                execution_id=str(item.get("executionId") or ""),
-            )
+        candidate = _candidate(
+            step_id=step_id,
+            task=tasks[step_id],
+            # Read-only preview may have moved PLAN -> IMPLEMENT only
+            # in memory. The public action must reconcile the ORIGINAL root,
+            # never launch its child as an unrelated single execution.
+            command=root_command,
+            source="execution",
+            lifecycle=str(item["status"]),
+            downstream=downstream[step_id],
+            roadmap_index=roadmap_index[step_id],
+            execution_id=str(item.get("executionId") or ""),
         )
+        candidate["nextChildCommand"] = command  # Read-only, not an executable action.
+        candidates.append(candidate)
 
     # Fresh candidates are still useful as alternatives, but cannot beat
     # resumable work because sourceRank is lower priority.
@@ -353,6 +418,17 @@ def resolve_step_next(root: Path) -> dict[str, Any]:
             continue
         task = tasks[step_id]
         try:
+            dependency_failures = dependency_completion_failures(
+                root, step_id,
+                proof_cache=proof_cache,
+                dependency_cache=dependency_cache,
+            )
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            dependency_failures = [f"dependency-state-invalid:{exc}"]
+        if dependency_failures:
+            blocked.append({"stepId": step_id, "reasons": dependency_failures})
+            continue
+        try:
             command, reasons = _fresh_command(root, step_id, task)
         except (OSError, ValueError) as exc:
             blocked.append({"stepId": step_id, "reasons": [str(exc)]})
@@ -360,17 +436,29 @@ def resolve_step_next(root: Path) -> dict[str, Any]:
         if command is None:
             blocked.append({"stepId": step_id, "reasons": reasons})
             continue
-        candidates.append(
-            _candidate(
-                step_id=step_id,
-                task=task,
-                command=command,
-                source="fresh",
-                lifecycle=str(task["frontmatter"].get("status")),
-                downstream=downstream[step_id],
-                roadmap_index=roadmap_index[step_id],
-            )
+        # STEP NEXT selects a whole executable unit, not speculative PLAN.
+        # The internal action remains available to STEP RUN and explicit commands.
+        if not command.startswith(("STEP PLAN ", "STEP IMPLEMENT ", "STEP FIX ")):
+            blocked.append({"stepId": step_id, "reasons": ["unsupported-next-action"]})
+            continue
+        candidate = _candidate(
+            step_id=step_id,
+            task=task,
+            command=f"STEP RUN {step_id}",
+            source="fresh",
+            lifecycle=str(task["frontmatter"].get("status")),
+            downstream=downstream[step_id],
+            roadmap_index=roadmap_index[step_id],
         )
+        if command == f"STEP PLAN {step_id}":
+            candidate["planTiming"] = {
+                "mode": "just-in-time",
+                "refreshStaleReady": (
+                    isinstance(task["frontmatter"].get("plan"), dict)
+                    and task["frontmatter"]["plan"].get("status") == "ready"
+                ),
+            }
+        candidates.append(candidate)
 
     # Deduplicate exact command if same STEP is both execution + fresh.
     by_command: dict[str, dict[str, Any]] = {}
@@ -398,6 +486,17 @@ def resolve_step_next(root: Path) -> dict[str, Any]:
         }
 
     selected = ranked[0]
+    # Alternatives are for visibility, not a backlog of instructions to
+    # generate plans now. Any future PLAN/refresh is postponed until selected.
+    for alternative in ranked[1:]:
+        if alternative.get("planTiming") is not None:
+            alternative["planTiming"]["deferUntilSelected"] = True
+            alternative["planTiming"]["message"] = (
+                "Do not create or refresh this plan in advance; "
+                "architecture/requirements may change."
+            )
+    if selected.get("planTiming") is not None:
+        selected["planTiming"]["deferUntilSelected"] = False
     return {
         "schemaVersion": 1,
         "status": "PASS",
@@ -410,14 +509,17 @@ def resolve_step_next(root: Path) -> dict[str, Any]:
         "selected": selected,
         "eligibleCount": len(ranked),
         "blockedCount": len(blocked),
+        "blockers": blocked[:10],
         "alternatives": ranked[1:5],
         "rankingPolicy": [
+            "dependency-completion-gate",
             "resume-existing-execution",
             "in-progress-before-planned",
             "priority-critical-high-medium-low",
             "larger-transitive-downstream-impact",
             "risk-flag-count-for-visibility-only",
             "canonical-roadmap-order",
+            "plan-just-in-time-with-selected-step-only",
         ],
     }
 

@@ -165,3 +165,22 @@ python3 .harness/tools/run-stress-tests.py --iterations 20
 Stress manifest содержит только concurrency/process-sensitive scenarios; обычный regression suite не повторяется 20 раз. Failure/timeout любого scenario делает current lane FAIL. Автоматический retry отсутствует.
 
 Подробно: [`STRESS_SUITE.md`](STRESS_SUITE.md).
+
+### Диагностика self-tests при initialized downstream upgrade
+
+Initialized-upgrade qualification использует discoverable
+`run-self-tests.py --json` **в уже обновлённом disposable проекте**.
+При неудаче machine-readable stage `self-tests` сохраняет
+`testCount` и `failedSelfTests[]` с безопасными полями
+`test` (`*-self-test.py` basename), `status: FAIL|TIMEOUT` и
+`exitCode`. Невалидные имена/пути отбрасываются; raw stdout/stderr и
+содержимое project-owned файлов в evidence не копируются.
+
+CI в canonical source checkout не заменяет эту проверку: тот же
+self-test suite должен поддерживать initialized downstream с настоящим
+`lock.source.commit` и project-owned артефактами. Release snapshot
+запрещает `source.commit` отдельно в
+`maintainer-tools/scripts/release.py verify`, потому что commit snapshot
+до создания Git commit ещё неизвестен; установленный проект, напротив,
+обязан сохранить resolved source commit. Контекст нельзя определять по
+`GITHUB_REPOSITORY` внешнего GitHub Actions workflow.

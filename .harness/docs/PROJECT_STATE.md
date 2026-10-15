@@ -83,7 +83,9 @@ Evolution/freshness metadata для STEP:
 
 - `planFreshness: fresh | stale | not_ready | blocked | invalid`;
 - `planStaleCauses[]` — deterministic component causes из того же planning context, например `REQ@REQ-007 changed`;
-- `planRemediation` — exact next action, обычно `STEP PLAN STEP-NNN`.
+- `planRemediation: null` — массовое перепланирование через список запрещено;
+- `deferredPlanRemediation: STEP PLAN STEP-NNN` — только диагностика того, как обновить stale Ready **после выбора STEP**;
+- `planRefreshPolicy: when-selected-by-STEP-NEXT` — указывает, что DEFAULT recommendation — `STEP NEXT` → `STEP RUN`, а не самостоятельная генерация планов на будущее.
 
 Эти поля объясняют staleness, но не меняют lifecycle STEP и не создают отдельный state machine.
 

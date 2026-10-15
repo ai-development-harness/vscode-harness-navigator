@@ -33,12 +33,10 @@ description: Perform a read-only evidence-based audit of a STEP or subsystem aga
 
 ## Report
 
-Новый report сохраняй в configured `protocol.auditDirectory` как `AUDIT-YYYYMMDDTHHMMSSZ.md` с YAML frontmatter `schema: 1`, `kind: audit`.
-
-В human-readable части явно разделяй observed state/evidence, drift/findings, risk и corrective actions. Не объявляй отсутствие drift, если значимая часть target surface не была проверена.
-
-До завершения проверь report:
+Создавай report **только через deterministic writer**, не вручную. Подготовь semantic JSON с `scope: "STEP-NNN"` (точный target `STEP AUDIT`) и sections из текущего configured `protocol.auditDirectory/TEMPLATE.md`: `Sources checked`, `Actual state`, `Drift / findings`, `Evidence`, `Corrective actions`. Пустые секции и шаблонные `TBD` недопустимы. Details: `.harness/docs/REPORTING.md`.
 
 ```bash
-python3 .harness/tools/report_contract.py --file '<report-path>' --kind audit
+python3 .harness/tools/semantic-writer.py audit-report --execution-id '<executionId>' --payload-file '<local-json-or->'
 ```
+
+Writer вычисляет `created_at`, H1, `mode: audit` и путь, сохраняет immutable report и проверяет его. Только после writer `PASS` передай `complete SUCCESS`: dispatcher перепроверяет receipt именно текущей execution. **Наличие factual findings не является ошибкой schema отчёта.** При writer `BLOCKED` не утверждай успешное завершение и не меняй production code.

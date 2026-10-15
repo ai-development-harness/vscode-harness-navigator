@@ -131,3 +131,9 @@ Validator блокирует tracked/staged secret material: forbidden globs (ba
 - secrets scanning и provider security controls.
 
 Core Harness не должен зависеть от одного конкретного runtime hook: canonical safety logic остаётся в versioned runtime-neutral tools.
+
+## Report provenance и premature SUCCESS (#314–#317)
+
+При semantic командах, для которых обязательный результат — operational report, модель не является authority для подтверждения его наличия и валидности. Отдельные `PROJECT RECONCILE`, `STEP AUDIT`, `RELEASE CHECK`, `SKILL FIND` используют deterministic writer с immutable reservation, structural validator и bounded receipt в local Execution Status. Completion сверяет текущий executionId, exact command/kind, configured directory, SHA-256 bytes, canonical filename/time/sections и фактический source fingerprint под существующим state lock. Отсутствующий report, старый receipt и runtime-generated self-report не дают SUCCESS.
+
+Локальный receipt не является криптографической подписью от злоумышленника с правом изменять и report, и operational state. Не выдавать его за доказательство semantic истинности находок. Реальный audit drift фиксируется как finding внутри валидного report, а не как схема ошибки. Provider session/secret/chat transcript сюда не записываются. Crash между immutable reservation и записью receipt может оставить orphan report: его нельзя использовать для terminal PASS, но он не перезаписывается или не удаляется чужим writer.

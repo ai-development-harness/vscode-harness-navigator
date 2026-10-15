@@ -38,7 +38,14 @@ description: Run an independent read-only review of an exact repository revision
    - invalidated/unverified hypothesis **не является finding**, не должна запускать FIX и не требует отдельного durable artifact; при полезности кратко упомяни её в rationale;
    - не требуй regression test до подтверждения inferred scenario и не расширяй подтверждённый defect на экзотические adjacent cases без отдельного contract/evidence.
    Если STEP Acceptance содержит measurable performance claim либо Evidence Gate подтвердил performance finding, подключи internal `benchmark-methodology`. Проверь raw benchmark evidence deterministic tool-ом `.harness/tools/benchmark-methodology.py`: exact command/environment/revision, correctness counts, repeated samples, work proof, observed variation, bottleneck/sanity/end-to-end relevance. Один/два run или effect внутри observed variation дают `INCONCLUSIVE`, а не regression/improvement finding. Если performance Acceptance зависит от claim, reviewer не может выдать PASS при `INCONCLUSIVE`; `microbenchmark-only` evidence не доказывает end-to-end claim.
-   При `initial` или `full_explicit` сделай один полный semantic code-review проход exact revision. При `fix_delta` выполни **только** проверку закрытия прежних findings и прямых регрессий FIX; полный проход запрещён. Новое finding допустимо только если оно причинно связано с FIX и подтверждено Evidence Gate. Совпадение имени изменённого файла само по себе недостаточно. После закрытия findings и PASS обязательных gates завершай review немедленно; completion не является вторым code review.
+   При `initial` или `full_explicit` сделай один полный semantic code-review проход exact revision. При `fix_delta` делегированному lead/security/tests reviewer-у передавай **только ограниченный FIX patch** и исходные findings, без полного Acceptance checklist. Его ответ: `verdict`, closure каждого `previousFingerprint` с подтверждающим evidence, `findings[]` только о прямых регрессиях FIX, краткие verification observations. При обнаружении незакрытого finding верни FAIL, не проводи полный повторный аудит. Новое finding допустимо только если оно причинно связано с FIX и подтверждено Evidence Gate. Совпадение имени изменённого файла само по себе недостаточно. После закрытия findings и PASS обязательных gates заверши делегированное ревью немедленно.
+
+   **Короткий бриф для FIX-delta reviewer-а (целевой бюджет 2–3 минуты, не гарантия таймаута):**
+   1. Закрыты ли именно ранее зафиксированные fingerprints? Приложи concrete patch/test evidence для каждого.
+   2. Создал ли FIX прямую regression в изменённых строках или необходимом соседнем коде? Проверь минимальный reproducer, если требуется.
+   3. Прошли ли обязательные scoped security/tests gates и свежая Verification? Если proof отсутствует, сообщи BLOCKED, не делай новый аудит.
+
+   **Запрещены** повторные продуктовые мутации, пересчёт всей Acceptance-матрицы, повторный осмотр неизменённых модулей и расширение исследуемого scope без доказанной причинной связи. Core по-прежнему выполняет обязательные prechecks; бюджет является целью для reviewer-а, а не обходом этих проверок.
    При `fix_delta` добавь в top-level semantic writer payload поле `fixDeltaCausality` (object, ключи `F-NNN` нового review) только для **новых** findings. Для каждого значение — конкретное проверенное причинное объяснение со ссылкой на изменение FIX. Writer блокирует новые findings без этого proof или вне `changedPaths`; прежние fingerprints разрешены без нового доказательства. Отчёт с `PASS` не требует этого поля.
 6. Верни structured payload Review Contract v3:
    - `verdict: pass|fail|blocked`;
@@ -58,12 +65,14 @@ description: Run an independent read-only review of an exact repository revision
    - `verificationObservations`;
    - `rationale`;
    - `specializedReviews.security/tests` только для реально выполненных specialized reviews: `status + evidence`;
-   - при `verdict: pass` обязательно добавь `completion`:
+   - при `verdict: pass` **корневой агент (не делегированный fix_delta reviewer)** обязан собрать `completion` из детерминированного precheck, проверенного полного REVIEW и результатов ограниченного FIX-review:
      - `disposition: pass|fix|blocked`;
-     - `coverage[]` — exact criteria из `## Acceptance criteria`, status `covered|missing`, evidence;
-     - `assertions.requirementObligations / plannedScope / specializedObligations` — `covered|missing|not_applicable` + evidence;
+     - `coverage[]` — все exact criteria из `## Acceptance criteria`, status `covered|missing`, evidence. Делегированный `fix_delta` reviewer **не** пересчитывает эти пункты;
+     - `assertions.requirementObligations / plannedScope / specializedObligations` — `covered|missing|not_applicable` + evidence; root берёт прежнюю проверенную структуру, текущий plan/prerequisites и scoped reviewer observations, а не запускает второй code-review;
      - `findings[]` — structured `kind / criterion|null / message`; `id=COMP-NNN` и route writer присваивает детерминированно.
      `fix` допустим только для missing work внутри текущего scope; contract/prerequisite gap → `blocked`. Out-of-scope obligations не добавляй.
+
+   **FIX-delta reference reuse (#331).** Для критерия, которого FIX не касался, root вправе вместо повторного чтения кода дать `evidence: ["previous-review:<FULL_REVIEW_PATH>", "verification:<CURRENT_SUBJECT_CONTENT_HASH>"]`. Путь указывает на прошлый **полный** `initial/full_explicit` REVIEW того же STEP, а не на промежуточный `fix_delta` (writer безопасно проходит цепочку `sourceReport`); hash берётся из `completion-gate.py --json → verificationFreshness.subjectContentHash` **после FIX**. Для критерия, связанного с исправленным finding, обязательно **прямое post-FIX evidence** — старую ссылку туда не копируй. Если предыдущий полный REVIEW имел `FAIL`, reuse подтверждает только ранее просмотренный scope, а не выдуманный прежний `PASS`: все previous findings должны быть закрыты ограниченным reviewer-ом и подтверждены свежей Verification. Writer разрешает такую пару ссылок только в `fix_delta`, сверяет canonical review chain, current planning contract, **bytes полного REVIEW с реальным pre-FIX Git tree snapshot** и fresh Verification; затем обычный Completion Gate всё равно требует полный coverage и assertions. При отсутствии доказательства сообщи BLOCKED либо явно запроси `full_explicit`; не придумывай reference и не расширяй scope молча.
 
    `id` и `fingerprint` модель не придумывает: writer присваивает `F-NNN` и вычисляет stable `sha256:` fingerprint из factual identity finding. Title/prose formatting и repair wording не участвуют в identity, поэтому повтор того же дефекта после FIX распознаётся детерминированно.
 7. Categories:

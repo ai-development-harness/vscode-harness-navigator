@@ -14,6 +14,7 @@ from semantic_artifacts import (
     write_planning_review,
     write_step_review,
 )
+from operational_reports import write_operational_report
 
 
 def repo_root() -> Path:
@@ -137,6 +138,16 @@ def main() -> int:
             help="Use '-' for stdin or a regular JSON file under .harness/local/**; payload files are one-shot transport.",
         )
 
+    # Operational reports не имеют STEP-NNN positional argument: owner и
+    # command уже определены по executionId, а не из желания модели.
+    for action in ("audit-report", "release-report", "skill-search-report"):
+        item = sub.add_parser(action)
+        item.add_argument("--execution-id", required=True)
+        item.add_argument(
+            "--payload-file", required=True,
+            help="Semantic JSON from stdin '-' or .harness/local/**",
+        )
+
     args = parser.parse_args()
     root = repo_root()
     payload_path: Path | None = None
@@ -150,8 +161,17 @@ def main() -> int:
             result = write_plan_draft(root, args.step_id, payload)
         elif args.action == "planning-review":
             result = write_planning_review(root, args.step_id, payload)
-        else:
+        elif args.action == "step-review":
             result = write_step_review(root, args.step_id, payload)
+        else:
+            kinds = {
+                "audit-report": "audit",
+                "release-report": "release_check",
+                "skill-search-report": "skill_search",
+            }
+            result = write_operational_report(
+                root, kinds[args.action], payload, execution_id=args.execution_id,
+            )
 
         # Payload — transport, а не recovery/evidence. После нормального возврата
         # deterministic writer он больше не нужен независимо от semantic verdict.

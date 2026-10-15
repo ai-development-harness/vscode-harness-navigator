@@ -416,8 +416,8 @@ check_utf8 = true
 # Требовать ли финальный newline в проверяемых text files.
 # Пример: true улучшает diff/tool compatibility.
 check_final_newline = true
-# Запрещать ли trailing whitespace в проверяемых text files.
-# Пример: true.
+# Запрещать ли trailing whitespace и пустые строки в конце проверяемых text files.
+# Пример: true блокирует лишнюю пустую строку до публикации, как git diff --check.
 check_trailing_whitespace = true
 # Проверять ли tracked и staged files (включая binary) на secret material.
 # Пример: true блокирует PEM/PGP/OpenSSH private keys и токены AWS/GitHub/GitLab/Slack.
