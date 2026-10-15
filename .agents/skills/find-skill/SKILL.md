@@ -15,5 +15,11 @@ description: Discover and inspect repository skills matching a natural-language 
 5. Отбрасывай кандидатов, которые невозможно нормально инспектировать, которые явно конфликтуют с repository protocol или содержат очевидно опасное/скрытое поведение.
 6. Оцени кандидатов по: релевантности задаче, совместимости с Agent Skills/SKILL.md, качеству workflow, поддерживаемости/provenance, license и safety.
 7. Верни не более `skills.search.maxResults` кандидатов. Для каждого укажи: номер, название, owner/repo, точный путь, ссылку, краткое назначение, сильные стороны, ограничения/риски, license (если удалось определить), activity/provenance signal и итоговую рекомендацию.
-8. Сохрани schema-v1 результат как `SKILL-SEARCH-YYYYMMDDTHHMMSSZ.md` в configured `protocol.skillSearchDirectory` по template; не используй hardcoded `planning/skill-searches`. До завершения проверь конкретный файл: `python3 .harness/tools/report_contract.py --file '<report-path>' --kind skill_search`. Невалидный shortlist нельзя использовать для `SKILL INSTALL: #N`.
+8. Сформируй semantic payload для deterministic writer: `query` — **точный** исходный текст после `SKILL FIND:`, `candidates[]` с проверенными repository/path/URL/ref/license/risk и `sections` из configured `protocol.skillSearchDirectory/TEMPLATE.md` (кроме `Candidates`: список нумерует сам writer). Не придумывай технические YAML поля, UTC, `candidate_count` и имя файла. Пример: `.harness/docs/REPORTING.md`.
+
+   ```bash
+   python3 .harness/tools/semantic-writer.py skill-search-report --execution-id '<executionId>' --payload-file '<local-json-or->'
+   ```
+
+   Writer проверяет canonical template/report contract и сохраняет execution-bound receipt. Только после writer `PASS` передай `complete SUCCESS`, Core повторно проверит exact report. Ошибочный shortlist нельзя использовать для `SKILL INSTALL: #N`.
 9. Ничего не устанавливай и не обновляй registry/routing. В конце предложи либо `SKILL INSTALL: #N`, либо `SKILL CREATE: <описание>`, если достойного кандидата нет.

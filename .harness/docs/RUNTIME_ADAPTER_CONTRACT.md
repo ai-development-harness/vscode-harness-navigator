@@ -46,6 +46,46 @@ Provider-neutral adapter обязан реализовать эквивален�
 
 Конкретный transport может быть CLI process, App Server, SDK или иной provider mechanism. От этого canonical Harness command semantics не меняются.
 
+## Бесшовное переключение Claude Code ↔ Codex (#286)
+
+Runtime Adapter **не владеет состоянием STEP**. Важно разделять:
+
+1. **Новая canonical команда.** Claude Code выполнил `STEP PLAN STEP-042`,
+   затем Codex выполняет `STEP IMPLEMENT STEP-042`. Это независимые
+   команды Harness. Provider metadata предыдущей сессии, версия CLI и
+   session handle **не проверяются** и не требуют ручной миграции.
+2. **Восстановление прерванной команды.** При `HARNESS RESUME` control plane
+   сначала проверяет существующие intent/recovery/side-effect guards.
+   Если продолжение безопасно, любой runtime может запустить новую нативную
+   сессию с контекстом из authoritative Harness state и проектных артефактов.
+3. **Повторное использование нативной сессии.** Это только оптимизация внутри
+   *того же* provider. Она допустима, если adapter наблюдает валидный handle,
+   совместимое окружение и поддерживаемый `resume`. Если этих доказательств
+   нет — **fresh session**, а не лишний blocker для STEP.
+
+Валидация этого решения доступна в `plan_session_entry()` из
+`.harness/tools/runtime_adapter_contract.py`. Это deterministic contract helper
+для runtime-клиентов; он **не запускает Claude/Codex** и не подменяет
+`execution_status.py` или command dispatcher. Команда/клиент передаёт уже
+проверенный `canonical_reentry_safe` для interrupted recovery; новый
+`PLAN → IMPLEMENT` вообще не нуждается в этом параметре.
+
+| Что происходит | Решение adapter |
+| --- | --- |
+| PLAN в Claude → IMPLEMENT в Codex | `start`, никаких дополнительных действий |
+| FIX в Codex → REVIEW в Claude | `start`, прежний review/verification contract сохраняется |
+| Прерванный IMPLEMENT, переход Claude → Codex, canonical recovery допустим | `start` с контекстом Harness; не использовать Claude session handle |
+| Тот же runtime, совместимая нативная сессия | `resume` |
+| Та же модель, handle устарел или compatibility неизвестна | `start` с контекстом Harness |
+| Необязательный MCP отключён | Не блокировать, пока конкретная команда его не требует |
+| Недоступен именно обязательный инструмент | `blocked` с указанием capability |
+| Нет доказательства безопасного continuation (intent/side effect) | `blocked` по canonical recovery, независимо от runtime |
+
+Machine contract объявляет `crossRuntimeCommands=seamless`,
+`nativeSessionReuse=best-effort` и `runtimeChangeInvalidatesIntent=false`.
+Не добавлять provider ID/model/version/session handle в STEP/REQ/ADR/PLAN
+fingerprints; native session metadata не переносится между providers.
+
 ## Capabilities
 
 Contract v1 фиксирует следующие capability keys:

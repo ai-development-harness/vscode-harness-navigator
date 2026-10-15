@@ -227,3 +227,29 @@ Hypothesis — рабочее рассуждение reviewer, а не repositor
 Canonical writer fail-closed отвергает v3 finding без evidence basis, без evidence или с outcome, отличным от `confirmed`.
 
 Historical Review Contract v1/v2 reports остаются immutable history. Однако новый `STEP FIX` требует свежий evidence-gated v3 review, чтобы старый report не обходил Evidence Gate.
+
+## Актуальность Verification при squash merge
+
+Новый `Verification PASS` сохраняет `Subject content hash` — SHA-256
+содержимого фактически проверяемого Git working tree (tracked + неигнорируемые
+untracked files), включая пути, права исполнения, symlinks и submodule HEAD.
+Это отдельный факт от `Subject git head` и `Subject worktree hash`, которые
+остаются в Evidence для диагностики.
+
+Проверка содержимого не меняется только из-за `git commit`, `git commit --amend`,
+`squash merge` или `rebase`. При изменении фактического source/config,
+связанных контрактов или Verification command content доказательство
+должно устареть. Generated STEP Evidence, immutable reports, локальное
+execution state и детерминированные проекции не являются частью
+проверяемого исходного содержимого: их инварианты защищены отдельными
+validator-ами.
+
+Для новых независимых REVIEW записывается
+`reviewed_subject_content_hash`. Восстановление completed STEP требует как
+актуального Verification PASS, так и REVIEW именно того же содержимого;
+свежий Verification для уже изменённого кода **не делает старый REVIEW актуальным**.
+
+Старые Evidence/REVIEW без нового поля сохраняют прежнюю строгость проверки:
+если точное старое Git-состояние уже недоступно после squash, догадка о
+совпадении запрещена. Новые записи не изменяют исторические отчёты задним
+числом.

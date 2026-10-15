@@ -24,7 +24,7 @@ description: Bootstrap a new repository from the configured local brief into a d
    ```bash
    python3 .harness/tools/planning-state.py init-basis requirements
    ```
-   Сохрани immutable schema-v1 report `INIT-REVIEW-<UTC timestamp>.md` в configured `protocol.initReviewDirectory` по template с `reviewer_role: reviewer`. PASS обязан ссылаться на текущий basis. Если остаётся существенное contradiction/missing decision — создай canonical OQ с `affects: PROJECT` либо prerequisite work и верни BLOCKED.
+   Сохрани immutable schema-v1 report `INIT-REVIEW-<UTC timestamp>.md` в configured `protocol.initReviewDirectory` по **актуальному проектному `TEMPLATE.md`**, с `reviewer_role: reviewer`. Не придумывай другую структуру, не используй hardcoded каталог. PASS обязан ссылаться на текущий basis. Если остаётся существенное contradiction/missing decision — создай canonical OQ с `affects: PROJECT` либо prerequisite work и верни BLOCKED.
 8. Перед roadmap проверь candidate Project Principles: создавай PRN только для global cross-cutting engineering invariant, применимого к множеству будущих решений. Product behavior оставляй в REQ, конкретный architecture choice — в ADR, coding-style preference — в обычных project instructions. Applicable blocking PRN нельзя обходить без explicit approved deviation.
 9. Перед roadmap выполни architecture completeness pass по подтверждённым brief/REQ/Accepted ADR: системные boundaries/ownership, persistence/migrations/compatibility, API/protocol contracts, security/trust boundaries, async/state/concurrency, extension/integration contracts, observability/recovery и deployment/update constraints. Неприменимые измерения не выдумывай. Material missing durable decision оформи как ADR prerequisite или OPEN OQ с `affects: PROJECT`; не прячь неизвестность в будущий STEP.
 10. Для architecture-sensitive baseline передай requirements + architecture context отдельному read-only `architect` agent/session. Его задача — найти hidden coupling, incompatible boundary и missing durable decision до roadmap. Material unresolved issue => BLOCKED.
@@ -33,7 +33,7 @@ description: Bootstrap a new repository from the configured local brief into a d
    ```bash
    python3 .harness/tools/planning-state.py init-basis roadmap
    ```
-   Сохрани второй immutable INIT report с `stage: roadmap`.
+   Сохрани второй immutable INIT report с `stage: roadmap` по тому же canonical INIT template. Нельзя считать создание Markdown достаточным без проверки: `validate.py` и финальный `finalize-project-init.py` должны подтвердить оба отчёта.
 13. Обеспечь двустороннюю traceability REQ↔STEP и ADR↔STEP. Project-level OPEN OQ нельзя обходить.
 14. Пересобери tracked projections:
     ```bash

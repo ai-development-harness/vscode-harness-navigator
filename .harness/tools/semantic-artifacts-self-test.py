@@ -8,8 +8,9 @@ import shutil
 import subprocess
 import tempfile
 
-from command_dispatch import start_dispatch
+from command_dispatch import complete_dispatch, start_dispatch, resume_dispatch
 from execution_status import (
+    begin_command,
     block_execution,
     complete_command,
     implementation_baseline_for_step,
@@ -18,9 +19,11 @@ from execution_status import (
     review_expectation_for_step,
     stamp_review_expectation,
     start_execution,
+    unresolved_executions,
 )
 from planning_contract import read_task, validate_planning_contracts, validate_planning_review_report
 from review_contract import repository_revision, validate_review_report
+from step_next import resolve_step_next
 from review_gates import required_reviewers
 from step_context import build_step_context
 from verification import run_step_verification
@@ -703,6 +706,19 @@ def main() -> int:
             },
         }
 
+        # #321: ранее запущенная STEP-chain осталась на IMPLEMENT. Поздняя
+        # независимая REVIEW завершит тот же STEP, но не эту root invocation.
+        stale_root = (
+            "STEP PLAN STEP-001 > STEP IMPLEMENT STEP-001 > STEP REVIEW STEP-001"
+        )
+        stale_chain = start_execution(root, stale_root)
+        complete_command(root, stale_root, "STEP PLAN STEP-001", "SUCCESS")
+        stale_chain = begin_command(
+            root, stale_root, "STEP IMPLEMENT STEP-001",
+            expected_execution_id=stale_chain["executionId"],
+        )
+        assert stale_chain["current"]["status"] == "running", stale_chain
+
         # Regression #83: reviewer видел exact R1. Изменение bytes того же path
         # после handoff не меняет path-set, но обязано invalid-нуть expectation
         # по repositoryRevision; stale verdict не должен породить report.
@@ -781,6 +797,55 @@ def main() -> int:
         # review. Recovery must still prove PASS from new report + completion proof.
         recovered = resolve_root(root, "STEP REVIEW STEP-001")
         assert recovered["status"] == "DONE", recovered
+
+        # Проверенная product surface осталась прежней. Сначала commit
+        # переносит untracked/staged данные в HEAD, затем amend (squash-like)
+        # меняет SHA ещё раз — оба события не должны возобновлять IMPLEMENT.
+        from document_contract import parse_document
+        from verification import verification_freshness, verification_subject_content_hash
+
+        report_meta = parse_document(review_report)["frontmatter"]
+        original_content_hash = verification_subject_content_hash(root, "STEP-001")
+        assert report_meta["reviewed_subject_content_hash"] == original_content_hash
+        assert verification_freshness(root, "STEP-001")["fresh"] is True
+        run(root, "git", "add", "-A")
+        run(root, "git", "commit", "-qm", "completed STEP lifecycle")
+        run(root, "git", "commit", "--amend", "-qm", "squashed STEP lifecycle")
+        assert verification_subject_content_hash(root, "STEP-001") == original_content_hash
+        assert verification_freshness(root, "STEP-001")["fresh"] is True
+
+        # STEP NEXT не делает side effects и не показывает stale IMPLEMENT как
+        # безопасную рекомендацию. Явное RESUME reconciles исходный executionId.
+        state_file = root / ".harness/local/execution/execution-status.json"
+        before_next = state_file.read_bytes()
+        next_step = resolve_step_next(root)
+        assert next_step.get("command") != stale_root, next_step
+        assert all(
+            item.get("command") != "STEP IMPLEMENT STEP-001"
+            for item in unresolved_executions(root, mutate=False)
+            if item.get("status") in {"RESUME", "NEXT"}
+        )
+        assert state_file.read_bytes() == before_next
+        resumed = resume_dispatch(root, stale_root)
+        assert resumed["status"] == "DONE", resumed
+        assert resumed["reasonCode"] == "STEP_ALREADY_COMPLETED", resumed
+        assert state_file.read_bytes() != before_next
+
+        # Повторный вызов old root не должен запускать новый semantic IMPLEMENT.
+        resumed_again = resume_dispatch(root, stale_root)
+        assert resumed_again["status"] == "DONE", resumed_again
+
+        # Поздний semantic SUCCESS старого executionId нельзя принять и нельзя
+        # запускать для него повторную Verification или перезаписывать Evidence.
+        evidence_before = step_path.read_bytes()
+        stale_completion = complete_dispatch(
+            root, stale_root, "STEP IMPLEMENT STEP-001", "SUCCESS",
+            execution_id=stale_chain["executionId"],
+        )
+        assert stale_completion["status"] == "BLOCKED", stale_completion
+        assert step_path.read_bytes() == evidence_before
+
+
 
         before = set((root / "planning/reviews/STEP-001").glob("REVIEW-*.md"))
         try:

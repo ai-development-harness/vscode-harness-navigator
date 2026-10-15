@@ -2,8 +2,9 @@
 """Deterministic UX queries/control commands for AI Development Harness.
 
 Модуль намеренно не содержит LLM reasoning и не меняет product artifacts.
-HARNESS RESUME разрешает существующий execution и возвращает exact handoff,
-но сам не создаёт новый root execution.
+HARNESS RESUME продолжает существующую local execution или безопасно
+выбирает новый STEP PLAN из Git-handoff. Отдельной root invocation с
+именем HARNESS RESUME не создаётся.
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from harness_config import (
     task_directory,
 )
 from planning_contract import read_task
+from portable_resume import portable_resume_candidate
 from projection_contract import write_projections
 from review_contract import latest_review
 from step_next import resolve_step_next
@@ -190,6 +192,21 @@ def harness_resume(root: Path) -> dict[str, Any]:
                 "remediation": selected.get("remediation"),
                 "intent": selected.get("intent") or selected.get("blocker"),
             }
+        # Переносимый handoff — дополнительная возможность, а не замена
+        # существующей local-only семантики. В проекте с local history или
+        # без опубликованного handoff оставляем прежний ответ API.
+        if not items:
+            portable = portable_resume_candidate(root)
+            if portable.get("reasonCode") not in {
+                "PORTABLE_LOCAL_HISTORY_PRESENT",
+                "NO_RESUMABLE_EXECUTION",
+                # На ещё не инициализированном шаблоне или без Git репозитория
+                # опубликованного handoff быть не может. До Portable Resume
+                # интерфейс возвращал NO_RESUMABLE_EXECUTION: сохраняем контракт.
+                "PROJECT_NOT_INITIALIZED",
+                "GIT_UNAVAILABLE",
+            }:
+                return portable
         return {
             "status": "BLOCKED",
             "reasonCode": "NO_RESUMABLE_EXECUTION",
@@ -413,6 +430,13 @@ def _step_title(document: dict[str, Any], step_id: str) -> str:
     return h1[len(prefix):].strip() if isinstance(h1, str) and h1.startswith(prefix) else ""
 
 
+def _project_relative_path(root: Path, path: Path) -> str:
+    """Вернуть путь внутри проекта, учитывая Windows 8.3-имена и символьные ссылки."""
+    # Windows может передать root как RUNNER~1, а task_directory — как runneradmin.
+    # Канонизируем обе стороны до проверки вложенности; выход за пределы проекта всё ещё запрещён.
+    return path.resolve().relative_to(root.resolve()).as_posix()
+
+
 def step_list(root: Path) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -447,8 +471,20 @@ def step_list(root: Path) -> dict[str, Any]:
             "planStatus": (meta.get("plan") or {}).get("status") if isinstance(meta.get("plan"), dict) else None,
             "planFreshness": freshness.get("status"),
             "planStaleCauses": freshness.get("causes", []),
-            "planRemediation": freshness.get("action"),
-            "path": path.relative_to(root).as_posix(),
+            # The diagnostic action may be STEP PLAN, but STEP LIST is a
+            # broad inventory, not an instruction to replan all stale items.
+            # Actual actionable guidance belongs to STEP NEXT (STEP RUN).
+            "planRemediation": None,
+            "deferredPlanRemediation": freshness.get("action"),
+            "planRefreshPolicy": "when-selected-by-STEP-NEXT",
+            "planTimingWarning": (
+                "Do not plan or replan this STEP in advance. "
+                "Run STEP NEXT and use STEP RUN when it becomes eligible; "
+                "REQ/ADR/architecture changes can invalidate a future plan."
+                if freshness.get("status") in {"stale", "not_ready", "invalid", "blocked"}
+                else None
+            ),
+            "path": _project_relative_path(root, path),
         })
     rows.sort(key=lambda item: int(str(item["id"]).split("-")[1]))
     return {
@@ -496,10 +532,10 @@ def step_show(root: Path, step_id: str) -> dict[str, Any]:
             "riskFlags": meta.get("risk_flags", []),
             "latestReview": None if review is None else {
                 "verdict": review.get("verdict"),
-                "path": review["path"].relative_to(root).as_posix(),
+                "path": _project_relative_path(root, review["path"]),
             },
             "executions": executions,
-            "path": document["path"].relative_to(root).as_posix(),
+            "path": _project_relative_path(root, document["path"]),
         },
     }
 

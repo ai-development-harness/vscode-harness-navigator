@@ -31,7 +31,7 @@ Candidate identity читается **из exact candidate tree**:
 - `.harness/harness.lock.json → release/source.ref`;
 - `.harness/harness-update-graph.json → latest`.
 
-Runner требует `source.ref == v<release>` и `graph.latest == source.ref`. Обычный feature commit со старой release metadata получает `CANDIDATE_NOT_RELEASE_PREPARED`.
+Runner требует `source.ref == v<release>` и `graph.latest == source.ref`. Дополнительно проверяется, что **accepted canary baseline установлен на непосредственно предыдущем stable** (последний входящий release в candidate update graph). Более старый canary возвращает `CANARY_BASELINE_NOT_PREVIOUS_STABLE` ещё до мутаций; переход через промежуточную версию не заменяет проверку с уже установленной предыдущей. Обычный feature commit со старой release metadata получает `CANDIDATE_NOT_RELEASE_PREPARED`.
 
 Это важно: qualification предыдущего stable → candidate должна проверять именно тот tree, который готовится к распространению.
 

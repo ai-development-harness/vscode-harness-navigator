@@ -416,8 +416,8 @@ Read-only:
 2. Resolver возвращает **все** unresolved executions, независимо от namespace.
 3. Незавершённый STEP-related execution имеет приоритет над стартом нового STEP, но не блокирует явно запрошенные пользователем независимые Git/Project/Harness commands.
 4. При нескольких interrupted STEP executions выбрать один по dependencies/priority/risk/critical path и явно указать остальные.
-5. Если STEP-related unresolved executions нет, исключить completed/cancelled и blocked hard dependencies.
-6. Вернуть один основной STEP, причину и точную canonical command.
+5. До ranking **для всех** fresh и resumable STEP candidates проверить type-specific completion proof всех hard dependencies; незавершённый или недоказуемый prerequisite исключает кандидата независимо от priority и sourceRank. Не удалять прерванный execution при блокировке. Read-only preview не должен создавать local lock, переносить state v1 на диск или финализировать REVIEW/STEP; доказанно завершённый PLAN нельзя повторно рекомендовать как незавершённую semantic работу.
+6. Исключить completed/cancelled, а также STEP с другими объективными blockers (OQ/ADR/phase, stale Ready plan). Для fresh candidate вернуть `STEP RUN STEP-NNN`; для безопасного восстановления — **исходный rootCommand** существующей execution, с сохранением `executionId` и отдельным информационным `nextChildCommand`. Если read-only просмотр выявил завершённый PLAN, сначала выполнить mutating durable reconciliation root через dispatcher/RESUME; не выдавать IMPLEMENT как новую независимую пользовательскую команду. Независимые STEP допускаются вне порядка номеров.
 7. Valid Plan basis может доказать завершённый PLAN после crash; не повторять planning только из-за новой session.
 
 ## 16. `PROJECT RECONCILE`

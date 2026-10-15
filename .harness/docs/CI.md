@@ -6,11 +6,13 @@
 
 Workflow: `.github/workflows/harness-integrity.yml`.
 
+Все три задания Harness Integrity имеют лимит 15 минут, чтобы полный набор проверок успевал завершиться на загруженном runner.
+
 Validator написан на Python и использует только standard library. Минимальная версия — Python 3.11+, потому что структурная проверка TOML опирается на `tomllib`. Это осознанная небольшая tooling dependency Harness, а не зависимость будущего продукта.
 
 Bash не используется как реализация validator: текущие проверки требуют корректного TOML parsing, работы с Git index, glob/path semantics, UTF-8/binary content и структурой skills/configs. Перенос в shell либо ослабил бы эти проверки, либо добавил внешние parser dependencies. Docker также не является обязательным runtime, чтобы локальная validation не зависела от daemon/image/network.
 
-В GitHub Actions версия Python задаётся явно через `actions/setup-python`, а runner закреплён (`ubuntu-24.04`), поэтому CI не меняется молча при смене `ubuntu-latest`.
+В GitHub Actions версия Python задаётся явно через `actions/setup-python`. Для Linux jobs по умолчанию используется закреплённый `ubuntu-24.04`, но пользователь может выбрать свой runner через `HARNESS_LINUX_RUNS_ON`. Windows job остаётся на `windows-2025`.
 
 Workflow запускает baseline validator, public CLI smoke checks и единый discoverable regression runner:
 
@@ -72,6 +74,32 @@ Baseline validator также детерминированно проверяе�
 Проверяются только invariants Harness/repository hygiene. Этот workflow **не должен** пытаться угадать project-specific `test`, `lint`, `typecheck`, `build` или deploy commands.
 
 После `PROJECT INIT` проект добавляет отдельные CI workflows, когда реальные команды известны из repository tooling. Они могут быть связаны с STEP Verification/Release Check, но Harness Integrity остаётся независимым structural gate.
+
+## Настройка Linux runner
+
+По умолчанию Linux-задания `validate-harness` и `validate-python-minimum` запускаются на GitHub-hosted `ubuntu-24.04`. Чтобы использовать свой self-hosted runner, открой настройки **своего репозитория**: `Settings → Secrets and variables → Actions → Variables → New repository variable`.
+
+Имя переменной: `HARNESS_LINUX_RUNS_ON`.
+
+Значение — корректный JSON, описывающий GitHub Actions `runs-on`. Для self-hosted runner с метками `self-hosted`, `linux`, `x64`, `harness`:
+
+```json
+["self-hosted", "linux", "x64", "harness"]
+```
+
+Все перечисленные метки должны одновременно присутствовать у зарегистрированного runner. Названия пользовательских меток зависят от твоей настройки сервера. Если runner находится в группе `Default` и доступен этому репозиторию, группу отдельно указывать не нужно.
+
+В качестве альтернативы для GitHub-hosted runner допустима JSON-строка:
+
+```json
+"ubuntu-24.04"
+```
+
+Workflow использует `fromJSON(vars.HARNESS_LINUX_RUNS_ON || '"ubuntu-24.04"')`: отсутствие или пустое значение переменной возвращает исходный `ubuntu-24.04`. Некорректный JSON вызывает ошибку конфигурации job — GitHub не подменяет его значением по умолчанию. Не записывай массив меток без JSON-кавычек.
+
+Это настройка только **Linux jobs** Harness Integrity. Задание `validate-windows-boundaries` продолжает использовать `windows-2025`, чтобы Windows-проверки не выполнялись на Linux. На своём Linux runner необходимо обеспечить доступность платформы Linux и зависимостей GitHub Actions; Python 3.13/3.11 устанавливаются через `actions/setup-python`.
+
+**Безопасность:** не запускай недоверенные внешние Pull Requests на постоянных self-hosted runners, имеющих доступ к серверу или секретам. Для публичного проекта используй изолированные одноразовые runners или оставь GitHub-hosted runner для такого кода.
 
 ## Локальный запуск
 

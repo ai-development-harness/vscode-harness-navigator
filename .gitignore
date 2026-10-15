@@ -6,6 +6,8 @@ AGENTS.local.md
 CLAUDE.local.md
 # Local runtime state Harness и runtime adapters (execution status, journals, Git inputs).
 .harness/local/
+# Локальный признак ранее созданного checkpoint: переживает потерю .harness/local.
+.harness/.execution-checkpoint-known
 .codex/local/
 .claude/local/
 .claude/settings.local.json

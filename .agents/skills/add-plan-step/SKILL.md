@@ -8,7 +8,7 @@ description: Convert a short user request into a versioned, traceable, dependenc
 
 - Сначала semantic duplicate/overlap search по canonical STEP/REQ.
 - ID = следующий после максимального когда-либо использованного; формат `STEP-001+`, верхнего предела нет, дырки не переиспользуются.
-- Создай STEP schema v1 в configured `protocol.taskDirectory`.
+- Создай STEP schema v1 в configured `protocol.taskDirectory` по **проектному `TEMPLATE.md`** в этом каталоге; именно template + `planning_contract` являются структурным контрактом, не копируй структуру STEP из памяти.
 - Machine frontmatter:
   - `status: planned`;
   - protocol-English `type` / `priority`;

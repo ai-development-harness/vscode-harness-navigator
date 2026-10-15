@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -109,7 +110,7 @@ def _git_show(root: Path, revision: str, path: str) -> bytes:
     return proc.stdout
 
 
-def _candidate_identity(source: Path, candidate_sha: str) -> tuple[str, str, str]:
+def _candidate_identity(source: Path, candidate_sha: str) -> tuple[str, str, str, str]:
     exact_sha = _resolve_commit(source, candidate_sha)
     try:
         lock = json.loads(
@@ -145,6 +146,30 @@ def _candidate_identity(source: Path, candidate_sha: str) -> tuple[str, str, str
             f"candidate graph latest {graph.get('latest')!r} != {tag!r}",
         )
 
+    # Canary должен представлять НЕМЕДЛЕННО предыдущий stable, а не просто
+    # любой старый release. Иначе multi-hop update скроет несовместимость
+    # с проектами, которые уже эксплуатируются на previous stable.
+    edges = graph.get("transitions")
+    if not isinstance(edges, list):
+        raise QualificationError("CANDIDATE_GRAPH_INVALID", "transitions must be a list")
+    previous_tags = {
+        edge.get("from")
+        for edge in edges
+        if isinstance(edge, dict)
+        and edge.get("to") == tag
+        and isinstance(edge.get("from"), str)
+        and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", edge["from"]) is not None
+    }
+    if not previous_tags:
+        raise QualificationError(
+            "PREVIOUS_STABLE_NOT_FOUND",
+            f"candidate {tag} has no incoming stable transition",
+        )
+    previous_stable = max(
+        previous_tags,
+        key=lambda value: tuple(int(n) for n in value[1:].split(".")),
+    )
+
     policy_raw = _git_show(
         source,
         exact_sha,
@@ -166,7 +191,7 @@ def _candidate_identity(source: Path, candidate_sha: str) -> tuple[str, str, str
             "candidate source.default_branch must be non-empty string",
         )
     default_branch = default_branch.strip()
-    return exact_sha, tag, default_branch
+    return exact_sha, tag, default_branch, previous_stable
 
 
 def _baseline_tag(project: Path) -> str:
@@ -445,11 +470,18 @@ def qualify(
         candidate_host_status = _status(candidate_source)
         if candidate_host_status:
             raise QualificationError("CHECKOUT_NOT_CLEAN", "candidate source checkout is dirty")
-        exact_candidate, candidate_tag, default_branch = _candidate_identity(
+        exact_candidate, candidate_tag, default_branch, previous_stable = _candidate_identity(
             candidate_source,
             candidate_sha,
         )
         baseline_tag = _baseline_tag(baseline_project)
+        if baseline_tag != previous_stable:
+            raise QualificationError(
+                "CANARY_BASELINE_NOT_PREVIOUS_STABLE",
+                f"canary is {baseline_tag}, but release candidate {candidate_tag} "
+                f"must be qualified from immediately previous stable {previous_stable}; "
+                "promote the accepted canary baseline first",
+            )
         protected_before = _capture_protected(baseline_project)
 
         with tempfile.TemporaryDirectory(prefix="harness-upgrade-qualification-") as td:
@@ -495,14 +527,53 @@ def qualify(
                 ),
                 (
                     "self-tests",
-                    [sys.executable, ".harness/tools/run-self-tests.py"],
+                    [sys.executable, ".harness/tools/run-self-tests.py", "--json"],
                 ),
             ]
             for stage_id, command in checks:
                 proc, item = _stage(stage_id, command, cwd=work)
+
+                # On failures expose only canonical test names/statuses,
+                # never raw stdout/stderr (which may contain project secrets).
+                # run-self-tests.py --json is an existing deterministic CLI.
+                if stage_id == "self-tests":
+                    try:
+                        details = json.loads(proc.stdout)
+                    except json.JSONDecodeError:
+                        details = None
+                    if isinstance(details, dict) and isinstance(details.get("results"), list):
+                        failed = []
+                        for record in details["results"]:
+                            if not isinstance(record, dict) or record.get("status") == "PASS":
+                                continue
+                            name = record.get("test")
+                            status = record.get("status")
+                            exit_code = record.get("exitCode")
+                            if not (isinstance(name, str)
+                                    and re.fullmatch(r"[A-Za-z0-9_-]+-self-test\.py", name)):
+                                continue
+                            if status not in {"FAIL", "TIMEOUT"}:
+                                continue
+                            if isinstance(exit_code, bool) or (
+                                exit_code is not None and not isinstance(exit_code, int)
+                            ):
+                                continue
+                            failed.append({
+                                "test": name, "status": status, "exitCode": exit_code,
+                            })
+                        item["testCount"] = details.get("count")
+                        item["failedSelfTests"] = failed[:100]
+
                 stages.append(item)
                 if proc.returncode != 0:
-                    raise QualificationError("POST_UPDATE_GATE_FAILED", stage_id)
+                    suffix = ""
+                    if stage_id == "self-tests" and item.get("failedSelfTests"):
+                        suffix = ": " + ", ".join(
+                            record["test"] for record in item["failedSelfTests"]
+                        )
+                    raise QualificationError(
+                        "POST_UPDATE_GATE_FAILED", stage_id + suffix,
+                    )
 
             protected_after = _capture_protected(work)
             if protected_after != protected_before:
@@ -560,6 +631,7 @@ def qualify(
             "status": "PASS",
             "baselineRevision": baseline_after,
             "baselineRelease": baseline_tag,
+            "expectedPreviousStable": previous_stable,
             "candidateRevision": exact_candidate,
             "candidateRelease": candidate_tag,
             "migration": migration,

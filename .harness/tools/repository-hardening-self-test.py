@@ -49,13 +49,13 @@ def copy_tracked(target: Path) -> None:
     init_git(target)
 
 
-def validate(root: Path) -> subprocess.CompletedProcess[str]:
+def validate(root: Path, mode: str = "manual") -> subprocess.CompletedProcess[str]:
     return run(
         root,
         "python3",
         ".harness/tools/validate.py",
         "--mode",
-        "manual",
+        mode,
         check=False,
     )
 
@@ -64,6 +64,33 @@ def require_failure(proc: subprocess.CompletedProcess[str], needle: str) -> None
     assert proc.returncode != 0, proc.stdout
     combined = proc.stdout + "\n" + proc.stderr
     assert needle in combined, combined
+
+
+def test_managed_text_eof(root: Path) -> None:
+    """Пустая строка в конце managed-файла блокируется до публикации релиза."""
+    rel = ".harness/docs/eof-regression.txt"
+    target = root / rel
+    # Promotion v0.12.0 остановился на Git-проверке уже после публикации.
+    # Проверяем тот же дефект во всех режимах validator, сохраняя допустимые LF/CRLF.
+    for mode in ("manual", "ci", "commit"):
+        for content in (b"", b"text\n", b"text\r\n", b"text\n\nparagraph\n"):
+            target.write_bytes(content)
+            run(root, "git", "add", rel)
+            proc = validate(root, mode)
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+        for content in (b"text\n\n", b"text\n\n\n", b"text\r\n\r\n", b"\n"):
+            target.write_bytes(content)
+            run(root, "git", "add", rel)
+            require_failure(validate(root, mode), f"blank line at EOF: {rel}")
+    run(root, "git", "rm", "-q", "-f", rel)
+
+    # Проверка ограничена format_paths: формат проектных файлов не меняется.
+    outside = "docs/eof-project.txt"
+    (root / outside).write_bytes(b"project\n\n")
+    run(root, "git", "add", outside)
+    proc = validate(root)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    run(root, "git", "rm", "-q", "-f", outside)
 
 
 def test_initialized_project_fixture_isolation(root: Path) -> None:
@@ -205,6 +232,8 @@ def main() -> int:
 
         baseline = validate(root)
         assert baseline.returncode == 0, baseline.stdout + baseline.stderr
+
+        test_managed_text_eof(root)
 
         # Regression #110: Markdown setext H1 (`=======`) не merge-conflict marker,
         # а настоящий conflict block по-прежнему блокируется.

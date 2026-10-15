@@ -93,6 +93,62 @@ Writer присваивает stable `COMP-001...` и route:
 Coverage criterion обязан буквально принадлежать `## Acceptance criteria`;
 out-of-scope obligation добавить нельзя.
 
+### Scoped `fix_delta`: разделение review и completion (#331)
+
+Повторный review **не является** повторным полным аудитом. При `fixReview.mode=fix_delta`
+независимому lead/security/tests reviewer передают bounded
+`sourceReport + previousFingerprints + exact FIX patch + changedPaths`.
+Его задача — закрыть конкретные прошлые findings, проверить прямые
+регрессии FIX и scoped проверки. Не поручайте ему повторно перечислять
+все Acceptance criteria или пересчитывать неизменённую реализацию.
+Для этого предусмотрен короткий трёхпунктовый бриф в
+`.agents/skills/review-step/SKILL.md`.
+
+**Корневой агент**, после scoped review, собирает прежний полный
+`completion` payload, используя canonical Acceptance list из
+`completion-gate.py --json`, ранее просмотренный полный REVIEW и
+**свежую Verification после FIX**. Для незатронутого критерия разрешены
+строго две machine-checkable ссылки:
+
+```json
+{
+  "criterion": "Existing API behavior remains correct.",
+  "status": "covered",
+  "evidence": [
+    "previous-review:planning/reviews/STEP-017/REVIEW-20261015T080000Z.md",
+    "verification:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ]
+}
+```
+
+Путь — только canonical immutable review того **же** STEP с полным
+`initial/full_explicit` scope. Даже если предыдущий full REVIEW завершился
+`FAIL`, он доказывает **объём ранее проведённой проверки**, а не
+успешное выполнение требований. Поэтому закрытие прежних findings
+и прямое post-FIX evidence для **затронутых** критериев остаются
+обязательными; такие критерии нельзя закрывать только ссылкой на
+предыдущий REVIEW. Для других критериев ссылка позволяет избежать
+повторного чтения/пересчёта кода.
+
+Writer разрешает ссылочную пару только при `fix_delta` и проверяет:
+canonical parent full REVIEW, цепочку `sourceReport` (включая повторные
+FIX cycles), **байты full REVIEW против pre-FIX Git tree**, тот же
+`planning_context_basis`, свежий `verification_freshness=PASS` и
+точный `subjectContentHash` после FIX. Hash источника и текущая
+Verification сохраняются в `coverageReuseProof` **внутри durable
+Completion convergence JSON**. Historical report validator повторно
+проверяет bytes ссылочного отчёта, не требуя current Verification для
+старых исторических reports.
+
+Это не автоматическая раздача `covered`: каждый критерий и все
+`assertions` по-прежнему должны явно присутствовать в Completion
+Contract, на затронутые критерии root приводит **новое** evidence,
+а результат `PASS` определяется только существующим deterministic
+Completion Gate. Если old full REVIEW отсутствует, contract устарел,
+Verification stale или ownership нельзя доказать, writer возвращает
+`BLOCKED`. Не расширяйте scoped reviewer до full pass без явного
+`full_explicit`.
+
 Отдельные assertions заставляют reviewer явно проверить linked REQ obligations,
 существенные Ready plan actions и specialized/NFR obligations, не сводя
 completion только к списку AC.

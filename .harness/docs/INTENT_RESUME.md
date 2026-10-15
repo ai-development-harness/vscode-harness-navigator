@@ -231,6 +231,13 @@ execution переводится в `blocked`, а result сохраняет exac
 Повтор exact interrupted command проходит тот же guard и не обходит его новым
 runtime/session.
 
+Если локальной execution нет, проверенный Git-backed handoff может разрешить
+только создание новой локальной `STEP PLAN` на другом компьютере.
+Это **не восстановление старой Intent Basis**: новый snapshot строится по
+текущим canonical artifacts. Старый `Ready`/planning-review не закрывает
+новую PLAN — требуется её собственный reviewed report и revision.
+См. [PORTABLE_RESUME.md](PORTABLE_RESUME.md).
+
 ## Interaction with authority contract
 
 [STATE_AUTHORITY.md](STATE_AUTHORITY.md) определяет, что model/runtime только
@@ -288,3 +295,8 @@ Unknown future Intent Basis schema также остаётся читаемой,
 
 Implementation issue:
 https://github.com/ai-development-harness/ai-development-harness-template/issues/203
+
+
+## Portable Intent Basis (#302)
+
+Нельзя копировать Intent Basis чужой машины. В новом clone fresh PLAN фиксирует текущие canonical REQ/ADR/STEP/OQ/PRN, а любое изменение смысла после handoff блокирует восстановление до новой публикации. Отдельный кодовый commit после снимка также устаревает: семантические hashes сами по себе не доказывают отсутствие новой реализации. Верификация, FIX/REVIEW и внешние эффекты остаются локальными и проверяются отдельными gates. См. [PORTABLE_RESUME.md](PORTABLE_RESUME.md).

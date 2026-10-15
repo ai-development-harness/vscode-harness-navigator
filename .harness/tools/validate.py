@@ -1275,7 +1275,12 @@ def validate_repository_surface(
             if policy.get("check_final_newline", True) and raw and not raw.endswith(b"\n"):
                 errors.append(f"missing final newline: {rel}")
             if policy.get("check_trailing_whitespace", True):
-                for n, line in enumerate(text.splitlines(), 1):
+                lines = text.splitlines()
+                # Наличие final newline не исключает пустую строку после текста.
+                # Ловим её до публикации: иначе promotion падает на git diff --check.
+                if lines and not lines[-1]:
+                    errors.append(f"blank line at EOF: {rel}:{len(lines)}")
+                for n, line in enumerate(lines, 1):
                     if line.rstrip(" \t") != line:
                         errors.append(f"trailing whitespace: {rel}:{n}")
                         break

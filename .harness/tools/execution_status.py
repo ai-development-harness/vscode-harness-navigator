@@ -36,6 +36,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import tempfile
 import threading
@@ -84,6 +85,9 @@ from side_effect_recovery import validate_checkpoint as validate_side_effect_che
 # STEP, Git, Harness update и остальные namespaces.
 STATUS_PATH = ".harness/local/execution/execution-status.json"
 LOCK_PATH = ".harness/local/execution/execution-status.lock"
+# Маркер находится вне disappearing .harness/local, иначе его потеря
+# не отличалась бы от fresh checkout. Файл local-only и Git-ignored.
+CHECKPOINT_MARKER_PATH = ".harness/.execution-checkpoint-known"
 UPDATE_JOURNAL_PATH = ".harness/local/update-journal/journal.json"
 UPDATE_JOURNAL_DIR = ".harness/local/update-journal"
 UPDATE_TRANSACTION_ENV = "HARNESS_UPDATE_TRANSACTION"
@@ -149,6 +153,130 @@ def empty_status() -> dict[str, Any]:
     }
 
 
+class PortableRevisionChanged(ValueError):
+    """HEAD переместился после Git-handoff, до atomic local execution start."""
+
+    code = "HANDOFF_HEAD_CHANGED"
+
+
+class ExecutionCheckpointError(ValueError):
+    """Причина невозможности безопасного чтения persisted execution state.
+
+    Отсутствие state допускает новую сессию. Любой другой сбой не должен
+    превратиться в пустую историю команд и потерять recovery proofs.
+    """
+
+    def __init__(self, kind: str, message: str):
+        self.kind = kind
+        self.code = "EXECUTION_STATE_" + kind
+        super().__init__(f"execution-status: {self.code}: {message}")
+
+
+def _checkpoint_marker_exists(root: Path) -> bool:
+    """Есть ли независимый маркер хотя бы одной успешной попытки записи state."""
+    marker = root / CHECKPOINT_MARKER_PATH
+    try:
+        info = marker.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise ExecutionCheckpointError(
+            "UNAVAILABLE", f"cannot inspect checkpoint marker: {exc}",
+        ) from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise ExecutionCheckpointError(
+            "INCOMPATIBLE", f"checkpoint marker is not a regular file: {marker}",
+        )
+    try:
+        content = marker.read_bytes()
+    except OSError as exc:
+        raise ExecutionCheckpointError(
+            "UNAVAILABLE", f"cannot read checkpoint marker: {exc}",
+        ) from exc
+    if content != b"checkpoint-ever-written-v1\n":
+        raise ExecutionCheckpointError(
+            "INCOMPATIBLE", "checkpoint marker content is invalid",
+        )
+    return True
+
+
+def _mark_checkpoint_known(root: Path) -> None:
+    """Зафиксировать прошлое существование state *перед* первой записью.
+
+    Если создание JSON сорвётся, остаёмся fail-closed: следующий запуск
+    не вправе предположить, что состояние было совершенно пустым.
+    """
+    if _checkpoint_marker_exists(root):
+        return
+    marker = root / CHECKPOINT_MARKER_PATH
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with marker.open("xb") as fh:
+            fh.write(b"checkpoint-ever-written-v1\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+    except FileExistsError:
+        if not _checkpoint_marker_exists(root):
+            raise ExecutionCheckpointError(
+                "UNAVAILABLE", "checkpoint marker appeared concurrently",
+            )
+    except OSError as exc:
+        raise ExecutionCheckpointError(
+            "UNAVAILABLE", f"cannot persist checkpoint marker: {exc}",
+        ) from exc
+
+
+def _fresh_start_allowed(root: Path) -> bool:
+    """Нет файла: разрешить fresh state только если его раньше не создавали."""
+    if _checkpoint_marker_exists(root):
+        raise ExecutionCheckpointError(
+            "UNAVAILABLE",
+            "checkpoint disappeared after prior execution; restore local "
+            "state or reconcile side effects before starting again",
+        )
+    return False
+
+
+def _checkpoint_exists(root: Path) -> bool:
+    """Отличить настоящий fresh start от недоступного/опасного пути state.
+
+    Path.is_file() возвращает False и для dangling symlink, и для директории:
+    трактовать это как отсутствие checkpoint небезопасно. Проверяем lexical
+    layout: symlink внутри служебного каталога тоже нельзя разыменовывать.
+    """
+    parent = root
+    for part in Path(STATUS_PATH).parts[:-1]:
+        parent = parent / part
+        try:
+            info = parent.lstat()
+        except FileNotFoundError:
+            # У пропавшего родительского каталога может быть история.
+            return _fresh_start_allowed(root)
+        except OSError as exc:
+            raise ExecutionCheckpointError(
+                "UNAVAILABLE", f"cannot inspect state directory {parent}: {exc}",
+            ) from exc
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise ExecutionCheckpointError(
+                "INCOMPATIBLE", f"state directory is not a real directory: {parent}",
+            )
+
+    path = status_path(root)
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return _fresh_start_allowed(root)
+    except OSError as exc:
+        raise ExecutionCheckpointError(
+            "UNAVAILABLE", f"cannot inspect checkpoint {path}: {exc}",
+        ) from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise ExecutionCheckpointError(
+            "INCOMPATIBLE", f"checkpoint is not a regular file: {path}",
+        )
+    return True
+
+
 def _process_lock(key: str) -> threading.RLock:
     """Вернуть process-local reentrant lock для одного project state path."""
     with _PROCESS_LOCKS_GUARD:
@@ -168,7 +296,23 @@ def execution_state_lock(root: Path):
     helpers вызывают друг друга и resolver recovery может записать state внутри
     уже открытой transaction.
     """
+    # Проверяем путь до создания/advisory lock: иначе symlink parent мог бы
+    # отправить даже lock-файл за пределы project operational storage.
+    _checkpoint_exists(root)
     lock_path = root / LOCK_PATH
+    try:
+        lock_info = lock_path.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise ExecutionCheckpointError(
+            "UNAVAILABLE", f"cannot inspect checkpoint lock: {exc}",
+        ) from exc
+    else:
+        if not stat.S_ISREG(lock_info.st_mode):
+            raise ExecutionCheckpointError(
+                "INCOMPATIBLE", f"checkpoint lock is not a regular file: {lock_path}",
+            )
     key = str(lock_path.resolve())
     process_lock = _process_lock(key)
 
@@ -1008,6 +1152,44 @@ def _validate_execution_record(
                     prefix=f"{prefix}: current.context.intentBasis",
                 )
             )
+            # Portable PLAN provenance хранится в local Execution Status и
+            # не должен становиться невалидным, но всё ещё «читаемым» маркером.
+            # Отрицательные значения или неизвестная структура — CORRUPTED.
+            if "portablePlanProofBefore" in context:
+                proof = context["portablePlanProofBefore"]
+                if (
+                    not isinstance(proof, dict)
+                    or set(proof) != {"reviewedReport", "revision"}
+                    or not isinstance(proof.get("reviewedReport"), str)
+                    or not proof["reviewedReport"]
+                    or not isinstance(proof.get("revision"), int)
+                    or isinstance(proof.get("revision"), bool)
+                    or proof["revision"] < 0
+                ):
+                    errors.append(
+                        f"{prefix}: current.context.portablePlanProofBefore invalid"
+                    )
+            # Writer-bound report receipt живёт внутри той же execution:
+            # произвольный JSON не должен превращаться в доказательство PASS.
+            if "operationalReport" in context:
+                receipt = context["operationalReport"]
+                keys = {"kind", "command", "executionId", "path", "sha256", "subjectHash"}
+                if (
+                    not isinstance(receipt, dict)
+                    or set(receipt) != keys
+                    or receipt.get("kind") not in {"audit", "release_check", "skill_search"}
+                    or receipt.get("executionId") != execution_id
+                    or receipt.get("command") != current.get("command")
+                    or not isinstance(receipt.get("path"), str)
+                    or not receipt["path"]
+                    or receipt["path"].startswith("/")
+                    or ".." in Path(receipt["path"]).parts
+                    or not isinstance(receipt.get("sha256"), str)
+                    or re.fullmatch(r"[a-f0-9]{64}", receipt["sha256"]) is None
+                    or not isinstance(receipt.get("subjectHash"), str)
+                    or re.fullmatch(r"sha256:[a-f0-9]{64}", receipt["subjectHash"]) is None
+                ):
+                    errors.append(f"{prefix}: current.context.operationalReport invalid")
             errors.extend(
                 _details_errors(
                     context.get("intentBasisError"),
@@ -1324,41 +1506,73 @@ def _migrate_status_v1(value: dict[str, Any]) -> dict[str, Any]:
 
 # Прочитать local state, fail-closed validate и при необходимости атомарно
 # мигрировать legacy v1. PROJECT RECONCILE здесь намеренно не участвует.
-def load_status(root: Path) -> dict[str, Any]:
+def load_status(root: Path, *, read_only: bool = False) -> dict[str, Any]:
+    """Читать checkpoint fail-closed; preview не создаёт lock или marker.
+
+    Old status.json without marker remains compatible. Mutating path registers
+    marker before writing so a subsequent lost checkpoint is not treated as
+    a fresh project. Read-only mode never mutates Git-private state.
+    """
     path = status_path(root)
-    with execution_state_lock(root):
-        if not path.is_file():
+
+    def read() -> dict[str, Any]:
+        if not _checkpoint_exists(root):
             return empty_status()
         try:
             with path.open("r", encoding="utf-8") as fh:
                 value = json.load(fh)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError(f"execution-status: cannot parse JSON: {exc}") from exc
-        # Не-object root (array/string) — повреждённый state, а не AttributeError (#117).
+            raise ExecutionCheckpointError(
+                "CORRUPTED", f"cannot parse checkpoint JSON: {exc}",
+            ) from exc
+        except OSError as exc:
+            raise ExecutionCheckpointError(
+                "UNAVAILABLE", f"cannot read checkpoint: {exc}",
+            ) from exc
         if not isinstance(value, dict):
-            raise ValueError("execution-status: root must be a JSON object")
+            raise ExecutionCheckpointError("CORRUPTED", "checkpoint root must be an object")
+        if value.get("schemaVersion") not in {
+            LEGACY_STATUS_SCHEMA_VERSION, STATUS_SCHEMA_VERSION,
+        }:
+            raise ExecutionCheckpointError(
+                "INCOMPATIBLE",
+                f"unsupported schemaVersion {value.get('schemaVersion')!r}",
+            )
 
         if value.get("schemaVersion") == LEGACY_STATUS_SCHEMA_VERSION:
             errors = _validate_v1_status(value)
             if errors:
-                raise ValueError("; ".join(errors))
-            migrated = _migrate_status_v1(value)
-            compacted = _compact_status(root, migrated)
+                raise ExecutionCheckpointError("CORRUPTED", "; ".join(errors))
+            compacted = _compact_status(root, _migrate_status_v1(value))
             errors = _validate_v2_status(compacted)
             if errors:
-                raise ValueError("; ".join(errors))
-            _atomic_write_json(path, compacted)
+                raise ExecutionCheckpointError("CORRUPTED", "; ".join(errors))
+            if not read_only:
+                _mark_checkpoint_known(root)
+                _atomic_write_json(path, compacted)
             return compacted
 
         errors = _validate_v2_status(value)
         if errors:
-            raise ValueError("; ".join(errors))
+            raise ExecutionCheckpointError("CORRUPTED", "; ".join(errors))
+        if not read_only:
+            _mark_checkpoint_known(root)
         return value
 
+    if read_only:
+        _require_update_transaction_access(root)
+        return read()
+    with execution_state_lock(root):
+        return read()
 
 
 # Записать JSON crash-safe способом через temporary file, fsync и atomic os.replace. Это защищает от половины файла при process/session crash.
-def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
+def _atomic_write_json(
+    path: Path,
+    value: dict[str, Any],
+    *,
+    allow_initial_creation: bool = False,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = json.dumps(value, ensure_ascii=False, indent=2) + "\n"
     fd, tmp_name = tempfile.mkstemp(
@@ -1372,6 +1586,22 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
             fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
+        # При первой записи маркер уже существует, но status JSON ещё нет.
+        # Для всех остальных операций исчезновение файла — ошибка recovery.
+        if allow_initial_creation:
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                raise ExecutionCheckpointError(
+                    "UNAVAILABLE", "checkpoint appeared during initial creation",
+                )
+        else:
+            if not _checkpoint_exists(path.parents[3]):
+                raise ExecutionCheckpointError(
+                    "UNAVAILABLE", "checkpoint vanished before atomic replacement",
+                )
         os.replace(tmp, path)
     finally:
         if tmp.exists():
@@ -1507,15 +1737,28 @@ def _compact_status(root: Path, value: dict[str, Any]) -> dict[str, Any]:
     return status
 
 
+@execution_state_mutation
 def save_status(root: Path, value: dict[str, Any]) -> None:
-    """Compact + validate + atomic write current local execution state."""
+    """Compact + validate + atomic write current local execution state.
+
+    Даже прямой вызов public writer не вправе перезаписать битое или
+    недоступное существующее состояние. Caller обычно уже читал state
+    под lock, но повторная проверка защищает самостоятельные вызовы API.
+    """
+    load_status(root)
+    creating = not _checkpoint_exists(root)
     compacted = _compact_status(root, value)
     errors = _validate_v2_status(compacted)
     if errors:
         raise ValueError("; ".join(errors))
     value.clear()
     value.update(compacted)
-    _atomic_write_json(status_path(root), value)
+    _mark_checkpoint_known(root)
+    _atomic_write_json(
+        status_path(root),
+        value,
+        allow_initial_creation=creating,
+    )
 
 
 
@@ -1950,7 +2193,13 @@ def _command_context(
 
 # Зарегистрировать новый root invocation либо resume уже running invocation с тем же normalized rootCommand.
 @execution_state_mutation
-def start_execution(root: Path, raw_command: str) -> dict[str, Any]:
+def start_execution(
+    root: Path,
+    raw_command: str,
+    *,
+    require_fresh_clone: bool = False,
+    expected_git_head: str | None = None,
+) -> dict[str, Any]:
     normalized = _normalize_root(root, raw_command)
 
     # Первый executable segment не имеет incoming CTS edge, поэтому его
@@ -1965,6 +2214,25 @@ def start_execution(root: Path, raw_command: str) -> dict[str, Any]:
         if failures:
             raise ValueError("command precondition failed: " + "; ".join(failures))
 
+    # Переносимый handoff не вправе переиспользовать ни один local checkpoint:
+    # даже полностью compacted/empty state означает уже использованный clone.
+    # Проверка делается здесь ПОД OS-lock вместе с созданием execution,
+    # а не только в read-only preflight (защита от concurrent local starts).
+    if require_fresh_clone and _checkpoint_exists(root):
+        raise ExecutionCheckpointError(
+            "INCOMPATIBLE",
+            "portable adoption requires a new clone without prior local execution state",
+        )
+    # Даже после повторной read-only проверки снимка HEAD может измениться
+    # до сохранения новой invocation. Проверка действует под execution-state
+    # lock; новый context не может создаться поверх уже другой revision.
+    if require_fresh_clone and (
+        not isinstance(expected_git_head, str)
+        or _git_head(root) != expected_git_head
+    ):
+        raise PortableRevisionChanged(
+            "Git HEAD changed after portable handoff validation"
+        )
     status = load_status(root)
 
     # Повтор той же root command после session interruption должен resume
@@ -2050,6 +2318,27 @@ def start_execution(root: Path, raw_command: str) -> dict[str, Any]:
         current_command,
         baseline,
     )
+    if require_fresh_clone:
+        # Старый Ready PLAN, доставленный через Git, НЕ является доказательством
+        # завершения нового PLAN. Запоминаем его verified immutable report
+        # ДО новой semantic работы, чтобы completion мог отличить новый proof.
+        parsed = normalize_single_command(root, current_command)
+        if parsed.get("domain") != "STEP" or parsed.get("operation") != "PLAN":
+            raise ValueError("portable fresh start only supports STEP PLAN")
+        task = read_planning_task(root, str(parsed["target"]))
+        before_plan = task["frontmatter"].get("plan")
+        if (
+            not isinstance(before_plan, dict)
+            or before_plan.get("status") != "ready"
+            or not isinstance(before_plan.get("reviewed_report"), str)
+            or not isinstance(before_plan.get("revision"), int)
+            or isinstance(before_plan.get("revision"), bool)
+        ):
+            raise ValueError("portable PLAN requires a previously reviewed Ready plan")
+        execution["current"]["context"]["portablePlanProofBefore"] = {
+            "reviewedReport": before_plan["reviewed_report"],
+            "revision": before_plan["revision"],
+        }
     _initialize_progress(root, execution, current_command)
     status["executions"].append(execution)
     save_status(root, status)
@@ -2919,17 +3208,79 @@ def latest_review(root: Path, step_id: str, *, require_current_revision: bool = 
     )
     if item is None:
         return None
+    document = item.get("document")
+    meta = document.get("frontmatter", {}) if isinstance(document, dict) else {}
     return {
         "path": _repo_relative(root, item["path"]),
         "verdict": item["verdict"],
         "completionResult": item.get("completionResult"),
+        "reviewedContentHash": meta.get("reviewed_subject_content_hash"),
     }
 
 
 # Попробовать доказать completion running command по durable artifacts и тем самым закрыть crash-window между фактом и local checkpoint.
+def portable_plan_recheck_proven(
+    root: Path,
+    execution: dict[str, Any],
+) -> bool | None:
+    """Canonical proof, что именно НОВАЯ переносимая PLAN прошла review.
+
+    None означает обычную локальную PLAN без portable marker. Для portable
+    False запрещает как crash recovery, так и semantic SUCCESS: старый
+    опубликованный Ready-план не должен становиться новым PASS.
+    """
+    current = execution.get("current")
+    context = current.get("context") if isinstance(current, dict) else None
+    if not isinstance(context, dict) or "portablePlanProofBefore" not in context:
+        return None
+    previous = context["portablePlanProofBefore"]
+    if not isinstance(previous, dict):
+        return False
+    before_report = previous.get("reviewedReport")
+    before_revision = previous.get("revision")
+    if (
+        not isinstance(before_report, str)
+        or not isinstance(before_revision, int)
+        or isinstance(before_revision, bool)
+    ):
+        return False
+    try:
+        parsed = normalize_single_command(root, str(current["command"]))
+        if parsed.get("domain") != "STEP" or parsed.get("operation") != "PLAN":
+            return False
+        step_id = str(parsed["target"])
+        plan = read_planning_task(root, step_id)["frontmatter"].get("plan")
+        if not isinstance(plan, dict) or plan.get("status") != "ready":
+            return False
+        revision = plan.get("revision")
+        reviewed = plan.get("reviewed_report")
+        if (
+            not isinstance(revision, int)
+            or isinstance(revision, bool)
+            or revision <= before_revision
+            or not isinstance(reviewed, str)
+            or not reviewed
+            or reviewed == before_report
+        ):
+            return False
+        matching = latest_matching_planning_review(root, step_id)
+        return (
+            matching is not None
+            and matching["path"].resolve().relative_to(root.resolve()).as_posix() == reviewed
+            # Новый PASS должен принадлежать этой локальной execution;
+            # independent review другого clone/эпизода не закрывает её.
+            and matching["document"]["frontmatter"].get("execution_id")
+            == execution.get("executionId")
+        )
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError):
+        return False
+
+
 def _durable_recovery_result(
     root: Path,
     execution: dict[str, Any],
+    *,
+    allow_finalization: bool = True,
 ) -> str | None:
     current = execution["current"]
     if current.get("status") != "running":
@@ -2943,6 +3294,10 @@ def _durable_recovery_result(
         if target:
             try:
                 if plan_info(root, target)["ready"]:
+                    # У portable PLAN старый Ready + старый review уже
+                    # существовали ДО начала текущей execution.
+                    if portable_plan_recheck_proven(root, execution) is False:
+                        return None
                     return "SUCCESS"
             except (OSError, ValueError, FileNotFoundError):
                 return None
@@ -2965,6 +3320,16 @@ def _durable_recovery_result(
                     if completion_result in {"FAIL", "BLOCKED"}:
                         return completion_result
                     if completion_result == "PASS":
+                        if not allow_finalization:
+                            # Пока STEP не закрыт, завершение REVIEW нельзя
+                            # объявить успешным без записи lifecycle/projections.
+                            # Read-only preview оставляет точный RESUME, который
+                            # уже в записывающем режиме доведёт close до конца.
+                            try:
+                                proof = step_completion_proof(root, target)
+                            except (OSError, ValueError, FileNotFoundError):
+                                return None
+                            return "PASS" if proof["complete"] else None
                         finalized = finalize_step_completion(root, target)
                         return "PASS" if finalized.get("completed") else "BLOCKED"
                     # Historical PASS без Completion Contract автоматически
@@ -2986,6 +3351,8 @@ def _durable_recovery_result(
                     task["frontmatter"].get("status") == "completed"
                     and proof.get("complete") is True
                 ):
+                    if not allow_finalization:
+                        return "PASS"
                     finalized = finalize_step_completion(root, target)
                     return "PASS" if finalized.get("completed") else "BLOCKED"
 
@@ -3034,13 +3401,175 @@ def _apply_recovered_completion(
 
 
 
+
+def _completed_step_recovery(root: Path, execution: dict[str, Any]) -> dict[str, Any] | None:
+    """Resolve an obsolete STEP cursor against canonical completion, never status alone.
+
+    A completed STEP is not permission to replay IMPLEMENT (or to overwrite
+    Verification Evidence).  Freshness and the latest review are checked before
+    deciding whether the old execution may be retired without any product work.
+    """
+    current = execution.get("current") or {}
+    if current.get("status") != "running":
+        return None
+    parsed = normalize_single_command(root, str(current.get("command") or ""))
+    if parsed.get("domain") != "STEP" or parsed.get("operation") not in {"IMPLEMENT", "FIX", "REVIEW"}:
+        return None
+    step_id = parsed.get("target")
+    if not isinstance(step_id, str):
+        return None
+    # Существующий REVIEW recovery может иметь более сильный durable proof
+    # собственного отчёта. Не подменяем его общим guard-ом completed STEP:
+    # особенно после изменения Git HEAD, когда старый Evidence hash устаревает.
+    if parsed.get("operation") == "REVIEW":
+        durable = _durable_recovery_result(
+            root, execution, allow_finalization=False,
+        )
+        if durable is not None:
+            return None
+    try:
+        task = read_planning_task(root, step_id)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if task["frontmatter"].get("status") != "completed":
+        return None
+
+    blocker = {
+        "reasonCode": "COMPLETED_STEP_RECOVERY_CONFLICT",
+        "message": "Local running command conflicts with an already completed STEP.",
+        "stepId": step_id,
+        "remediation": (
+            f"Inspect STEP {step_id} canonical completion, Verification and review; "
+            "reconcile the interrupted execution without rerunning IMPLEMENT."
+        ),
+    }
+    try:
+        from verification import verification_freshness
+
+        proof = step_completion_proof(root, step_id)
+        verification = verification_freshness(root, step_id)
+        review = latest_review(root, step_id, require_current_revision=False)
+        review_hash = review.get("reviewedContentHash") if review else None
+        current_hash = verification.get("subjectContentHash")
+        # Новый report доказывает exact contents независимо от squash SHA.
+        # Legacy report без такого hash допускается только с прежним строгим
+        # exact-revision guard; догадка по STEP status небезопасна.
+        reviewed_subject_current = (
+            review_hash == current_hash
+            if isinstance(review_hash, str) and review_hash
+            else latest_review(root, step_id, require_current_revision=True) is not None
+        )
+        valid = (
+            proof.get("complete") is True
+            and verification.get("status") == "PASS"
+            and verification.get("fresh") is True
+            and review is not None
+            and review.get("verdict") == "PASS"
+            and review.get("completionResult") == "PASS"
+            and reviewed_subject_current
+        )
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        blocker["details"] = {"proofError": str(exc)}
+        return {"kind": "blocked", "blocker": blocker}
+    if not valid:
+        blocker["details"] = {
+            "proofReasons": proof.get("reasons"),
+            "verification": verification.get("reasonCode"),
+            "review": review.get("verdict") if review else None,
+            "reviewedSubjectCurrent": reviewed_subject_current,
+        }
+        return {"kind": "blocked", "blocker": blocker}
+
+    # Другой активный запуск того же STEP делает происхождение завершения
+    # неоднозначным. Не выбираем победителя по времени или имени отчёта.
+    try:
+        checkpoint = load_status(root, read_only=True)
+        competing = []
+        for other in checkpoint.get("executions", []):
+            if other.get("executionId") == execution.get("executionId"):
+                continue
+            if other.get("status") != "running":
+                continue
+            other_current = other.get("current")
+            if not isinstance(other_current, dict) or other_current.get("status") != "running":
+                continue
+            other_command = normalize_single_command(root, str(other_current.get("command") or ""))
+            if other_command.get("domain") == "STEP" and other_command.get("target") == step_id:
+                competing.append(other.get("executionId"))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        blocker["details"] = {"executionStateError": str(exc)}
+        return {"kind": "blocked", "blocker": blocker}
+    if competing:
+        blocker["details"] = {"competingExecutions": competing}
+        return {"kind": "blocked", "blocker": blocker}
+
+    # A homogeneous STEP chain can be retired because the final canonical
+    # lifecycle was already proved. Never skip Git or another STEP in a chain.
+    sequence = execution.get("sequence") or [execution.get("rootCommand")]
+    try:
+        same_step = all(
+            (part := normalize_single_command(root, command)).get("domain") == "STEP"
+            and part.get("target") == step_id
+            and part.get("operation") in {"PLAN", "IMPLEMENT", "FIX", "REVIEW", "RUN"}
+            for command in sequence
+        )
+    except (ValueError, TypeError):
+        same_step = False
+    if not same_step:
+        return {"kind": "blocked", "blocker": blocker}
+    return {
+        "kind": "reconciled",
+        "stepId": step_id,
+        "proofHash": proof.get("proof_hash"),
+        "review": review.get("path"),
+    }
+
+
+def _apply_completed_step_recovery(
+    root: Path,
+    status: dict[str, Any],
+    execution: dict[str, Any],
+    decision: dict[str, Any],
+) -> None:
+    """Retire only this invocation under the existing execution-state lock."""
+    current = execution["current"]
+    current["status"] = "complete"
+    current["result"] = "SUCCESS"
+    current["completedAt"] = utc_now()
+    current["recoveredFromDurableState"] = True
+    current["recovery"] = {
+        "reasonCode": "STEP_ALREADY_COMPLETED",
+        "stepId": decision["stepId"],
+        "proofHash": decision["proofHash"],
+        "review": decision["review"],
+    }
+    execution["notExecuted"] = (
+        execution.get("sequence", [])[int(execution.get("currentIndex") or 0) + 1:]
+        if execution.get("mode") == "chain" else []
+    )
+    _mark_root_complete(execution)
+    save_status(root, status)
+
+
 # Главный deterministic resolver одной root execution: RESUME running command либо NEXT/DONE/BLOCKED по mode и CTS.
-@execution_state_mutation
 def resolve_execution(
     root: Path,
     execution: dict[str, Any],
     *,
     mutate: bool = True,
+) -> dict[str, Any]:
+    """Записывающий resolve сериализуется; read-only не создаёт lock-файла."""
+    if mutate:
+        with execution_state_lock(root):
+            return _resolve_execution_inner(root, execution, mutate=True)
+    return _resolve_execution_inner(root, execution, mutate=False)
+
+
+def _resolve_execution_inner(
+    root: Path,
+    execution: dict[str, Any],
+    *,
+    mutate: bool,
 ) -> dict[str, Any]:
     if execution.get("status") == "complete":
         return {
@@ -3071,6 +3600,34 @@ def resolve_execution(
 
     current = execution["current"]
     if current.get("status") == "running":
+        completed_decision = _completed_step_recovery(root, execution)
+        if completed_decision is not None:
+            if completed_decision["kind"] == "reconciled":
+                if mutate:
+                    status = load_status(root)
+                    stored = _latest_execution(
+                        status, execution_id=execution["executionId"],
+                    )
+                    if stored is not None and stored.get("status") == "running":
+                        _apply_completed_step_recovery(root, status, stored, completed_decision)
+                return {
+                    "status": "DONE",
+                    "executionId": execution["executionId"],
+                    "rootCommand": execution["rootCommand"],
+                    "command": None,
+                    "reasonCode": "STEP_ALREADY_COMPLETED",
+                    "recovery": completed_decision,
+                }
+            blocker = completed_decision["blocker"]
+            if mutate:
+                status = load_status(root)
+                stored = _latest_execution(
+                    status, execution_id=execution["executionId"],
+                )
+                if stored is not None and stored.get("status") == "running":
+                    _apply_intent_blocker(stored, blocker)
+                    save_status(root, status)
+            return _intent_blocked_resolution(execution, blocker)
         blocker = _intent_resume_blocker(root, execution)
         if blocker is not None:
             if mutate:
@@ -3087,16 +3644,37 @@ def resolve_execution(
 
         # Базовое правило: running => RESUME той же command. Только узкий набор
         # доказуемых durable facts имеет право автоматически закрыть crash-window.
-        recovered = _durable_recovery_result(root, execution)
-        if recovered is not None and mutate:
-            status = load_status(root)
-            stored = _latest_execution(
-                status,
-                execution_id=execution["executionId"],
-            )
-            if stored is not None:
-                _apply_recovered_completion(root, status, stored, recovered)
-                return resolve_execution(root, stored, mutate=False)
+        recovered = _durable_recovery_result(
+            root, execution, allow_finalization=mutate,
+        )
+        if recovered is not None:
+            if mutate:
+                status = load_status(root)
+                stored = _latest_execution(
+                    status,
+                    execution_id=execution["executionId"],
+                )
+                if stored is not None:
+                    _apply_recovered_completion(root, status, stored, recovered)
+                    return resolve_execution(root, stored, mutate=False)
+            else:
+                # Durable факт уже существует. Смоделировать результат в памяти,
+                # не записывая execution-status и не повторяя semantic PLAN/REVIEW.
+                preview = deepcopy(execution)
+                preview_current = preview["current"]
+                preview_current["status"] = (
+                    "blocked" if recovered == "BLOCKED" else "complete"
+                )
+                preview_current["result"] = recovered
+                if recovered == "BLOCKED":
+                    return {
+                        "status": "BLOCKED",
+                        "executionId": execution["executionId"],
+                        "rootCommand": execution["rootCommand"],
+                        "command": None,
+                        "reasonCode": "RECOVERED_COMMAND_BLOCKED",
+                    }
+                return resolve_execution(root, preview, mutate=False)
         return {
             "status": "RESUME",
             "executionId": execution["executionId"],
@@ -3321,6 +3899,38 @@ def stamp_review_expectation(
 
 
 @execution_state_mutation
+def record_operational_report(
+    root: Path,
+    command: str,
+    execution_id: str,
+    receipt: dict[str, Any],
+) -> None:
+    """Привязать validated immutable report к одному текущему executionId.
+
+    Тот же OS-lock удерживает writer, status validator и будущий completion
+    gate. Receipt нельзя принять из текста модели: его создаёт только writer.
+    """
+    normalized = normalize_single_command(root, command)["normalized"]
+    status = load_status(root)
+    active = _active_execution_for_command(status, normalized)
+    if (
+        active is None
+        or active.get("executionId") != execution_id
+        or active["current"].get("command") != normalized
+    ):
+        raise ValueError("OPERATIONAL_REPORT_EXECUTION_STALE")
+    current = active["current"]
+    context = current.get("context")
+    if not isinstance(context, dict):
+        raise ValueError("OPERATIONAL_REPORT_CONTEXT_INVALID")
+    if context.get("operationalReport") is not None:
+        raise ValueError("OPERATIONAL_REPORT_ALREADY_RECORDED")
+    context["operationalReport"] = dict(receipt)
+    active["updatedAt"] = utc_now()
+    save_status(root, status)
+
+
+@execution_state_mutation
 def record_review_report(root: Path, step_id: str, record: dict[str, Any]) -> bool:
     """Связать созданный writer-ом report с active STEP REVIEW execution.
 
@@ -3426,13 +4036,24 @@ def resolve_root(root: Path, root_command: str) -> dict[str, Any]:
 # Вернуть только актуальные unresolved executions: historical blocked record
 # перестаёт быть actionable, как только существует более новая invocation того
 # же rootCommand. mutate=False используется read-only HARNESS STATUS.
-@execution_state_mutation
 def unresolved_executions(
     root: Path,
     *,
     mutate: bool = True,
 ) -> list[dict[str, Any]]:
-    status = load_status(root)
+    """Read-only путь не создаёт lock и не меняет execution checkpoint."""
+    if mutate:
+        with execution_state_lock(root):
+            return _unresolved_executions_snapshot(root, mutate=True)
+    return _unresolved_executions_snapshot(root, mutate=False)
+
+
+def _unresolved_executions_snapshot(
+    root: Path,
+    *,
+    mutate: bool,
+) -> list[dict[str, Any]]:
+    status = load_status(root, read_only=not mutate)
     executions = status.get("executions", [])
 
     latest_ordinal_by_root: dict[str, int] = {}

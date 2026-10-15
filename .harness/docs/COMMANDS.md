@@ -47,13 +47,18 @@ python3 .harness/tools/harness-ux.py status --json
 <a id="command-harness-resume"></a>
 ## `HARNESS RESUME`
 
-Продолжает единственное незавершённое выполнение, которое можно безопасно возобновить. Для interrupted `STEP PLAN/IMPLEMENT/REVIEW/FIX` сначала проверяет durable Intent Basis, затем bounded Progress Guard. Stale REQ/ADR/STEP/Project Principle/Ready plan блокируется intent guard; repeated no-op/cycle/repeated factual worsening возвращают `EXECUTION_STAGNATION | EXECUTION_CYCLE | EXECUTION_DRIFT` с `STEP PLAN STEP-NNN` remediation. Read-only STATUS не увеличивает progress counters. Если resumable выполнений нет — `BLOCKED/NO_RESUMABLE_EXECUTION`; если их несколько — `BLOCKED/MULTIPLE_RESUMABLE_EXECUTIONS`.
+Сначала продолжает единственное **локальное** выполнение, которое можно безопасно возобновить. Для interrupted `STEP PLAN/IMPLEMENT/REVIEW/FIX` проверяет durable Intent Basis и bounded Progress Guard. Stale REQ/ADR/STEP/Project Principle/Ready plan блокируется intent guard; repeated no-op/cycle/repeated factual worsening возвращают `EXECUTION_STAGNATION | EXECUTION_CYCLE | EXECUTION_DRIFT` с `STEP PLAN STEP-NNN` remediation. Read-only STATUS не увеличивает progress counters. Если локальных resumable выполнений несколько — `BLOCKED/MULTIPLE_RESUMABLE_EXECUTIONS`.
+
+Если локального продолжения нет, в **совершенно новом Git-клоне без прежнего execution state** возможен узкий portable fallback: ровно один `in_progress` STEP, Git-published handoff, текущий Ready plan и независимый planning-review. Тогда выполняется только **новый локальный `STEP PLAN STEP-NNN`**, не импортируется чужой executionId и не повторяются IMPLEMENT/REVIEW/FIX либо внешние Git side effects. Прежний Ready plan **не** доказывает завершение новой PLAN: требуется новая revision и новый immutable planning-review от новой execution. При отсутствии handoff/продолжения остаётся `BLOCKED/NO_RESUMABLE_EXECUTION`. Snapshot должен быть точным **текущим publication HEAD** (один parent, единственный изменённый файл — handoff). Следующие коммиты требуют нового handoff. Известное расхождение с upstream — BLOCKED, но свежие remote commits становятся видны только после явного fetch. Подробно — [Portable Resume](PORTABLE_RESUME.md).
 
 ```bash
 python3 .harness/tools/harness-ux.py resume --json
 ```
 
-Команда не создаёт новое корневое выполнение: она возвращает идентификатор, корневую команду и точную команду продолжения уже существующего выполнения.
+Управляющая команда `HARNESS RESUME` сама не записывается как отдельная root execution. Для локального продолжения она возвращает прежний executionId; только переносимый сценарий создаёт новый **root `STEP PLAN`**. `harness-ux.py resume --json` показывает выбор, а реальное выполнение через штатный диспетчер:
+```bash
+python3 .harness/tools/harness-dispatch.py start --command "HARNESS RESUME"
+```
 
 <a id="command-harness-doctor"></a>
 ## `HARNESS DOCTOR`
@@ -148,6 +153,8 @@ python3 .harness/tools/harness-ux.py step-show --step STEP-024 --json
 
 Сначала валидирует semantic task/dependency contracts, linked REQ/ADR, explicit `architecture_refs` и relevant OQ. Завершение dependencies для PLAN не требуется. После contract PASS выполняется architecture completeness pass по применимым boundaries/persistence/API/security/async/extensions/recovery/compatibility concerns. Для architecture-sensitive STEP обязателен отдельный read-only architect; unresolved durable decision блокирует PLAN через ADR/OQ/prerequisite. Evidence Gate действует уже здесь: новый failure/security/edge scenario без explicit contract/reproducer сначала проверяется как hypothesis. До confirmation он может попасть в plan только как bounded proof/falsification obligation, но не как production mutation, regression/security test, hardening или blocker; invalidated hypothesis отбрасывается. Planner возвращает structured Implementation plan/Verification payload, а `semantic-writer.py` сам рендерит STEP draft. Independent reviewer adversarially проверяет architecture coverage, hidden decisions/dependencies, Verification↔Acceptance и отсутствие speculative work; новая неподтверждённая hypothesis reviewer-а сама по себе не может BLOCK-ировать PLAN. Затем reviewer возвращает structured verdict/findings/rationale; writer вычисляет exact schema-v4 `context_basis`/`plan_content_hash`, создаёт immutable planning-review и при PASS выполняет Ready stamp. Reverse traceability/priority/phase/completion state dependency не stale-ят plan; изменение semantic input — stale-ит.
 
+**Планирование по требованию (#331).** Для новой работы используй `STEP NEXT` → `STEP RUN STEP-NNN` вместо пачки самостоятельных `STEP PLAN`. Изменения REQ/ADR/STEP/architecture между планированием и реализацией делают Ready-планы stale. Явный `STEP PLAN` по-прежнему допускается, но если STEP ещё не стал ближайшим исполнимым, предупреди о риске повторной работы и предложи отложить. Устаревший Ready-план не переписывается при `STEP LIST`, `PROJECT STATUS` или `STEP NEXT`: после выбора шага `STEP RUN` заново выполняет `PLAN` и независимый planning review перед `IMPLEMENT`.
+
 <a id="command-step-implement"></a>
 ## `STEP IMPLEMENT STEP-NNN`
 
@@ -192,12 +199,12 @@ PLAN (если актуального плана нет)
 <a id="command-project-status"></a>
 ## `PROJECT STATUS`
 
-Deterministic команда без model call. Пересобирает tracked projections из canonical state, запускает manual Harness integrity и возвращает structured snapshot: summary по lifecycle, in-progress, blocked, completed, `stalePlans` и deterministic `STEP NEXT`. Для stale Ready plan result содержит `planStaleCauses` и exact `planRemediation: STEP PLAN STEP-NNN`. Не пишет product code и не интерпретирует project intent.
+Deterministic команда без model call. Пересобирает tracked projections из canonical state, запускает manual Harness integrity и возвращает structured snapshot: summary по lifecycle, in-progress, blocked, completed, `stalePlans` и deterministic `STEP NEXT`. Для stale Ready plan result содержит `planStaleCauses`, но не выдаёт массовую команду `planRemediation`: она равна `null`. Поле `deferredPlanRemediation: STEP PLAN STEP-NNN` является диагностикой **для момента, когда STEP выбран**, с `planRefreshPolicy: when-selected-by-STEP-NEXT` и `planTimingWarning`. Только выбранный через `STEP NEXT` step запускается `STEP RUN`; остальные устаревшие планы откладываются. Не пишет product code и не интерпретирует project intent.
 
 <a id="command-step-next"></a>
 ## `STEP NEXT`
 
-Read-only deterministic рекомендация. Сначала продолжает resumable STEP execution, иначе выбирает executable STEP по прозрачному ranking: in-progress перед planned → priority → transitive downstream impact → число explicit risk flags как tie-breaker видимости → canonical roadmap order. Dependency completion не требуется для PLAN, но обязателен для IMPLEMENT. Result содержит exact canonical command и ranking breakdown. Это рекомендация, а не sprint planning.
+Read-only deterministic рекомендация. Сначала продолжает resumable STEP execution, иначе выбирает executable STEP по прозрачному ranking: in-progress перед planned → priority → transitive downstream impact → число explicit risk flags как tie-breaker видимости → canonical roadmap order. Для STEP NEXT completion proof всех hard dependencies обязателен **до ranking** даже когда текущая внутренняя стадия — PLAN; приоритет не обходит зависимости. Новая работа рекомендуется как `STEP RUN STEP-NNN`, включая stale Ready STEP, когда зависимости уже доказаны и можно безопасно заново спланировать без других blockers. При refresh внутри `STEP RUN` стартует `STEP PLAN`; standalone `STEP IMPLEMENT` со старым Ready продолжает быть BLOCKED. Для alternatives `planTiming.deferUntilSelected=true`: это не задания на массовую генерацию планов. Исходный Ready не переписывается командой NEXT. Прерванная STEP execution — через **её исходный root command** (`STEP RUN STEP-NNN`, standalone STEP command или полную STEP chain), а не через вычисленную дочернюю команду. Поле `selected.nextChildCommand` служит только диагностикой и не предназначено для самостоятельного запуска. При исполнении рекомендованного root dispatcher сначала выполняет durable reconciliation в исходном `executionId`; новый IMPLEMENT-root не создаётся. Явный `STEP PLAN STEP-NNN` сохраняет прежнее правило: dependency completion для ручного PLAN не требуется. `STEP NEXT` не регистрирует собственную execution, не меняет project artifacts, projections, execution-status/lock и не выполняет скрытую миграцию legacy execution state; восстановление отображается как read-only preview, а изменения state выполняются только отдельной канонической командой. Result содержит exact canonical command, ranking breakdown и причины исключения заблокированных кандидатов. Это рекомендация, а не sprint planning.
 
 <a id="command-project-reconcile"></a>
 ## `PROJECT RECONCILE`

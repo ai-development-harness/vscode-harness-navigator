@@ -85,7 +85,7 @@ Validator проверяет protocol/repository invariants, но **не зам�
 - обязательный Claude project-level `permissions.deny` набор для прямых Git mutations в обход `git-action.py`;
 - `.gitignore` semantics через `git check-ignore`;
 - forbidden tracked paths/secrets/artifacts;
-- UTF-8, final newline, trailing whitespace, merge markers;
+- UTF-8, final newline, trailing whitespace, отсутствие пустых строк в конце файлов из `format_paths`, merge markers;
 - комментарии и примеры у managed YAML/TOML parameters;
 - manifest language/review/execution policies;
 - Git policy schema и safety semantics;
@@ -776,7 +776,7 @@ Exit codes: `0` — SUCCESS; `2` — BLOCKED/preflight/mutation/postcondition fa
 5. больше explicit non-`none` risk flags — только visibility tie-breaker, не severity score;
 6. canonical roadmap order.
 
-Для STEP без Ready plan dependency completion не блокирует `STEP PLAN`. Для Ready plan `STEP IMPLEMENT` допускается только при PASS `implementation_prerequisite_failures`. Current exact FAIL review маршрутизируется в `STEP FIX`.
+В **рекомендации STEP NEXT** dependency completion proofs являются hard gate **до** priority ranking, включая resumable executions. Fresh candidate возвращается как `STEP RUN STEP-NNN`, а safe recovery рекомендует **original rootCommand** (RUN или полная chain) и возвращает только для диагностики `nextChildCommand`. Рекомендованный root dispatcher восстанавливает существующий executionId до любых новых дочерних команд, в том числе после crash-window Ready PLAN → IMPLEMENT. Explicit/manual `STEP PLAN` по-прежнему допускается без completion dependencies, а `STEP IMPLEMENT` требует PASS `implementation_prerequisite_failures`. Current exact FAIL review остаётся внутренним маршрутом `STEP FIX`. Исключённые кандидаты перечисляются в blockers. `depends_on` с неправильным типом или дублями не превращается в пустой список, глубокие DAG обходятся без рекурсивного вызова, proof кэшируется только в рамках одного NEXT. Read-only regression сверяет файлы проекта и local execution; `PROJECT STATUS.nextWork` должен совпадать с авторитетным resolver.
 
 ## CLI
 
@@ -2021,3 +2021,211 @@ python3 .harness/tools/run-stress-tests.py --json
 Runner запускает каждый manifest scenario ровно один раз с bounded iteration count, не делает retry-on-failure, завершает process tree при timeout и сохраняет diagnostic hashes/byte counts/tails для failed scenario.
 
 Release Qualification/current всегда использует 20 iterations. Обычный PR CI использует explicit lightweight budget.
+
+
+---
+
+# Repository Recovery Preview (Portable Resume, #299)
+
+## Файл / Файлы
+
+- `.harness/tools/repository-recovery.py` — read-only диагностический CLI;
+- `.harness/tools/repository_recovery.py` — внутренний Python-модуль;
+- `.harness/tools/repository-recovery-self-test.py` — два независимых Git-клона и отрицательные сценарии.
+
+## Роль
+
+Показывает **возможную** незавершённую STEP-работу после `git pull` в другом клоне проекта, где отсутствует локальный `execution-status.json`. Это не реализация `HARNESS RESUME` и не разрешение исполнить команду: `safeToResume=false`, `nextCommand=null` **в любом результате**, включая `status=PASS`.
+
+## Когда использовать
+
+- После переноса коммитов в другой clone, чтобы понять, какие STEP остались `in_progress`.
+- Для диагностики различий между состоянием двух компьютеров.
+- Перед проектированием безопасного переносимого checkpoint и его импорта в `HARNESS RESUME`.
+
+Для обычной работы внутри одного clone по-прежнему используются `HARNESS STATUS`, `HARNESS RESUME` и `STEP NEXT`.
+
+## Что проверяет
+
+1. Project initialized в `.harness/manifest.yaml` и Git worktree root.
+2. Git HEAD, текущую ветку и отсутствие незакоммиченных изменений.
+3. Canonical STEP только из `protocol.taskDirectory` (не из захардкоженного `planning/tasks`); каждый STEP должен действительно отслеживаться Git, одного существования ignored файла недостаточно.
+4. Только STEP со статусом `in_progress`; `planned`, `completed` и прочие статусы не изображаются как прерванная execution.
+5. Для Ready plan — точное сравнение `planning_context_basis`, `plan_content_hash` и matching immutable planning-review PASS. Даже `fresh` **не** доказывает выполнение IMPLEMENT, REVIEW или Verification.
+6. Отсутствующие/невалидные документы, неизвестные STEP и символические ссылки блокируются; несколько кандидатов перечисляются без автоматического выбора.
+
+CLI не читает `.harness/local/**`, не использует `.harness/.execution-checkpoint-known`, не создаёт новых execution records, не вызывает Git mutations, не выполняет Verification, не переносит Claude/Codex native session.
+
+## CLI
+
+~~~bash
+python3 .harness/tools/repository-recovery.py --json
+python3 .harness/tools/repository-recovery.py --step STEP-017 --json
+python3 .harness/tools/repository-recovery.py --step STEP-017
+~~~
+
+### Аргументы
+
+- `--step STEP-NNN` — необязательный точный canonical ID, без shorthand.
+- `--json` — структурированные факты и reason codes; без флага — краткая сводка.
+
+## Exit codes
+
+- `0` — `PASS` read-only **диагностики**, а не выполнение/восстановление STEP;
+- `2` — `BLOCKED`: Git недоступен, worktree dirty/detached, STEP/schema не доказаны, либо проект не инициализирован.
+
+## Примеры
+
+| Ситуация | Результат |
+| --- | --- |
+| В новом клоне есть опубликованный `STEP-017: in_progress`, план не готов | Кандидат с `PLAN_NOT_READY`; ручное изучение |
+| Есть `in_progress` и Ready plan со свежими hashes | `LOCAL_EXECUTION_PROOF_MISSING`; auto-resume всё равно запрещён |
+| Ветку изменили локально, есть untracked files | `BLOCKED/WORKTREE_DIRTY` |
+| STEP не найден или symlink вместо canonical файла | `BLOCKED/STEP_DOCUMENT_UNAVAILABLE` |
+| Две STEP `in_progress` | `MULTIPLE_RECOVERY_CANDIDATES`, не выбираем одну автоматически |
+
+## Внутренние зависимости / Граница ответственности
+
+Переиспользуются `task_directory()`, `read_task()`, `planning_context_basis()` и `plan_content_hash()`. Существующий локальный `harness_resume()` остаётся единственным авторитетом для current execution. Прямой Git-preview не является source of truth для PASS/DONE. Этапы #300–#301 добавили переносимый Git-handoff и ограниченный вход HARNESS RESUME без копирования local execution state.
+
+Self-test копирует тот же commit в два clone через локальный bare Git remote и специально оставляет на исходном компьютере несовместимое local state: результат preview должен быть одинаковым и не зависеть от него.
+
+---
+
+# Git-backed Portable Handoff (#300)
+
+## Файл / Файлы
+
+- `.harness/tools/portable-handoff.py` — явные действия `--write` и `--check`;
+- `.harness/tools/portable_handoff.py` — strict JSON schema и Git provenance;
+- `.harness/tools/portable-handoff-self-test.py` — synthetic two-clone regression.
+
+## Роль
+
+Записать минимальный **project-owned переносимый снимок фактов** о STEP в
+настроенном каталоге проектных handoff; затем подтвердить, что этот
+файл действительно опубликован через Git и по-прежнему относится к тому
+же STEP, ветке, индексу и semantic contract.
+
+`PASS` доказывает **только** публикацию/актуальность снимка. В результате
+**всегда** `safeToResume=false`, `nextCommand=null`. Реальная команда
+Команда `HARNESS RESUME` не менялась на этапе #300. Этап #301 добавил отдельную
+узкую проверку для нового клона; сам `--check` по-прежнему ничего не импортирует.
+
+## Когда использовать
+
+- `--write` — после явного commit продуктовых изменений и STEP, при чистом Git.
+- `--check` — после `pull` того же project branch во втором клоне.
+- Когда нужен диагностический checkpoint без переноса локального состояния runtime.
+
+## Что проверяет
+
+- `protocol.taskDirectory` из manifest, `STEP-NNN` со статусом `in_progress`;
+- корректный строгий allowlist versioned JSON; неизвестные поля запрещены;
+- Git HEAD и точного parent коммита публикации, branch и object ID отслеживаемого STEP;
+- актуальный `planning_context_basis()` / `plan_content_hash()`, а не выдуманный второй fingerprint;
+- единственное изменение в точном Git-publication commit, чистый worktree, совпадающий Git blob и известный upstream; symlink/path escape запрещены;
+- конфликтующие файлы блокируются; существующий файл может заменяться
+  только через compare-before-replace после успешной проверки схемы.
+
+Writer не создаёт Git commit, не выполняет push, не читает/копирует
+`.harness/local/execution`, Verification proofs, secrets и provider session
+handles.
+
+## CLI
+
+```bash
+python3 .harness/tools/portable-handoff.py --write --step STEP-017 --json
+python3 .harness/tools/portable-handoff.py --check --step STEP-017 --json
+```
+
+### Аргументы
+
+- Ровно один из `--write` или `--check`.
+- `--step STEP-NNN` — обязательный canonical STEP ID.
+- `--json` — machine-readable result; без него короткая сводка.
+
+## Exit codes
+
+- `0` — успешно создан или проверен handoff, **не** разрешён resume;
+- `2` — BLOCKED из-за Git, схемы, файла, scope либо provenance.
+
+## Примеры
+
+| Сценарий | Результат |
+| --- | --- |
+| Чистый проект и STEP `in_progress` | `HANDOFF_WRITTEN_NOT_PUBLISHED` |
+| Handoff уже закоммичен, branch/index/contract совпадают | `HANDOFF_PROVEN_NOT_EXECUTION` |
+| Uncommitted handoff или изменённый STEP | `BLOCKED` |
+| Неизвестная схема либо `nativeSessionId` в JSON | `HANDOFF_SCHEMA_INVALID` |
+
+## Внутренние зависимости / Граница ответственности
+
+Handoff не является отдельным журналом команд или источником истины для
+completion. Использует `repository_recovery_preview()`,
+`harness_config.task_directory()`, `planning_context_basis()` и
+`plan_content_hash()`. Узкий переносимый вход `HARNESS RESUME` реализован отдельным модулем
+`portable_resume.py` (#301). Подробно: `PORTABLE_RESUME.md`.
+
+---
+
+# Безопасный Portable Resume (#301)
+
+## Файлы
+
+- `.harness/tools/portable_resume.py` — выбор единственного доказанного Git-handoff.
+- `.harness/tools/harness_ux.py` — приоритет локального восстановления.
+- `.harness/tools/command_dispatch.py` и `execution_status.py` — новый локальный `STEP PLAN` с проверкой допустимости перехода и межпроцессной блокировкой.
+- `.harness/tools/portable-resume-self-test.py` — двухклоновый Git-тест и негативные проверки.
+
+## Назначение
+
+В новом клоне при отсутствии локального execution state `HARNESS RESUME` может выполнить только новый `STEP PLAN` для одного опубликованного `in_progress` STEP с проверенным Git-handoff и актуальным Ready-планом. Старый executionId, Verification и side effects не переносятся.
+
+Наличие даже пустого локального checkpoint блокирует переносимый старт. Для `SUCCESS` нового PLAN должны появиться следующая revision плана и новый независимый planning-review с execution_id нового локального выполнения. До выполнения обоих условий возвращается `PORTABLE_PLAN_RECHECK_REQUIRED`.
+
+## Команды
+
+```bash
+# Desktop после обычного commit продуктовых изменений
+python3 .harness/tools/portable-handoff.py --write --step STEP-017 --json
+# Затем обычными Git-командами commit + push handoff-файла
+
+# Laptop после pull
+python3 .harness/tools/harness-ux.py resume --json
+python3 .harness/tools/harness-dispatch.py start --command "HARNESS RESUME"
+```
+
+`harness-ux.py resume` только выбирает; реальное выполнение запускает dispatcher. Смена Claude/Codex не требует дополнительных действий.
+
+## Защитные условия
+
+Отсутствие handoff — прежний `NO_RESUMABLE_EXECUTION`. `WORKTREE_DIRTY`, `HANDOFF_*`, устаревший plan либо несколько кандидатов — `BLOCKED`. Локальные blocked/lost-marker executions не обходятся через переносимый снимок. Никаких автоматических Git PUSH/PR, UPDATE и повторных IMPLEMENT/FIX/REVIEW.
+
+Подробнее: [PORTABLE_RESUME.md](PORTABLE_RESUME.md).
+
+
+## Матрица Portable Resume (#302)
+
+`portable-resume-matrix-self-test.py` создаёт локальный bare remote, два и более независимых Git-клона, Ready STEP с привязанными REQ/Accepted ADR/blocking PRN, затем проверяет ухудшение semantic contract, ошибочные handoff JSON и конфликты двух publisher. Нативные runtime sessions, локальные Verification и side-effect checkpoints не переносятся.
+
+Строгие коды: `HANDOFF_OUTDATED` (новый HEAD после публикации), `HANDOFF_PUBLICATION_MIXED` (один Git commit содержит ещё и код), `HANDOFF_UPSTREAM_DIVERGED` (последний известный tracking ref не совпал), `HANDOFF_WORKTREE_MISMATCH` (данные файла расходятся с Git blob), `HANDOFF_HEAD_CHANGED` (HEAD переместился внутри проверки). Все означают BLOCKED, без автоматического повторения Git side effects.
+
+CI на Linux выполняет все discoverable self-tests (Python 3.13 и 3.11), Windows — targeted two-clone tests. Подробные инструкции: [PORTABLE_RESUME.md](PORTABLE_RESUME.md).
+
+## Operational writer / completion receipt (#314–#318)
+
+`semantic-writer.py` поддерживает `audit-report`, `release-report`, `skill-search-report`, дополнительно к прежним `plan-draft`, `planning-review`, `step-review`. Три новые операции требуют `--execution-id <active-id> --payload-file <local-json-or->`. Формат semantic payload описан в [REPORTING.md](REPORTING.md). Writer заполняет timestamp/H1/YAML по configured project-owned template, использует `create_durable_report()` и вызывает соответствующий `report_contract` validator.
+
+`report_contract.py --file '<report-path>' --kind audit|release_check|skill_search` остается самостоятельным read-only structural validator. Он не может заменить execution-bound receipt. `command_dispatch.complete_dispatch` проверяет receipt только для четырёх операций: `PROJECT RECONCILE`, `STEP AUDIT`, `RELEASE CHECK`, `SKILL FIND`. Все другие commands сохраняют прежний completion contract.
+
+Тесты:
+```bash
+python3 .harness/tools/operational-reports-self-test.py
+python3 .harness/tools/operational-completion-self-test.py
+python3 .harness/tools/operational-integration-self-test.py
+python3 .harness/tools/run-self-tests.py
+python3 .harness/tools/validate.py --mode manual
+```
+
+Negative scenarios: missing/wrong receipt, previous executionId, modified file, changed subject, wrong scope, invalid template, same-second report collision, configured paths, crash между durable report и сохранением receipt. `PASS` в CLI writer не означает terminal SUCCESS; authoritative gate принадлежит dispatcher.

@@ -45,7 +45,10 @@
     "providerMetadataOptional": true,
     "secretsPersistence": "forbidden",
     "unsupportedCapabilities": "explicit",
-    "versioning": "required"
+    "versioning": "required",
+    "crossRuntimeCommands": "seamless",
+    "nativeSessionReuse": "best-effort",
+    "runtimeChangeInvalidatesIntent": false
   },
   "adapters": {
     "codex": {

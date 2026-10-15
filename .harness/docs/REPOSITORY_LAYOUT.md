@@ -231,3 +231,12 @@ Self-updater:
 - после schema-changing release оставляет project-owned migration `PROJECT RECONCILE`.
 
 Product implementation directories специально отсутствуют из template и появляются только по фактическим STEP.
+
+
+## Git-backed handoff и clone-local state
+
+При `protocol.taskDirectory: planning/tasks` переносимый снимок хранится в `planning/handoffs/STEP-NNN.json`; при другой директории — в соседнем каталоге `handoffs`. Это project-owned Git-tracked документ, а не копия Harness control plane и не новый registry.
+
+В Git **не попадают** `.harness/local/execution/execution-status.json`, Verification proofs, locks, side-effect checkpoints, native runtime session handles и update journal. После clone/pull появляется только canonical project knowledge и Git-handoff. Новая STEP PLAN в `HARNESS RESUME` получает собственный local executionId. Сам handoff должен быть единственным изменением текущего publication commit.
+
+Подробнее: [PORTABLE_RESUME.md](PORTABLE_RESUME.md).

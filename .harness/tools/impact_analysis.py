@@ -8,12 +8,19 @@ downstream artifacts and never promotes code to source of truth.
 """
 from __future__ import annotations
 
+from collections import deque
 from pathlib import Path
 import re
 from typing import Any
 
 from document_contract import parse_document
-from harness_config import task_directory
+from harness_config import (
+    adr_directory,
+    open_questions_directory,
+    principles_directory,
+    requirements_directory,
+    task_directory,
+)
 from planning_contract import (
     adr_ids,
     architecture_refs,
@@ -247,9 +254,257 @@ def affected_steps(root: Path, changed: list[str]) -> dict[str, Any]:
     }
 
 
+def _canonical_change_exists(root: Path, changed_id: str) -> bool:
+    """Не объявлять необнаруженный artifact безопасно проигнорированным."""
+    if changed_id.startswith("ARCH@"):
+        # Architecture refs являются произвольными paths/anchors. Их
+        # существование уже проверяет canonical planning contract.
+        return True
+    kind, _, _ = changed_id.partition("-")
+    if kind == "STEP":
+        return (task_directory(root) / f"{changed_id}.md").is_file()
+    directories = {
+        "REQ": requirements_directory,
+        "ADR": adr_directory,
+        "OQ": open_questions_directory,
+        "PRN": principles_directory,
+    }
+    directory = directories[kind](root)
+    return any(directory.glob(changed_id + "-*.md"))
+
+
+def selective_invalidation_preview(root: Path, changed: list[str]) -> dict[str, Any]:
+    """Только read-only прогноз влияния с транзитивными STEP dependencies.
+
+    Это объясняющая проекция поверх канонических связей, не новый freshness
+    validator. Состояния PASS/DONE и внешние операции здесь не меняются.
+    Результат "preserved" означает отсутствие влияния *этих* изменений,
+    а не разрешение обойти существующие Review/Verification gates.
+    """
+    if not isinstance(changed, list) or not changed or any(
+        not isinstance(item, str) or not item.strip() for item in changed
+    ):
+        raise ImpactAnalysisError("changed artifacts must be non-empty strings")
+    names = sorted(set(value.strip() for value in changed))
+    changed_keys = {_changed_component_key(name) for name in names}
+    changed_ids = set(names)
+    # Источник изменения должен существовать как canonical artifact. Если
+    # его не удалось прочитать, нельзя объявлять несвязанные STEP безопасными.
+    unresolved = sorted(name for name in names if not _canonical_change_exists(root, name))
+
+    tasks: dict[str, dict[str, Any]] = {}
+    dependencies: dict[str, list[str]] = {}
+    direct: dict[str, list[str]] = {}
+    problems: dict[str, list[str]] = {}
+
+    # Один проход по STEP — основание графа; ни один artifact не переписывается.
+    for path in sorted(task_directory(root).glob("STEP-*.md")):
+        if path.name == "TEMPLATE.md":
+            continue
+        step_id = path.stem
+        try:
+            task = read_task(root, step_id)
+            tasks[step_id] = task
+            dependencies[step_id] = sorted(set(dependency_ids(task)))
+            # Включаем explicit current и stored component IDs: если ссылка
+            # удалена, старый plan всё равно остаётся участником impact.
+            linked = _linked_component_keys(root, step_id)
+            reasons = [
+                _reason_for_component(key)
+                for key in sorted(changed_keys & linked)
+            ]
+            reasons.extend(_replacement_reasons(root, task, changed_ids))
+            if reasons:
+                direct[step_id] = sorted(set(reasons))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            problems.setdefault(step_id, []).append(
+                f"cannot prove STEP/dependency context: {exc}"
+            )
+            # Даже повреждённая запись самой изменённой STEP не исчезает
+            # из отчёта: такой узел остаётся ambiguous, не preserved.
+            if f"STEP@{step_id}" in changed_keys:
+                direct[step_id] = ["changed STEP cannot be parsed"]
+
+    downstream: dict[str, set[str]] = {step_id: set() for step_id in tasks}
+    for step_id, refs in dependencies.items():
+        for ref in refs:
+            if ref not in tasks:
+                problems.setdefault(step_id, []).append(
+                    f"missing dependency: {step_id} -> {ref}"
+                )
+            else:
+                downstream[ref].add(step_id)
+
+    # Kahn: все не удалённые узлы содержат цикл или зависят от него.
+    # Консервативно помечаем их ambiguous вместо ложного preserved.
+    degree = {
+        step_id: sum(parent in tasks for parent in refs)
+        for step_id, refs in dependencies.items()
+    }
+    queue = deque(sorted(step for step, count in degree.items() if count == 0))
+    removed: set[str] = set()
+    while queue:
+        parent = queue.popleft()
+        removed.add(parent)
+        for child in sorted(downstream[parent]):
+            degree[child] -= 1
+            if degree[child] == 0:
+                queue.append(child)
+    for step_id in sorted(set(tasks) - removed):
+        problems.setdefault(step_id, []).append(
+            "cyclic dependency or descendant of dependency cycle"
+        )
+
+    # Если upstream STEP нельзя проверить (битый/отсутствующий contract),
+    # то downstream также не может получить решение preserved по умолчанию.
+    unverified = deque(sorted(problems))
+    visited_unverified = set(problems)
+    while unverified:
+        parent = unverified.popleft()
+        for child in sorted(downstream.get(parent, set())):
+            if child not in visited_unverified:
+                visited_unverified.add(child)
+                problems.setdefault(child, []).append(
+                    f"unverified dependency upstream: {parent}"
+                )
+                unverified.append(child)
+
+    if unresolved:
+        for step_id in tasks:
+            problems.setdefault(step_id, []).append(
+                "changed artifact could not be resolved: " + ", ".join(unresolved)
+            )
+
+    # Обратные связи нужны, чтобы изменение STEP-001 было видно в STEP-006,
+    # даже если собственный planning fingerprint STEP-006 пока остался fresh.
+    paths: dict[str, list[str]] = {}
+    for origin in sorted(direct):
+        seen = {origin}
+        pending = deque([(origin, [origin])])
+        while pending:
+            parent, chain = pending.popleft()
+            old = paths.get(parent)
+            if old is None or (len(chain), chain) < (len(old), old):
+                paths[parent] = chain
+            for child in sorted(downstream.get(parent, set())):
+                if child not in seen:
+                    seen.add(child)
+                    pending.append((child, [*chain, child]))
+
+    steps: list[dict[str, Any]] = []
+    for step_id in sorted(set(tasks) | set(problems)):
+        issues = list(problems.get(step_id, []))
+        try:
+            plan = plan_staleness(root, step_id)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            plan = {"status": "invalid", "causes": [], "action": f"STEP PLAN {step_id}"}
+            issues.append(f"cannot prove plan freshness: {exc}")
+
+        impacted = step_id in paths
+        explicit = step_id in direct
+        plan_status = plan.get("status")
+        if issues or plan_status == "invalid":
+            state = "ambiguous"
+            if plan_status == "invalid" and not issues:
+                issues.append("plan state cannot be proven")
+        elif plan_status == "stale":
+            state = "invalidated"
+        elif impacted:
+            # Даже fresh direct plan не доказывает, что downstream review и
+            # side effects корректны после upstream change.
+            state = "revalidate"
+        else:
+            state = "preserved"
+
+        source = paths.get(step_id, [])
+        reasons = list(direct.get(step_id, []))
+        if len(source) > 1:
+            reasons.append("transitive dependency: " + " -> ".join(source))
+        if state == "invalidated" and not reasons:
+            reasons.append("existing plan freshness mismatch")
+        if issues:
+            reasons.extend(issues)
+
+        # Никакого отдельного proof-store: результаты Review/Verification
+        # не трогаем, а отмечаем, нужна ли их повторная проверка.
+        evidence_decision = (
+            "preserved" if state == "preserved" else
+            "ambiguous" if state == "ambiguous" else
+            "revalidate" if state == "revalidate" else "invalidated"
+        )
+        steps.append({
+            "step": step_id,
+            "decision": state,
+            "direct": explicit,
+            "dependencyPath": source,
+            "reasons": sorted(set(reasons)),
+            "plan": {
+                **plan,
+                # A plan_staleness() diagnostic may contain STEP PLAN, but a
+                # repository-wide impact preview cannot recommend executing
+                # it for every invalidated STEP in advance.
+                "action": None,
+                "deferredAction": plan.get("action"),
+                "refreshPolicy": "when-selected-by-STEP-NEXT",
+            },
+            "evidence": {
+                "review": evidence_decision,
+                "verification": evidence_decision,
+                "completion": evidence_decision,
+            },
+            # This preview is about blast radius, not a backlog of PLAN
+            # commands. Invalidated plans are a deferred remediation until
+            # STEP NEXT ranks their step as the next executable one.
+            "action": (
+                "investigate dependency/contract" if state == "ambiguous"
+                else "revalidate current evidence and prerequisites" if state == "revalidate"
+                else None
+            ),
+            "deferredPlanAction": (
+                f"STEP PLAN {step_id}" if state == "invalidated" else None
+            ),
+            "planRefreshPolicy": "when-selected-by-STEP-NEXT",
+        })
+
+    states = ("preserved", "revalidate", "invalidated", "ambiguous")
+    # Проблема в несвязанном STEP не должна блокировать целевой dry-run.
+    # Для затронутых узлов, напротив, ambiguity остаётся fail-closed.
+    affected = [item for item in steps if item["dependencyPath"]]
+    existing = [
+        item for item in steps
+        if not item["dependencyPath"] and item["decision"] != "preserved"
+    ]
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "status": (
+            "BLOCKED" if unresolved or any(
+                item["decision"] == "ambiguous" for item in affected
+            ) else "PASS"
+        ),
+        "mode": "dry-run",
+        "changed": names,
+        "unresolvedChanges": unresolved,
+        "summary": {
+            state: sum(item["decision"] == state for item in steps)
+            for state in states
+        },
+        "steps": steps,
+        # Только действительно связанные с входным --changed STEP.
+        # Уже stale/повреждённые, но несвязанные узлы — отдельная диагностика.
+        "affected": affected,
+        "preExistingConcerns": existing,
+        "externalSideEffectsExecuted": False,
+        "notice": (
+            "Read-only impact estimate; never authorizes reuse of stale evidence "
+            "or retries side effects. Existing canonical freshness guards apply."
+        ),
+    }
+
+
 __all__ = [
     "ImpactAnalysisError",
     "affected_steps",
     "compare_component_sets",
     "plan_staleness",
+    "selective_invalidation_preview",
 ]

@@ -33,7 +33,9 @@ description: Decide whether a durable technical change requires an ADR, evolve a
 Если durable contract меняется:
 
 1. не переписывай старый Accepted ADR;
-2. создай новый ADR с Context/Problem/Decision/Alternatives/Consequences и релевантными security/data/compatibility implications;
+2. создай новый ADR по действующему `TEMPLATE.md` в configured `sources.adrDirectory`, с Context/Problem/Decision/Alternatives/Consequences и релевантными security/data/compatibility implications; не копируй legacy ADR-схему из памяти;
 3. явно укажи `Supersedes`/связь со старым решением;
 4. обнови traceability с затронутыми STEP/REQ;
 5. если решение ещё не принято и без него нельзя планировать/реализовывать — оставь работу BLOCKED через OQ/RESEARCH/ADR prerequisite, а не угадывай архитектуру внутри implementation.
+
+После записи нового ADR или изменения traceability запускай `python3 .harness/tools/validate.py --mode manual`; не называй созданный документ принятым или валидным до проверки schema и ссылок. Если validator возвращает ошибку, сначала исправь canonical artifact или верни BLOCKED.

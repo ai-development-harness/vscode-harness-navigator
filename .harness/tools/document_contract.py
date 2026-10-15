@@ -288,8 +288,23 @@ def stable_hash(value: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def atomic_write_text(path: Path, content: str) -> None:
-    """Crash-safe заменить UTF-8 text artifact через fsync + os.replace."""
+class DocumentWriteConflict(ValueError):
+    """Файл изменился после чтения — заменять его устаревшей копией нельзя."""
+
+
+def atomic_write_text(
+    path: Path,
+    content: str,
+    *,
+    expected_bytes: bytes | None = None,
+) -> None:
+    """Crash-safe запись; optional CAS защищает от потери чужого редактирования.
+
+    Для writers, меняющих только часть документа, expected_bytes проверяются
+    максимально близко к os.replace. Это работает вместе с advisory lock
+    канонических writers. Редактор, игнорирующий lock и пишущий одновременно
+    в последнее мгновение, не может быть атомарно сериализован одним os.replace.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
         prefix=path.name + ".",
@@ -309,6 +324,17 @@ def atomic_write_text(path: Path, content: str) -> None:
             fh.flush()
             os.fsync(fh.fileno())
         os.chmod(tmp, mode)
+        if expected_bytes is not None:
+            try:
+                current = path.read_bytes()
+            except FileNotFoundError as exc:
+                raise DocumentWriteConflict(
+                    f"document changed before atomic replacement: {path}"
+                ) from exc
+            if current != expected_bytes:
+                raise DocumentWriteConflict(
+                    f"document changed before atomic replacement: {path}"
+                )
         os.replace(tmp, path)
     finally:
         if tmp.exists():

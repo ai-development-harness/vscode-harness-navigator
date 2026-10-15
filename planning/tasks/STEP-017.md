@@ -19,18 +19,18 @@ risk_flags:
   - none
 plan:
   status: ready
-  revision: 1
-  context_basis: sha256:cc6411bb33bb36d53c3e7d288d8b3088f5e3988d81a5f0cbbf51b83856c16c9d
-  content_hash: sha256:4c3419addafbf198dc1cf759fc4810ef11e0ddad2cf56a41b109ed8eb079a397
-  reviewed_report: planning/plan-reviews/STEP-017/PLAN-REVIEW-20261003T083857Z.md
-  planned_at: 2026-10-03T08:38:57+00:00
+  revision: 2
+  context_basis: sha256:0479c2b83f073fff9f08617d936b6af28f0ccefe5e07ddd923df4caa79dcfe32
+  content_hash: sha256:62a749b7ae864e0499d4c359d2753e42e4db83e3b329122c1640ec00fd7b53c7
+  reviewed_report: planning/plan-reviews/STEP-017/PLAN-REVIEW-20261015T210814Z.md
+  planned_at: 2026-10-15T21:08:14+00:00
   execution_groups:
   context_components:
     - "ADR@ADR-002=sha256:20bc4d6cafab8c9f54b65959e567068590246b082d765472059dadb017d4d884"
     - "ADR@ADR-004=sha256:c330d03d6528ed06f2a7358105a5c4b0cfd03d7b5fd8115727ed877645466f03"
-    - "ARCH@docs/architecture.md#основные-компоненты-границы=sha256:e10cae5eb9d76142083e93c3d7561c43bf086c4a855d9f7692d4079f6d45621c"
-    - "ARCH@docs/architecture.md#основные-потоки=sha256:79529be95847ee8a6bd25d4466c4dd3b9497b1e86e14eae9397684d6258774a4"
-    - "REQ@REQ-004=sha256:a13237dfa77c727e84fa7b2dde01660ec0dbca31a0d1a3a5b762d133a919a816"
+    - "ARCH@docs/architecture.md#основные-компоненты-границы=sha256:b20e31de215315620ffca4c01ff54ba3ac128dc2a6457d779d453e1f2020ac76"
+    - "ARCH@docs/architecture.md#основные-потоки=sha256:5d196d05578bc8cb4a57bc55f0af9171526042b306bbe8c94784b4ae17a534b9"
+    - "REQ@REQ-004=sha256:4a4b42b7e231be207f38e8777ab6aed83a3b45c72fc0ca5c5bf24e1b182db079"
     - "STEP@STEP-016=sha256:2a19a7bc77416e5546beb61ea4ddfe1a260175f39637609e2be3091704f27afd"
     - "STEP@STEP-017=sha256:91aabde926247bb41f5a997ac966f163ab6fac9788d71ae7fbb386f0779b229e"
 ---
@@ -104,11 +104,11 @@ STEP-016 сделал основную `TreeItem.iconPath` семантичес�
 
 ## Implementation plan
 
-### 1. Изолированная priority presentation в Artifacts View
+### 1. Повторно подтвердить существующую priority presentation
 
-- Создать pure mapping canonical priority в badge, ThemeColor id и tooltip key с fail-safe undefined для missing, unknown и prototype значений.
-- Создать stable synthetic resource URI с identity root и indexed canonical file; передавать его и opt-in priority tooltip только из ArtifactsTreeDataProvider.
-- Расширить TreeItem builder opt-in параметрами, не меняя STEP-016 primary icon matrix, Focus View, команды открытия и context actions.
+- Сопоставить реализацию с priority-пунктом актуального REQ-004: сохранить primary icon matrix STEP-016 и отдельные badge !, H, M, L для canonical priority.
+- Подтвердить fallback для отсутствующего и некорректного priority, ThemeColor и RU/EN tooltip по действующим unit и Extension Host сценариям.
+- Сохранить opt-in связь Artifacts View с synthetic resourceUri; builder, открытие canonical файла, действия и Focus View остаются в границах принятого контракта.
 
 **Files:**
 - src/views/artifactPriorityPresentation.ts
@@ -117,72 +117,72 @@ STEP-016 сделал основную `TreeItem.iconPath` семантичес�
 - src/views/viewMessages.ts
 
 **Tests:**
-- Unit matrix badge/color/tooltip, unknown fallback и URI identity.
+- tests/unit/artifactPriorityPresentation.test.ts
+- src/test/integration/extension.test.ts
 
-**Risks:**
-- REQ сохраняет priority primary icon; вторичный badge намеренно дублирует priority.
+### 2. Повторно подтвердить обновление decoration и lifecycle
 
-### 2. FileDecorationProvider и lifecycle
-
-- Реализовать provider поверх текущего ProjectStateService.getIndex(folder).getByFile без parsing, filesystem access, cache или сохранённой ссылки на index.
-- Для synthetic URI вернуть FileDecoration с локализованным tooltip, ThemeColor и propagate выключенным; чужой URI и missing/invalid priority возвращают undefined.
-- На onDidChangeProjectModel invalidировать decorations через undefined и зарегистрировать/освободить provider, listener и emitter в LifecycleRegistry.
+- Сверить provider и регистрацию: priority получается из текущего общего ArtifactIndex, synthetic URI определяет root и canonical file, propagate выключен.
+- Повторить существующие Extension Host сценарии primary icon, badge, цвета, RU/EN tooltip, invalid/missing priority и обновления после refresh/watcher без перезапуска Extension Host.
+- Подтвердить invalidation по model event и владение disposable registration в пределах текущего wiring.
 
 **Files:**
 - src/views/artifactPriorityDecorationProvider.ts
 - src/extension.ts
+- src/test/integration/extension.test.ts
 
 **Tests:**
-- Unit provider для foreign URI, valid/invalid priority и invalidation.
+- yarn test:unit
+- yarn test:integration
 
-**Risks:**
-- Глобальный provider не должен декорировать Explorer или Focus View.
+### 3. Выполнить прежний Verification и сохранить актуальное evidence
 
-### 3. Extension Host proof и handoff
-
-- Расширить read-only seam и isolated fixtures для всех priority, absence/unknown, двух roots с одинаковым ID, refresh replacement, watcher update, удаления priority/artifact/root.
-- В реальном EN/RU Extension Host доказать primary icon matrix, synthetic URI, badge/color/tooltip, сохранность Focus, открытия и context actions.
-- Выполнить полный Verification contract, вручную проверить light/dark/custom themes и передать revision в independent STEP REVIEW.
+- Выполнить все команды существующего Verification на текущей revision и зафиксировать реальные результаты.
+- В светлой, тёмной и custom theme проверить принятую primary icon и отдельный priority badge в Artifacts View и сохранность Focus View.
+- Сохранить актуальное evidence через canonical workflow и передать revision на независимый STEP REVIEW.
 
 **Files:**
-- src/extension.ts
-- src/test/integration/extension.test.ts
-- tests/unit/artifactPriorityPresentation.test.ts
-- tests/unit/artifactPriorityDecorationProvider.test.ts
 - planning/tasks/STEP-017.md
 
 **Tests:**
-- yarn typecheck, lint, format, test:unit, test:integration, git diff --check, Harness validation и manual theme evidence.
-
-**Risks:**
-- Unit tests не заменяют real Extension Host и watcher lifecycle evidence.
+- yarn typecheck
+- yarn lint
+- yarn format
+- yarn test:unit
+- yarn test:integration
+- git diff --check
+- python3 .harness/tools/validate.py --mode manual
 
 ## Evidence
 
 
 
+
+
+
 <!-- VERIFICATION-EVIDENCE:START -->
-- Verification run: 2026-10-03T09:08:40Z
+- Verification run: 2026-10-15T21:19:28Z
 - Status: PASS
-- Git head: 6f74bd31fa439c725820585aeae7bca3a896a90e
-- Worktree hash: sha256:e140396105ad7cd709fd022a86dda675c9a7177ce79a3e1be9d0a6ce369fc389
+- Automated resumed: false
+- Git head: 7fd4473cee30ea461cdfab918d55827d2fce549c
+- Worktree hash: sha256:642425d019bdacd4008c80d41d92706dcf64ce9d415df7f5aaf884eb8d7fdeec
 - Verification contract basis: sha256:f108a191952be4c4dc8bc36b9716a599b766395b65c32d601c73a7fb7c3373c8
-- Subject git head: 6f74bd31fa439c725820585aeae7bca3a896a90e
-- Subject worktree hash: sha256:eb0426ec6d2d926303111b5efda643b09c0e65e2a4f5e25a1acc134e8e69dec7
+- Subject git head: 7fd4473cee30ea461cdfab918d55827d2fce549c
+- Subject worktree hash: sha256:e3fc5abe87214435c05a1b9930d27870f45491a0b3325a0bab430f1d881d6f6f
 
 ### Automated verification
 - Command: yarn typecheck
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 3620
+  - Duration ms: 5022
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-  - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  - stderr sha256: e2f566e38f3ed1b1d2b6f80d22090ba040fd2a843083db28bc65a6831af3f3e6
   - stdout bytes: 0
-  - stderr bytes: 0
+  - stderr bytes: 97
 - Command: yarn lint
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 4570
+  - Duration ms: 5523
   - stdout sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 0
@@ -190,7 +190,7 @@ STEP-016 сделал основную `TreeItem.iconPath` семантичес�
 - Command: yarn format
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 1466
+  - Duration ms: 1766
   - stdout sha256: 17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   - stdout bytes: 66
@@ -198,19 +198,19 @@ STEP-016 сделал основную `TreeItem.iconPath` семантичес�
 - Command: yarn test:unit
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 7775
-  - stdout sha256: c00b5225ae4578240396ed885a09cc1b696805255d50659166d4684155f22d30
+  - Duration ms: 7876
+  - stdout sha256: 547ded3b61ee68aa6cc2e88aa843681739f70cb7e50940925f2af66e2177b9b3
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-  - stdout bytes: 20440
+  - stdout bytes: 24555
   - stderr bytes: 0
 - Command: yarn test:integration
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 49203
-  - stdout sha256: 918df3bc1b3acecb1f55952cd7405168f9630ca0176ffbd0ba67862f20b89871
-  - stderr sha256: da8f59ea3ae1233b29da19ae174f8b80db1ac9ce6152f04a9dd5f978abe4682d
-  - stdout bytes: 41428
-  - stderr bytes: 30173
+  - Duration ms: 73445
+  - stdout sha256: 9d3e73889f3d46b86f029224beca385b4bc9f823e9c3bc3e09851e21d21bba20
+  - stderr sha256: 6157c8969c41db1ee7705dadba1ba04c1e6bbd716e7d6841a5af2ccc44abcc86
+  - stdout bytes: 25161
+  - stderr bytes: 27603
 - Command: git diff --check
   - Status: PASS
   - Exit code: 0
@@ -222,19 +222,25 @@ STEP-016 сделал основную `TreeItem.iconPath` семантичес�
 - Command: python3 .harness/tools/validate.py --mode manual
   - Status: PASS
   - Exit code: 0
-  - Duration ms: 1866
-  - stdout sha256: a927a46fd4407e224e50408ced479d98c51a31db20bb12d822b9f323289cb406
+  - Duration ms: 2317
+  - stdout sha256: e95f7aa24a7c105219343fcb2d7674e1be9ac5188972f887e3ddcbfb1d58da24
   - stderr sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-  - stdout bytes: 540
+  - stdout bytes: 772
   - stderr bytes: 0
+
+### Product verification
+- none
 
 ### Manual verification
 - Check: В светлой, тёмной и custom theme проверить, что Artifacts View показывает принятую primary icon и отдельный priority badge, а Focus View не меняется.
   - Status: PASS
-  - Observed: "Пользователь подтвердил успешное прохождение ручной проверки."
+  - Observed: "Проверен реальный Extension Development Host VS Code 1.140.0 после yarn build:dev на disposable mvp-valid fixture. В Light Modern, Dark Modern и Dark Modern с custom theme colors визуально сохранены status icons STEP/ADR, priority icon REQ и отдельные H/M/L/! badges; Focus View показывает прежние icons без badges. Проверка снимков выполнена через view_image, DOM snapshot подтверждает badges только в Harness Artifacts. Снимки: .harness/local/priority-ui-017/light.png: sha256:7b58574e1e1b24f74a673cee4ea3cac9d3ee85777c4aac6b8a93a5e0a439239e; .harness/local/priority-ui-017/dark.png: sha256:d927a0aaca610b5fc0c4e67abcadd8decd166c791f46c96886827e85fbe4fa7b; .harness/local/priority-ui-017/custom.png: sha256:6e0e6214530a0f5e893ab08eb9a6230c0fa15ee6108c9101c23cb4a1bb6f24bd"
 <!-- VERIFICATION-EVIDENCE:END -->
 
 Generated verification block записывает deterministic runner. Дополнительные semantic observations можно хранить вне generated markers.
+
+
+
 
 
 

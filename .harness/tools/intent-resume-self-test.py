@@ -299,7 +299,10 @@ def prepare(root: Path) -> None:
 
 
 def clear_execution(root: Path) -> None:
+    # Только тестовый сброс между независимыми synthetic executions:
+    # в реальном проекте потеря каталога при сохранённом marker блокируется.
     shutil.rmtree(root / ".harness/local/execution", ignore_errors=True)
+    (root / ".harness/.execution-checkpoint-known").unlink(missing_ok=True)
 
 
 def start_review(root: Path) -> dict:

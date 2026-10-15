@@ -415,7 +415,11 @@ def build_project_state(root: Path) -> dict[str, Any]:
                 "executionGroups": execution_groups,
                 "planFreshness": plan_impact.get("status"),
                 "planStaleCauses": plan_impact.get("causes", []),
-                "planRemediation": plan_impact.get("action"),
+                # PROJECT STATE may show many stale STEP artifacts. Do not
+                # emit a bulk STEP PLAN action as a live recommendation.
+                "planRemediation": None,
+                "deferredPlanRemediation": plan_impact.get("action"),
+                "planRefreshPolicy": "when-selected-by-STEP-NEXT",
             },
         }
 

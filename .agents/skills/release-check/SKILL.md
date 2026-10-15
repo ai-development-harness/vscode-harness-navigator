@@ -23,10 +23,10 @@ Human-readable release-check report пиши на `.harness/manifest.yaml → la
 
 ## Report
 
-Создай schema-v1 report `RELEASE-YYYYMMDDTHHMMSSZ.md` в configured `protocol.releaseDirectory`. В report явно свяжи verdict с фактическими gates/evidence и перечисли blockers с required next action.
-
-До завершения проверь конкретный файл:
+Подготовь semantic JSON: `target` (точный `TO <tag>`, если указан), `verdict: "ready"|"blocked"` и sections из configured `protocol.releaseDirectory/TEMPLATE.md`. Не конструируй самостоятельно YAML, H1, UTC или имя `RELEASE-<UTC>.md`. Правила и пример: `.harness/docs/REPORTING.md`.
 
 ```bash
-python3 .harness/tools/report_contract.py --file '<report-path>' --kind release_check
+python3 .harness/tools/semantic-writer.py release-report --execution-id '<executionId>' --payload-file '<local-json-or->'
 ```
+
+Только writer `PASS` разрешает предложить `complete SUCCESS`: dispatcher перепроверит отчёт текущей execution. **`verdict: blocked` означает реальную неготовность релиза, но может быть корректным завершённым отчётом проверки**; это не технический failure writer. При неверной schema/непроверенных данных сообщи `BLOCKED`, не выдумывай READY.

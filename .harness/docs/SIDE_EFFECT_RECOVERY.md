@@ -123,3 +123,10 @@ Command-specific postcondition codes (`COMMIT_POSTCONDITION_FAILED`, `PUSH_POSTC
 3. CTS не меняется;
 4. UPDATE journal не дублируется;
 5. provider/repository facts имеют приоритет над runtime/model memory.
+
+
+## Межклоновое восстановление
+
+`STEP` handoff в Git не переносит `executions[].current.context.sideEffect` и не служит доказательством уже проведённых `GIT COMMIT/PUSH/PR`, UPDATE или иной внешней мутации. Он не даёт разрешения автоматически повторять эти операции.
+
+Во втором clone `HARNESS RESUME` может создать только новый локальный `STEP PLAN`. Для будущей Git/provider mutation работают прежние preflight, CTS и side-effect reconciliation. Если после handoff опубликован новый commit, старый snapshot блокируется через `HANDOFF_OUTDATED`. Без явного Git fetch нет доказательств актуальности remote refs и нет распределённой блокировки. Подробнее: [PORTABLE_RESUME.md](PORTABLE_RESUME.md).

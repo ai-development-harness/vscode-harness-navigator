@@ -5,13 +5,15 @@ name: Harness Integrity
 # GitHub Actions events, на которых выполняется baseline Harness validation.
 # Пример: pull_request в main и push в main после merge.
 on:
-  # Проверять Pull Request, направленный в main.
-  # Пример: feature/token-budget → main запускает Harness Integrity.
+  # Проверять PR как в main, так и в общие feature/integration-ветки.
+  # Пример: fix/284-evidence-freshness → feature/orchestration-reliability-2026-10.
   pull_request:
-    # Ограничить base branch основной веткой проекта.
-    # Пример: main.
+    # Feature branches используются как промежуточный integration target:
+    # на них нужен тот же deterministic gate до финального PR в main.
+    # Пример: main или feature/orchestration-reliability-2026-10.
     branches:
       - main
+      - 'feature/**'
   # После merge PR GitHub создаёт push в main — это отдельная финальная проверка.
   # Пример: squash merge PR → push нового commit в main → Harness Integrity.
   push:
@@ -47,12 +49,12 @@ jobs:
     # Отображаемое имя job в GitHub UI.
     # Пример: "Validate Harness".
     name: Validate Harness
-    # Runner image для выполнения validation; закреплён, чтобы смена `latest` не меняла CI молча (#111).
-    # Пример: `ubuntu-24.04`; конкретная версия Python задаётся отдельным setup step.
-    runs-on: ubuntu-24.04
+    # Linux runner выбирается из HARNESS_LINUX_RUNS_ON (JSON-массив labels или JSON-строка).
+    # Пример: ["self-hosted", "linux", "x64", "harness"]; без переменной — ubuntu-24.04.
+    runs-on: ${{ fromJSON(vars.HARNESS_LINUX_RUNS_ON || '"ubuntu-24.04"') }}
     # Максимальное время job до принудительной остановки.
-    # Пример: 5 минут существенно выше обычного времени validator, но защищает от зависания.
-    timeout-minutes: 5
+    # Пример: 15 минут дают запас для полного synthetic suite на загруженном runner.
+    timeout-minutes: 15
 
     # Последовательность шагов job.
     # Пример: checkout → setup Python → запуск dependency-free validator.
@@ -192,8 +194,8 @@ jobs:
     # Пример: windows-2025 вместо floating windows-latest.
     runs-on: windows-2025
     # Targeted suite обычно короткий; timeout защищает от зависших process tests.
-    # Пример: 10 минут оставляет запас для update-engine fixtures.
-    timeout-minutes: 10
+    # Пример: 15 минут оставляют запас для update-engine fixtures на загруженном runner.
+    timeout-minutes: 15
 
     # Последовательность Windows-specific проверок.
     # Пример: checkout → Python → python3 shim → targeted self-tests.
@@ -250,12 +252,29 @@ jobs:
         # Targeted regression set platform-sensitive tools.
         # Пример: execution, verification и update engine.
         run: |
-          python .harness/tools/harness-config-self-test.py
-          python .harness/tools/document-contract-self-test.py
-          python .harness/tools/execution-self-test.py
-          python .harness/tools/verification-self-test.py
-          python .harness/tools/reliable-orchestration-fault-self-test.py
-          python .harness/tools/update-engine-self-test.py
+          # В PowerShell ошибка native python не прерывает следующие команды
+          # автоматически: успешный последний тест мог скрыть предыдущий FAIL.
+          # Проверяем код возврата каждого скрипта отдельно (#302).
+          function Invoke-HarnessSelfTest {
+            param([string]$Script)
+            python $Script
+            if ($LASTEXITCODE -ne 0) {
+              throw "Self-test failed: $Script (exit $LASTEXITCODE)"
+            }
+          }
+          Invoke-HarnessSelfTest ".harness/tools/harness-config-self-test.py"
+          Invoke-HarnessSelfTest ".harness/tools/document-contract-self-test.py"
+          Invoke-HarnessSelfTest ".harness/tools/execution-self-test.py"
+          Invoke-HarnessSelfTest ".harness/tools/step-next-self-test.py"
+          Invoke-HarnessSelfTest ".harness/tools/verification-self-test.py"
+          Invoke-HarnessSelfTest ".harness/tools/reliable-orchestration-fault-self-test.py"
+          Invoke-HarnessSelfTest ".harness/tools/portable-handoff-self-test.py"
+          Invoke-HarnessSelfTest ".harness/tools/portable-resume-self-test.py"
+          Invoke-HarnessSelfTest ".harness/tools/portable-resume-matrix-self-test.py"
+          Invoke-HarnessSelfTest ".harness/tools/operational-reports-self-test.py"
+          Invoke-HarnessSelfTest ".harness/tools/operational-completion-self-test.py"
+          Invoke-HarnessSelfTest ".harness/tools/operational-integration-self-test.py"
+          Invoke-HarnessSelfTest ".harness/tools/update-engine-self-test.py"
 
   # Проверить нижнюю документированную границу Python отдельно от основного 3.13 job.
   # Пример: использование API, появившегося только в 3.12+, должно ломать этот job.
@@ -264,11 +283,11 @@ jobs:
     # Пример: "Validate Python 3.11 compatibility".
     name: Validate Python 3.11 compatibility
     # Linux runner совпадает с основным job, чтобы различалась только версия Python.
-    # Пример: ubuntu-24.04.
-    runs-on: ubuntu-24.04
+    # Пример: без HARNESS_LINUX_RUNS_ON используется ubuntu-24.04.
+    runs-on: ${{ fromJSON(vars.HARNESS_LINUX_RUNS_ON || '"ubuntu-24.04"') }}
     # Полный synthetic suite обычно укладывается существенно быстрее.
-    # Пример: 5 минут защищают от regression/hang.
-    timeout-minutes: 5
+    # Пример: 15 минут дают запас для полного synthetic suite на минимальной версии Python.
+    timeout-minutes: 15
 
     # Последовательность minimum-version validation.
     # Пример: checkout → Python 3.11 → validator → discoverable self-tests.
