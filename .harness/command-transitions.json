@@ -581,7 +581,7 @@
           "chainAllowed": true,
           "target": "release-optional",
           "input": "none",
-          "summary": "Проверить доступный путь обновления Harness без внесения изменений.",
+          "summary": "Проверить прямое обновление служебных файлов к latest или указанной версии.",
           "documentation": ".harness/docs/COMMANDS.md#command-harness-update-check",
           "dispatch": {
             "kind": "deterministic",
@@ -591,9 +591,8 @@
             "mode": "none",
             "modelWork": [],
             "deterministicWork": [
-              "Построение маршрута обновления",
-              "Проверка версий, владения файлами и возможных конфликтов",
-              "Предварительная проверка без изменения проекта"
+              "Разрешение current и final target по immutable tags без цепочки релизов",
+              "Проверка владения, трёхстороннего слияния и целостности служебных файлов без чтения рабочих артефактов"
             ],
             "fastPaths": []
           }
@@ -603,7 +602,7 @@
           "chainAllowed": true,
           "target": "release-optional",
           "input": "none",
-          "summary": "Применить допустимое обновление Harness.",
+          "summary": "Одной транзакцией обновить служебные файлы к latest или указанной версии.",
           "documentation": ".harness/docs/COMMANDS.md#command-harness-update-apply",
           "dispatch": {
             "kind": "deterministic",
@@ -613,10 +612,9 @@
             "mode": "none",
             "modelWork": [],
             "deterministicWork": [
-              "Пошаговое применение обновления",
-              "Трёхстороннее слияние разрешённых файлов",
-              "Откат при ошибке",
-              "Проверка результата и обновление состояния версии"
+              "Разрешение current и final target по immutable tags без цепочки релизов",
+              "Проверка владения, трёхстороннего слияния и целостности служебных файлов без чтения рабочих артефактов",
+              "Атомарная установка final target и откат при ошибке; reload только перед следующей рабочей командой"
             ],
             "fastPaths": []
           }

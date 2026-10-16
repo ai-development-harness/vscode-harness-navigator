@@ -13,8 +13,8 @@ default_branch = "main"
 # Пример: '^v\d+\.\d+\.\d+$'.
 tag_pattern = '^v\d+\.\d+\.\d+$'
 
-# Machine-readable граф допустимых переходов. Updater читает его из default_branch только как routing metadata;
-# содержимое release по-прежнему берётся исключительно из immutable tags.
+# Каталог latest release. Новый updater читает из default_branch только latest;
+# явный TO обращается сразу к immutable tag, без промежуточных releases.
 # Пример: ".harness/harness-update-graph.json".
 update_manifest = ".harness/harness-update-graph.json"
 

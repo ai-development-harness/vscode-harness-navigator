@@ -1,6 +1,6 @@
 # Модель, используемая этой ролью.
-# Пример: "gpt-5.6-terra". Medium достаточно для diff boundary, branch policy и commit composition.
-model = "gpt-5.6-terra"
+# Пример: "gpt-6.1-sol". Medium достаточно для diff boundary, branch policy и commit composition.
+model = "gpt-6.1-sol"
 
 # Reasoning effort роли.
 # Пример: "medium". Допустимые значения зависят от выбранной модели/Codex runtime.

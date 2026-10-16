@@ -1,5 +1,5 @@
 # Основная модель root-agent текущей Codex-сессии.
-# Пример: "gpt-5.6-terra" для balanced режима; reasoning-heavy работу делегируют специализированным субагентам.
+# Пример: "gpt-6.1-sol" для balanced режима; reasoning-heavy работу делегируют специализированным субагентам.
 model = "gpt-6.1-sol"
 
 # Reasoning effort root-agent для обычных команд.
@@ -36,8 +36,8 @@ enabled = true
 max_concurrent_threads_per_session = 4
 
 # Модель субагента, если конкретная роль не переопределила `model` в своём config_file.
-# Пример: "gpt-5.6-terra" как экономичный balanced fallback.
-default_subagent_model = "gpt-5.6-terra"
+# Пример: "gpt-6.1-sol" как экономичный balanced fallback.
+default_subagent_model = "gpt-6.1-sol"
 
 # Reasoning effort субагента по умолчанию при отсутствии role-specific override.
 # Пример: "medium".

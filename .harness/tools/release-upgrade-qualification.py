@@ -497,6 +497,21 @@ def qualify(
                 mirror,
             )
             _clone_baseline(baseline_project, exact_baseline, work)
+            # Execute the matrix from the exact candidate, never the host checkout.
+            engine = temp / "candidate-engine"
+            _clone_baseline(candidate_source, exact_candidate, engine)
+            matrix, matrix_item = _stage("artifact-state-matrix", [
+                sys.executable, str(engine / ".harness/tools/update-artifact-canary.py"),
+                "--baseline-project", str(work), "--source-mirror", str(mirror),
+                "--target", candidate_tag,
+            ], cwd=engine)
+            stages.append(matrix_item)
+            if matrix.returncode != 0:
+                raise QualificationError("ARTIFACT_MATRIX_FAILED", "artifact-state-matrix")
+            matrix_item["result"] = _json_result(matrix, "artifact-state-matrix")
+            if matrix_item["result"].get("status") != "PASS":
+                raise QualificationError("ARTIFACT_MATRIX_FAILED", "artifact-state-matrix")
+
 
             first, first_applied = _apply_until_settled(
                 work,
@@ -524,6 +539,13 @@ def qualify(
                 (
                     "validate",
                     [sys.executable, ".harness/tools/validate.py", "--mode", "manual"],
+                ),
+                # Отдельное evidence для #340: initialized upgrade проверяется
+                # также на разветвлённом BLOCKED DAG с историческими REVIEW.
+                # Full suite ниже сохраняется; линейной PASS-цепочки мало.
+                (
+                    "blocked-dependency-dag",
+                    [sys.executable, ".harness/tools/dependency-evidence-self-test.py"],
                 ),
                 (
                     "self-tests",

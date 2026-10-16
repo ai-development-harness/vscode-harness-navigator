@@ -1,6 +1,6 @@
 # Модель, используемая этой ролью.
-# Пример: "gpt-6.1-sol". Planner должен проследить dependencies/REQ/ADR/risks до mutation.
-model = "gpt-6.1-sol"
+# Пример: "gpt-6-astra". Planner должен проследить dependencies/REQ/ADR/risks до mutation.
+model = "gpt-6-astra"
 
 # Reasoning effort роли.
 # Пример: "max" для quality-first planning. Допустимые значения зависят от выбранной модели/Codex runtime.

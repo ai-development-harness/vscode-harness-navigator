@@ -1,8 +1,8 @@
 ---
 name: docs
 description: Synchronize project documentation and projections with verified implementation evidence.
-model: sonnet
-effort: low
+model: opus
+effort: medium
 permissionMode: default
 ---
 

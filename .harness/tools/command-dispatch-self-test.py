@@ -591,6 +591,21 @@ def main() -> int:
             "command": "GIT CHECK",
         }, aligned_update
 
+        # A completed direct update reloads only before the next work command.
+        # Dispatcher must never request another APPLY to reach the final target.
+        command_dispatch_module.apply_update = lambda _root, target=None: {
+            "status": "UPDATED", "current": lock_ref, "resolvedTarget": target or lock_ref,
+            "route": ["v0.6.0", lock_ref], "reloadRequired": True,
+        }
+        try:
+            direct_update = start_dispatch(root, f"HARNESS UPDATE APPLY TO {lock_ref}")
+        finally:
+            command_dispatch_module.apply_update = original_apply_update
+        assert direct_update["status"] == "DONE", direct_update
+        assert direct_update["result"]["nextAction"] == {
+            "kind": "reload-runtime", "command": None,
+        }, direct_update
+
         # HARNESS RESUME не создаёт отдельную root execution и возвращает
         # semantic handoff существующей interrupted command.
         interrupted = start_dispatch(root, "PROJECT QUICK FIX: resume test")

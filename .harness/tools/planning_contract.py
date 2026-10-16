@@ -368,9 +368,9 @@ def step_completion_proof(
     Это structural proof. review_contract.py дополнительно доказывает корректность
     самого immutable report и reviewed revision.
     """
-    # Кеш живёт только в пределах одной проверки. PASS proofs не зависят
-    # от пути обхода, поэтому могут переиспользоваться в DAG; BLOCKED proofs
-    # сохраняют конкретный путь (не скрываем dependency-cycle).
+    # Кеш живёт только в пределах одной проверки. Proof без найденного цикла
+    # не зависит от пути обхода — даже если он BLOCKED. Только цикл требует
+    # отдельного ключа для каждого ancestry (не скрываем dependency-cycle).
     # Файлового state или второго источника истины здесь нет.
     if _proof_cache is None:
         _proof_cache = {}
@@ -546,9 +546,12 @@ def step_completion_proof(
         "snapshot": snapshot,
         "proof_hash": stable_hash(snapshot),
     }
-    # PASS можно переиспользовать независимо от маршрута; у BLOCKED результат
-    # зависит от ancestry и должен содержать честную причину сбоя.
-    _proof_cache[(step_id, None if proof["complete"] else _ancestors)] = proof
+    # Исторический REVIEW или stale contract дают BLOCKED независимо от пути.
+    # Ключ с ancestry для каждого такого отказа повторно обходит общий подграф
+    # на каждом маршруте DAG и приводит к экспоненциальному числу чтений (#340).
+    # Только найденный цикл зависит от пути; учитываем и вложенные причины.
+    path_dependent = any("dependency-cycle:" in reason for reason in reasons)
+    _proof_cache[(step_id, _ancestors if path_dependent else None)] = proof
     return proof
 
 

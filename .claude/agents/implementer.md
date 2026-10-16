@@ -1,7 +1,7 @@
 ---
 name: implementer
 description: Implement an approved STEP plan within scope, update tests, and run deterministic verification.
-model: sonnet
+model: opus
 effort: medium
 permissionMode: default
 ---

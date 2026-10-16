@@ -1,210 +1,155 @@
 # Обновление Harness в существующем проекте
 
-Self-update protocol layer выполняется отдельно от product development. Он не является STEP и не создаёт product REQ/ADR.
+## Контракт
 
-## Config boundary
+`HARNESS UPDATE APPLY` устанавливает последнюю опубликованную версию за одну
+транзакцию. `HARNESS UPDATE APPLY TO vX.Y.Z` устанавливает указанный immutable
+release напрямую. Промежуточные releases, bridge installs и повторные APPLY
+для достижения target не требуются. Явный TO допускает возврат к более старому
+поддерживаемому release; неявный latest никогда не понижает версию.
 
-Manifest задаёт только путь к update policy:
+Updater отвечает за служебные файлы, ownership/merge и атомарность установки.
+**Никакое состояние рабочих артефактов не блокирует обновление.** Он не читает
+и не проверяет актуальность STEP, REQ, ADR, REVIEW, Evidence, dependency proofs,
+архитектуры, STATUS/roadmap и project templates. Повреждённые, отсутствующие,
+не UTF-8, устаревшие, staged/unstaged/untracked артефакты сохраняются как есть.
+Updater не пересобирает projections и не выполняет PROJECT RECONCILE.
 
-```text
-.harness/manifest.yaml
-└── repository.harnessUpdatePolicy
-```
-
-Далее **сама policy** является source of truth update topology:
-
-```toml
-[source]
-repository = "owner/repo"
-default_branch = "main"
-tag_pattern = "^v..."
-update_manifest = ".harness/harness-update-graph.json"
-
-[state]
-lock_file = ".harness/harness.lock.json"
-report_directory = "planning/harness-updates"
-```
-
-Core tools/skills обязаны использовать configured `source.update_manifest`, `state.lock_file`, `state.report_directory`; default paths выше — только текущий template layout.
+Completion, freshness, review/provenance и schema gates остаются обязательными
+в обычной работе над соответствующим STEP/проектом. Успешное обновление не
+утверждает, что проект готов или исторический BLOCKED стал PASS. До и после
+PROJECT INIT действует одинаковая граница: только установка control plane.
 
 ## Команды
 
 ```text
-HARNESS UPDATE CHECK [TO <tag>]
-HARNESS UPDATE APPLY [TO <tag>]
-HARNESS UPDATE CHECK [TO <tag>] > APPLY
+HARNESS UPDATE CHECK [TO vX.Y.Z]
+HARNESS UPDATE APPLY [TO vX.Y.Z]
+HARNESS UPDATE CHECK [TO vX.Y.Z] > APPLY
 ```
 
-Они доступны до и после `PROJECT INIT`.
-
-## Deterministic engine
-
-Canonical update mechanics реализует dependency-free tool, а не свободная интерпретация инструкций агентом:
+Dispatcher вызывает deterministic engine без model call:
 
 ```bash
 python3 .harness/tools/harness-update.py check [--to vX.Y.Z] --json
 python3 .harness/tools/harness-update.py apply [--to vX.Y.Z] --json
-python3 .harness/tools/harness-update.py adopt --from vX.Y.Z --json
 ```
 
-Обычные `HARNESS UPDATE CHECK/APPLY` dispatcher выполняет как deterministic handlers без model call. Engine result является factual и не переинтерпретируется reasoning-ом. `update-harness` skill остаётся reference/fallback для explicit legacy adoption, ручной recovery и объяснения сложного blocker пользователю; он не должен вручную воспроизводить ownership calculation, 3-way merge, marker preservation, filesystem writes или lock advancement.
+CHECK строго read-only. APPLY повторяет fresh source/integrity/merge preflight.
+BASE — immutable установленный release из lock, OURS — локальные служебные
+файлы, THEIRS — единственный конечный immutable target. CHECK проверяет весь
+этот переход. `checkedThrough` всегда конечный target, route содержит только
+current/target (или пуст при NO_UPDATE).
 
-Pre-INIT update:
+## Источник и настройки
 
-- меняет Harness protocol layer/lock и сохраняет `project.initialized=false`;
-- не выполняет INIT и не создаёт product knowledge;
-- colocated project templates не становятся обычными updater-owned paths;
-- если target release меняет template contract через `reloadRequired=true`, первый hop может оставить доказанный old-release template baseline до обязательного reload;
-- после reload повтор exact APPLY выравнивает **только** безопасный pre-INIT release drift до exact current baseline; custom prose/value/schema drift блокируется и не перезаписывается.
+Manifest задаёт `repository.harnessUpdatePolicy`. Из policy используются
+`source.repository`, `source.default_branch`, `source.tag_pattern`,
+`source.update_manifest`, `state.lock_file`, `state.report_directory`.
 
-## Immutable source model
+Без TO из каталога на default branch читается только `latest`. С TO каталог
+вообще не читается. Content обеих версий разрешается только по immutable Git
+tags; moving branch не становится источником устанавливаемого кода. Project
+lock pin-ит `source.ref` и `source.commit`; moved tag даёт `SOURCE_TAG_MOVED`.
+Release snapshot не содержит собственного source.commit: он ещё не существует.
 
-Update graph из configured `source.update_manifest` используется только как routing metadata.
+Каталог `schemaVersion: 1, strategy: direct` сохраняет transitions только для
+совместимости со старыми установленными клиентами: каждая известная версия
+направлена сразу в latest. Release tooling поддерживает это свойство при
+каждом следующем релизе. Новый engine не строит маршрут по transitions.
 
-Он задаёт:
+## Ownership и блокирующие ошибки установки
 
-- `schemaVersion`;
-- `latest`;
-- directed `transitions`;
-- `kind: standard | bridge`;
-- `reloadRequired`;
-- `reason` для bridge.
+- `harness_owned`: local bytes/modes должны совпадать с pinned BASE, иначе
+  `CURRENT_RELEASE_DRIFT`; неизвестные ignored files не захватываются glob-ом.
+- `shared`: deterministic 3-way merge сохраняет настройки проекта; конфликт
+  требует разрешения, без silent overwrite.
+- `marker_merge`: сохраняет project-owned blocks README/AGENTS; отсутствующий
+  ожидаемый block даёт `MARKER_DRIFT`.
+- Project-owned/unknown: не меняются, не валидируются, не включаются в scope.
+  Core skills перечислены поимённо; соседние project/third-party skills
+  остаются под контролем проекта.
 
-Moving default branch не является BASE/THEIRS content source. Файлы каждого hop читаются только из immutable tags, matching `source.tag_pattern`.
+Scope — union concrete managed paths immutable BASE/THEIRS и Git-tracked
+managed paths. Existing unknown path, впервые захватываемый target, даёт
+`NEW_MANAGED_PATH_COLLISION`. Смена ownership при modified OURS даёт
+`OWNERSHIP_CLASS_CHANGE`. Retired managed paths удаляются; оставленный target
+файл, вышедший из ownership, передаётся проекту и отражается в `handedOver`.
+Symlink/unsafe managed paths, binary managed merge, source/tag/lock drift,
+service configuration corruption и I/O failure остаются installation blockers.
+Это не проверки рабочих артефактов.
 
-Наличие tag без допустимого route недостаточно.
+Топология source/lock/report policy не меняется неявно:
+`UPDATE_POLICY_TOPOLOGY_CHANGE` требует отдельной поддержки engine. Git index,
+commit/push/PR updater не меняет и не выполняет.
 
-Graph обязан быть связным: `latest` — конечный узел без outgoing transition, и из каждого упомянутого release цепочка transitions доходит до `latest`. Тупиковый release отклоняется как `INVALID_UPDATE_GRAPH`, поэтому release gate (`update-engine-self-test.py`) не пропустит graph, на котором какой-то проект не смог бы обновиться.
+## Атомарная установка
 
-## CHECK
+1. Проверить immutable source identity и построить единый ownership/merge plan.
+2. Создать журнал `.harness/local/update-journal/` с backup затронутых bytes,
+   modes, lock и local execution state под его concurrency lock.
+3. Записать managed files атомарно, entry points engine последними, затем lock.
+4. Сравнить установленные bytes/modes с планом и проверить только syntax и
+   обязательные managed files/config/manifest/lock через installation validator.
+   Загруженный target code, full project validator и project commands не запускаются.
+5. Опубликовать один immutable UPDATE report через reserved staging/inode/hash
+   ledger и атомарный link без overwrite. Rollback удаляет только свой report.
+6. Atomic journal→tombstone rename фиксирует transaction commit. Сбой до этой
+   точки откатывает bytes/modes/lock/execution state; прерванный процесс
+   восстанавливается по журналу перед следующим APPLY. CHECK при pending
+   journal read-only блокируется с `UPDATE_JOURNAL_PENDING`.
 
-`HARNESS UPDATE CHECK` строго read-only.
+`UPDATED` уже означает достижение конечного target. Если `reloadRequired=true`,
+перезагрузи runtime перед следующей рабочей командой; повторять APPLY не нужно.
+Повторный APPLY возвращает `NO_UPDATE` с `repositoryMutated=false`, не меняя
+project templates. После reload inspect diff и обычный GIT CHECK. Project
+schema/freshness problems решаются в работе с проектом, отдельно от установки.
 
-Выполнение:
+## Совместимость со старыми установленными updater
+
+Старый binary может выполнять full preflight до получения новых файлов.
+Новый release не может ретроактивно изменить этот код. Если он блокирует
+обновление по STEP/REVIEW/STATUS, используй официальный installer из отдельного
+checkout **выбранного immutable release**, не редактируя lock и не копируя
+служебные файлы вручную:
 
 ```bash
-python3 .harness/tools/harness-update.py check [--to vX.Y.Z] --json
+git clone --branch vX.Y.Z --depth 1 https://github.com/ai-development-harness/ai-development-harness-template.git /tmp/harness-installer
+python3 /tmp/harness-installer/.harness/tools/harness-update.py check --root /absolute/project --to vX.Y.Z --json
+python3 /tmp/harness-installer/.harness/tools/harness-update.py apply --root /absolute/project --to vX.Y.Z --json
 ```
 
-Tool читает current policy/lock, remote routing graph, разрешает exact target, доказывает route, проверяет **Git tags** и сначала доказывает, что текущие `harness_owned` files/modes точно соответствуют pinned BASE из lock. Затем моделируется ownership/merge до ближайшей reload boundary. Даже при пустом route CHECK не возвращает PASS, если current Harness drifted. Результат содержит blockers, introduced/retired/reclassified paths, `checkedThrough`, `reloadBoundary` и current-release verification.
+Здесь vX.Y.Z — реально опубликованный release с новым installer. Это явный
+запуск trusted Harness tool; он использует policy/BASE проекта и те же ownership,
+source integrity, journal/rollback safeguards. После установки работает обычный
+HARNESS UPDATE APPLY. Для legacy journaled engine новый validate --mode manual
+автоматически выбирает installation-only профиль лишь при совпадающем token
+активной verifying-транзакции. Обычный manual/commit/ci остаётся project validation.
+Отдельный `validate.py --mode update` проверяет только установку.
 
-CHECK не меняет working tree, Git refs, lock, project documents, commit/push/PR. `BLOCKED` нельзя обходить ручным копированием release files.
+Поддерживаемый floor current/target/adoption — v0.6.0. Старые, до namespace
+migration версии требуют отдельной миграции. Если lock отсутствует, BASE
+нельзя угадывать: `adopt --from vX.Y.Z` требует явно известный immutable baseline,
+совпадающий с manifest и exact harness_owned bytes/modes. Adoption проверяет
+только installation postconditions; проектные артефакты не блокируют adoption.
 
-## APPLY
+## Release qualification
 
-`HARNESS UPDATE APPLY` — maintenance mutation.
+Перед публикацией exact candidate SHA проходит core suite на Linux 3.13,
+Linux 3.11 и Windows 3.13, pristine initialized canary upgrade и отдельную
+`update-artifact-canary.py` matrix на disposable copies того же canary.
+Матрица проверяет latest/TO, единственную установку, сохранение bytes/modes и
+Git index для 16 состояний artifacts, read-only CHECK и повторный NO_UPDATE.
+Любой FAIL блокирует release. Полный project validator нужен в pristine lane
+для проверки нормальной работы продукта; он не является updater postcondition.
 
-Mutation выполняется deterministic engine:
+## Update reports
 
-```bash
-python3 .harness/tools/harness-update.py apply [--to vX.Y.Z] --json
-```
-
-Engine перед первой записью сам повторно проверяет validator, exact current-release integrity и делает read-only preflight. `NO_UPDATE` допустим только после этих проверок. Предыдущий chat/CHECK не является заменой fresh machine preflight.
-
-Route применяется hop-by-hop, и каждый hop — отдельная транзакция с журналом `.harness/local/update-journal/`:
-
-1. backup всех затрагиваемых managed paths, lock и local runtime state (`.harness/local/execution/execution-status.json`) сохраняется до первой записи. Snapshot execution state и создание journal выполняются под тем же advisory lock, что canonical execution layer; после появления journal другие canonical sessions не могут менять execution state до commit/rollback;
-2. files пишутся атомарно (temp + fsync + rename); код engine (`harness_update.py`, `harness-update.py`, `update_recovery.py`) пишется последним;
-3. lock этого hop пишется внутри транзакции;
-4. target validator запускается отдельным процессом;
-5. только после его PASS создаётся durable report. Журнал до записи на диск резервирует path, уникальный staging path и sha256 содержимого. Полный report пишется в staging и публикуется `os.link` (атомарно, без overwrite); затем журнал фиксирует inode. Окна с незарегистрированным `UPDATE-*.md` нет, а rollback удаляет report только при доказанном владении (тот же inode, что у staging, или записанный inode + sha256): чужой report, занявший то же имя, не удаляется никогда;
-6. затем журнал атомарно переименовывается в tombstone `update-journal.discarded-*` — это commit point hop; удаление tombstone уже не участвует в решении commit/rollback, а оставшийся после crash tombstone удаляет следующая транзакция или recovery. Rollback завершается так же; перед первой записью он проверяет наличие всех backup blobs (неполный journal — fail-closed `UPDATE_JOURNAL_INVALID` без частичного отката) и удаляет `execution-status.lock`, если того не было до hop. `HARNESS UPDATE CHECK` при pending journal возвращает `UPDATE_JOURNAL_PENDING` до создания execution record.
-
-Любой failure, включая `KeyboardInterrupt`, откатывает hop byte-for-byte: восстанавливаются files и **exact permission bits**, удаляются введённые paths и report, journaled local state (`execution-status.json`) восстанавливается до pre-hop bytes, а созданный hop-ом отсутствовавший файл удаляется — независимо от `schemaVersion`. Rollback local state также выполняется под execution-status lock, поэтому параллельная canonical session не может потерять свою запись: она либо завершилась до snapshot, либо блокируется pending update transaction. Если lock был создан уже внутри hop target-validator-ом, recovery сначала durable переводит journal в `recovering` (это отзывает transactionId у surviving validator), затем дожидается освобождения lock, восстанавливает state и только после этого удаляет созданный lock до снятия journal gate. Если процесс был убит, журнал остаётся на диске: `HARNESS UPDATE CHECK` возвращает `UPDATE_JOURNAL_PENDING`, а следующий `HARNESS UPDATE APPLY` сначала откатывает прерванный hop (`recoveredInterruptedUpdate` в результате) и затем выполняет update заново. Ручной recovery без остальных Harness-модулей:
-
-```bash
-python3 .harness/tools/harness-update.py recover --json
-```
-
-Он использует только stdlib-модуль `update_recovery.py`, поэтому работает даже если прерванный hop успел записать часть `.harness/tools/**` из target release. Журнал живого процесса не откатывается (`UPDATE_IN_PROGRESS`); на платформах без проверки процесса (Windows) владелец считается живым, поэтому после сбоя там нужен явный `recover --force`.
-
-`reloadRequired=true`:
-
-1. hop применяется;
-2. lock/report фиксируют достигнутый release;
-3. current updater прекращает route с `UPDATER_RELOAD_REQUIRED`;
-4. после reload повторяется та же APPLY-команда к исходному final target.
-
-Hop требует reload не только по `reloadRequired=true` графа, но и автоматически, если он меняет любой `.harness/tools/*.py`, уже загруженный в текущий процесс updater/dispatcher (включая сам engine). Иначе остаток route выполнялся бы старым кодом поверх новых данных. Изменение незагруженного модуля reload не требует: он будет импортирован уже в target-версии.
-
-APPLY не запускает target scripts/install/bootstrap actions (единственный target code — postcondition validator внутри журналированной транзакции, см. [`THREAT_MODEL.md`](THREAT_MODEL.md)) и не делает commit/push/PR. Dispatcher добавляет к factual engine result deterministic `nextAction`: после `UPDATED` — `GIT CHECK`; при `UPDATER_RELOAD_REQUIRED` — reload и повтор exact APPLY. Обычно `NO_UPDATE → null`, но после reload pre-INIT template alignment может вернуть `NO_UPDATE` вместе с `repositoryMutated=true`; тогда `nextAction = GIT CHECK`, потому что release уже current, а project baseline только что детерминированно изменился. Если последующий Git gate обнаруживает migration pending уже **инициализированного** project schema, до commit выполняется `PROJECT RECONCILE`.
-
-После update:
-
-```text
-inspect diff
-GIT CHECK
-GIT COMMIT
-```
-
-## Ownership
-
-### harness_owned
-
-Protocol/tooling Harness. Local divergence от BASE блокирует silent overwrite.
-
-### shared
-
-Project-customizable tracked files: runtime configs, manifest и другие paths из policy.
-
-Merge:
-
-```text
-BASE   = immutable current release
-OURS   = project working state
-THEIRS = immutable target release
-```
-
-Conflict блокирует hop.
-
-### marker_merge
-
-Shared files с project-owned generated blocks, например README/AGENTS. После 3-way merge local marked blocks восстанавливаются. Block, который target release вводит впервые (его нет ни в BASE, ни в OURS), получает default body из target; block, удалённый проектом из BASE, остаётся `MARKER_DRIFT`.
-
-### project-owned / unknown
-
-Updater не меняет их.
-
-В частности active REQ/ADR/STEP/OQ, project architecture/code/tests и colocated project templates не становятся updater-owned только из-за schema release. Узкое исключение существует только **до PROJECT INIT** после reload-required update: exact old-release template baseline может быть выровнен до current baseline, если semantic subset proof доказывает отсутствие project customization. Это bootstrap convergence, а не передача template path в обычный updater ownership.
-
-`.agents/skills/` — общий runtime-neutral каталог, **не blanket Harness-owned namespace**. Update policy перечисляет core skills конкретными paths. Project-native/third-party `.agents/skills/<slug>/` остаются project-owned. Если новый release впервые объявляет core path, уже занятый project skill, update блокируется как `NEW_MANAGED_PATH_COLLISION`.
-
-## Evolution ownership policy
-
-Target release может менять ownership policy. Поэтому scope нельзя вычислять только по BASE allowlist и нельзя слепо доверять THEIRS.
-
-Bootstrap update topology (`source.repository`, `source.default_branch`, `source.tag_pattern`, `source.update_manifest`, `state.lock_file`, `state.report_directory`) текущий engine **не мигрирует неявно**. Изменение этих полей требует отдельного bridge support; иначе hop блокируется как `UPDATE_POLICY_TOPOLOGY_CHANGE`. Это исключает смешивание старого и нового lock/source boundary внутри одной транзакции.
-
-Для каждого hop:
-
-1. BASE policy читается из immutable BASE;
-2. local current policy должна быть допустимо согласована с BASE;
-3. target policy читается как данные по уже trusted policy path;
-4. transition scope = union concrete managed paths BASE + THEIRS;
-5. target-only path можно создать автоматически, если он не существовал в BASE/OURS;
-6. existing unknown path, который THEIRS пытается впервые захватить, => `NEW_MANAGED_PATH_COLLISION`;
-7. ownership-class change при modified OURS => `OWNERSHIP_CLASS_CHANGE`;
-8. `harness_owned` path, который target убирает из policy, но оставляет в своём tree, **передаётся проекту**: он получает последнее target-содержимое и дальше не управляется updater-ом (`handedOver`); path, отсутствующий в target tree, удаляется как retired;
-9. unknown paths вне transition scope не меняются.
-
-## Git scope и untracked artifacts
-
-Managed glob не даёт права рекурсивно владеть всем filesystem subtree.
-
-OURS scope строится из:
-
-- immutable BASE/THEIRS trees;
-- tracked Git paths.
-
-Конфликт с неотслеживаемым файлом:
-
-- если путь отсутствует в текущем неизменяемом BASE, но новый выпуск впервые пытается им управлять, существующий неотслеживаемый файл блокирует обновление;
-- если путь уже входит в текущий BASE, он не считается новым конфликтом только из-за отсутствия в индексе Git. Это необходимо после обязательной перезагрузки между переходами: файл мог быть создан предыдущим переходом, а коммит выполняется только после завершения всего маршрута;
-- для `harness_owned` такой файл всё равно обязан точно совпадать с текущим BASE, иначе проверка текущего выпуска блокирует продолжение;
-- неизвестные ignored-файлы, которые не входят в конкретный набор управляемых путей BASE/THEIRS, не затрагиваются.
-
-Проверка binary/non-UTF-8 применяется только к реально управляемому Git-пути.
+Одна transaction создаёт один `UPDATE-<UTC timestamp>.md` со schema: 1 в
+configured report_directory. Он фиксирует current/target, direct route,
+introduced/retired/handedOver/reclassified paths и installation verification.
+Report не утверждает валидность рабочих артефактов. Существующие durable reports
+не переписываются; занятая секунда заменяется следующей свободной UTC-секундой.
 
 ## Local runtime state migration
 
@@ -301,66 +246,6 @@ Canonical current definitions поставляются Harness control plane, а
 
 Так existing project не получает silent overwrite во время update, но schema действительно мигрирует после явного reconciliation.
 
-## Update reports
-
-Каждый применённый hop создаёт собственный report в configured `state.report_directory` с machine-readable YAML frontmatter `schema: 1` — внутри транзакции hop и только после PASS target validator, поэтому report никогда не утверждает непроверенный PASS, а откат/recovery hop удаляет и его report. `initial_release`/`final_target` описывают сам hop, requested target указан в body.
-
-Canonical имя — строго `UPDATE-<UTC timestamp>.md`; `created_at` обязан обозначать тот же whole-second UTC instant. UPDATE reports входят в immutable durable history: существующий report нельзя переписать/удалить/rename. Если текущая UTC-секунда уже занята, writer выбирает следующий свободный whole-second timestamp; альтернативных suffix-форматов нет.
-
-Report фиксирует:
-
-- initial release;
-- final/requested target;
-- фактический route;
-- introduced/retired/handed over/reclassified paths;
-- verification;
-- reload/follow-up state.
-
-## Legacy adoption
-
-Если configured lock отсутствует, BASE неизвестен.
-
-`HARNESS UPDATE CHECK` возвращает `LEGACY ADOPTION REQUIRED`.
-
-Автоматическая adoption допустима только при доказуемом explicit baseline tag. «Наиболее похожий release» не считается доказательством.
-
-```bash
-python3 .harness/tools/harness-update.py adopt --from vX.Y.Z --json
-```
-
-Baseline должен совпадать с current manifest release. Новый lock pin-ит не только tag ref, но и exact commit OID. Если `harness_owned` files расходятся с baseline, adoption возвращает `ADOPTION_BASELINE_DRIFT` и lock не создаётся: lock не имеет права утверждать baseline, которого в проекте нет.
-
-Lock adoption пишется внутри журнала и принимается только после PASS того же postcondition validator (`validate.py --mode manual`), что и обычный hop. `ADOPTED` означает валидное resulting state; при failure/прерывании lock не остаётся (`POSTCONDITION_FAILED`). Поэтому adoption проекта, который уже не проходит manual validation, блокируется до исправления.
-
-Текущий deterministic updater поддерживает baseline **не старее `v0.6.0`**. Для current lock, target или adoption baseline ниже этого floor операция завершается с `UNSUPPORTED_HARNESS_RELEASE`. Historical transitions до `v0.6.0` остаются в update graph как immutable release history и regression boundary для старых bridge, но больше не являются поддерживаемой точкой входа runtime.
-
-## First deterministic-updater bridge after v0.5.3
-
-Published `v0.5.3` ещё не содержит deterministic `.harness/tools/harness-update.py`. Поэтому **первый release после v0.5.3** обязан добавить edge:
-
-- `from = v0.5.3`;
-- `kind = bridge`;
-- `reloadRequired = true`;
-- непустой `reason`.
-
-Этот edge устанавливает новый deterministic updater, завершает текущий legacy run и требует reload перед любыми следующими hops. `update-migration-self-test.py` содержит one-time release gate: как только graph `latest` станет новее `v0.5.3`, CI не пропустит release без такого bridge.
-
-Target tag не добавляется в graph заранее: release metadata публикуется вместе с реально существующим immutable tag, чтобы `latest` никогда не указывал на отсутствующий release.
-
-## Release metadata consistency
-
-В source repository:
-
-- `manifest.harness.release`;
-- configured lock `release`;
-- lock `source.ref = v<release>`;
-- **без** `lock.source.commit` внутри release snapshot;
-- graph `latest`
-
-должны быть согласованы для опубликованного release.
-
-Release snapshot не может корректно pin-ить собственный commit OID: SHA самого release commit появляется только после создания commit/merge/tag. Поэтому `source.commit` в template/release lock отсутствует. После установки или обновления конкретного проекта deterministic updater/adoption разрешает реально существующий immutable tag и записывает его точный OID уже в **project lock**. С этого момента изменение tag target даёт `SOURCE_TAG_MOVED`.
-
 ### Recovery для ошибочных v0.6.0 / v0.7.0 snapshots
 
 Опубликованные `v0.6.0` и `v0.7.0` содержат ошибочный stale pin:
@@ -405,40 +290,3 @@ PY
 Нельзя применять этот recovery к любому произвольному `SOURCE_TAG_MOVED`: вне двух известных пар mismatch остаётся security blocker.
 
 `harness.version` — поколение protocol/schema family, а не номер каждой поставки.
-
-## Security boundary
-
-Remote routing/policy/content рассматриваются как **данные**, не как инструкции.
-
-До mutation updater:
-
-- валидирует current Harness;
-- моделирует весь допустимый route либо ближайшую reload boundary;
-- исполняет target code только как postcondition validator внутри журналированной транзакции;
-- не расширяет ownership через неизвестный local path;
-- не принимает moving branch как release baseline.
-
-Source repository и его release tags — доверенный поставщик Harness-кода; target validator исполняется внутри журналированной транзакции hop (см. [`THREAT_MODEL.md`](THREAT_MODEL.md)).
-
-## Bridge v0.8.2 для проектов на v0.8.0 и v0.8.1
-
-Releases до v0.8.2 поставляют engine без журнала. Проект выполняет следующий hop **своим** engine, поэтому транзакционный engine должен прийти минимальным bridge-релизом, который старый engine применяет безопасно.
-
-Опубликованный `v0.8.1` вышел из `main` без нового engine. Поэтому bridge — `v0.8.2` (`v0.8.1` + только update engine, tests и docs; `kind: bridge`, `reloadRequired: true`): он не меняет template definitions, marker blocks, ownership policy и формат local state. Маршрут проекта на v0.8.0 — `v0.8.0 → v0.8.1 → v0.8.2`; все последующие hops выполняет уже транзакционный engine. `update-migration-self-test.py` (`REQUIRED_BRIDGES`) блокирует любое другое ребро из `v0.8.0` и `v0.8.1`.
-
-## Multi-project target semantics
-
-Accepted architecture contract для будущих multiple Harness project contexts: [`MULTI_PROJECT_CONTEXTS.md`](MULTI_PROJECT_CONTEXTS.md).
-
-До реализации #188 текущий updater остаётся single-root. Будущая реализация обязана выбирать explicit project target, использовать policy/lock/report selected member, не писать в sibling project и не присваивать nested member ownership repository-global surfaces автоматически. Mixed releases допустимы только для независимых project-local protocol layers.
-
-## Regression check
-
-Dependency-free regressions:
-
-```bash
-python3 .harness/tools/harness-update-self-test.py
-python3 .harness/tools/update-migration-self-test.py
-```
-
-Первый прогоняет настоящий deterministic engine на synthetic Git source/project: legacy adoption, tag pinning, CHECK/APPLY, shared 3-way merge, marker preservation, core-vs-project skill ownership и collisions. Второй покрывает historical routing/reload invariants, migration/idempotency и release metadata.

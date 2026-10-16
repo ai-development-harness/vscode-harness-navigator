@@ -1,10 +1,10 @@
 # Модель, используемая этой ролью.
-# Пример: "gpt-5.6-terra". Экономичный специализированный review; повышай effort для сложных concurrency/migration scenarios.
-model = "gpt-5.6-terra"
+# Пример: "gpt-6.1-sol". Экономичный специализированный review; повышай effort для сложных concurrency/migration scenarios.
+model = "gpt-6.1-sol"
 
 # Reasoning effort роли.
 # Пример: "low". Допустимые значения зависят от выбранной модели/Codex runtime.
-model_reasoning_effort = "low"
+model_reasoning_effort = "medium"
 
 # Доступ агента к файловой системе проекта.
 # Пример: "read-only". Read-only сохраняет независимость test review.

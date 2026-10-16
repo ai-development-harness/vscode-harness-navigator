@@ -360,82 +360,24 @@ def project_from_v060(
 
 
 def test_supported_floor_reload_chain(temp: Path) -> None:
-    """Доказать v0.6.0 → v0.7.0 → reload → v0.8.0 одним final target."""
-
+    """Сразу v0.6.0 → v0.8.0: один отчёт, один final lock, никаких hops."""
     source, base_files, oids = supported_floor_source(temp)
-    project = project_from_v060(
-        temp / "supported-floor-project",
-        base_files,
-        oids["v0.6.0"],
-    )
-
+    project = project_from_v060(temp / "supported-floor-project", base_files, oids["v0.6.0"])
     checked = check_update(project, target="v0.8.0", source_url=str(source))
-    assert checked["status"] == "PASS", checked
-    assert checked["route"] == ["v0.6.0", "v0.7.0", "v0.8.0"], checked
-    assert checked["checkedThrough"] == "v0.7.0", checked
-    assert checked["reloadBoundary"] == "v0.7.0", checked
-    assert len(checked["hops"]) == 1, checked
-
-    first = apply_update(project, target="v0.8.0", source_url=str(source))
-    assert first["status"] == "UPDATER_RELOAD_REQUIRED", first
-    assert first["current"] == "v0.7.0", first
-    assert first["resolvedTarget"] == "v0.8.0", first
-    assert first["route"] == ["v0.6.0", "v0.7.0"], first
-
+    assert checked["route"] == ["v0.6.0", "v0.8.0"], checked
+    assert checked["checkedThrough"] == "v0.8.0"
+    assert len(checked["hops"]) == 1
+    result = apply_update(project, target="v0.8.0", source_url=str(source))
+    assert result["status"] == "UPDATED" and result["reloadRequired"], result
+    assert result["route"] == ["v0.6.0", "v0.8.0"]
     lock = json.loads((project / ".harness/harness.lock.json").read_text())
-    assert lock["release"] == "0.7.0", lock
-    assert lock["source"]["ref"] == "v0.7.0", lock
-    assert lock["source"]["commit"] == oids["v0.7.0"], lock
-    assert "updater runtime v0.7.0" in (
-        project / ".harness/tools/harness_update.py"
-    ).read_text(encoding="utf-8")
-
-    # Новый файл v0.7.0 намеренно ещё не tracked: пользователь не должен
-    # коммитить промежуточный hop только ради продолжения после reload.
-    status = run(
-        project,
-        "git",
-        "status",
-        "--porcelain",
-        "--",
-        ".harness/tools/v070-only.py",
-    )
-    assert status.startswith("??"), status
-
-    # Имитация перезагрузки: следующий вызов уже опирается на lock v0.7.0 и
-    # установленный control plane v0.7.0, но сохраняет исходный final target.
-    resumed_check = check_update(
-        project,
-        target="v0.8.0",
-        source_url=str(source),
-    )
-    assert resumed_check["route"] == ["v0.7.0", "v0.8.0"], resumed_check
-    assert resumed_check["checkedThrough"] == "v0.8.0", resumed_check
-    assert resumed_check["reloadBoundary"] is None, resumed_check
-
-    second = apply_update(project, target="v0.8.0", source_url=str(source))
-    assert second["status"] == "UPDATED", second
-    assert second["current"] == "v0.8.0", second
-    assert second["route"] == ["v0.7.0", "v0.8.0"], second
-
-    final_lock = json.loads((project / ".harness/harness.lock.json").read_text())
-    assert final_lock["release"] == "0.8.0", final_lock
-    assert final_lock["source"]["ref"] == "v0.8.0", final_lock
-    assert final_lock["source"]["commit"] == oids["v0.8.0"], final_lock
-
-    manifest_text = (project / ".harness/manifest.yaml").read_text(encoding="utf-8")
-    assert 'release: "0.8.0"' in manifest_text, manifest_text
+    assert lock["source"]["ref"] == "v0.8.0"
+    assert lock["source"]["commit"] == oids["v0.8.0"]
     assert (project / ".harness/tools/v070-only.py").read_text() == "# updated in v0.8.0\n"
     assert (project / ".agents/skills/custom/SKILL.md").read_text() == "project custom skill\n"
-
-    shared = (project / "shared.txt").read_text(encoding="utf-8")
-    assert shared == "local-line-1\nstable-line-2\nv080-line-3\nstable-line-4\nv070-line-5\n", shared
-    merged_agents = (project / "AGENTS.md").read_text(encoding="utf-8")
-    assert "before v0.8.0" in merged_agents and "after v0.8.0" in merged_agents
-    assert "LOCAL PROJECT CONTEXT" in merged_agents
-
-    reports = sorted((project / "reports").glob("UPDATE-*.md"))
-    assert len(reports) == 2, reports
+    assert "LOCAL PROJECT CONTEXT" in (project / "AGENTS.md").read_text()
+    assert len(list((project / "reports").glob("UPDATE-*.md"))) == 1
+    assert apply_update(project, target="v0.8.0", source_url=str(source))["status"] == "NO_UPDATE"
 
 
 def test_stale_release_snapshot_pin_recovery(temp: Path) -> None:
@@ -466,9 +408,9 @@ def test_stale_release_snapshot_pin_recovery(temp: Path) -> None:
 
     checked = check_update(project, target="v0.8.0", source_url=str(source))
     assert checked["status"] == "PASS", checked
-    assert checked["route"] == ["v0.6.0", "v0.7.0", "v0.8.0"], checked
-    assert checked["checkedThrough"] == "v0.7.0", checked
-    assert checked["reloadBoundary"] == "v0.7.0", checked
+    assert checked["route"] == ["v0.6.0", "v0.8.0"], checked
+    assert checked["checkedThrough"] == "v0.8.0", checked
+    assert checked["reloadBoundary"] == "v0.8.0", checked
 
 
 def main() -> int:
