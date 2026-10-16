@@ -17,3 +17,7 @@ updates:
       # Периодичность проверки.
       # Пример: weekly.
       interval: weekly
+    # Объединяет все обновления версий GitHub Actions в один еженедельный PR.
+    groups:
+      github-actions:
+        patterns: ['*']
