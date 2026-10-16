@@ -19,11 +19,11 @@ Accepted ADR не переписывай задним числом. Расхож
 <!-- PROJECT-CONTEXT:START -->
 ## Project context
 
-Проект инициализирован как **VSCode Harness Navigator**: локальное read-only расширение Visual Studio Code для навигации по артефактам и command surface AI Development Harness 0.6.0+.
+Проект инициализирован как **VSCode Harness Navigator**: локальное read-only расширение Visual Studio Code для навигации по артефактам, command surface и dependency graph AI Development Harness 0.10.3+.
 
-Канонические product contracts находятся в `docs/PROJECT.md`, `docs/requirements/`, `docs/architecture.md`, `docs/adr/` и `planning/tasks/`. Расширение не запускает Harness-команды, агентов, shell/Python tools и не изменяет Harness artifacts. Все configured paths должны читаться из `.harness/manifest.yaml`; Artifact Index, Reference Index и Command Catalog являются derived in-memory моделями.
+Канонические product contracts находятся в `docs/PROJECT.md`, `docs/requirements/`, `docs/architecture.md`, `docs/adr/` и `planning/tasks/`. Расширение не запускает Harness-команды, агентов или shell и не изменяет Harness artifacts. ADR-008 разрешает только fixed read-only Project State API `.harness/tools/project-state.py --json` в trusted workspace; произвольные Python tools запрещены. Все configured paths должны читаться из `.harness/manifest.yaml`; Artifact Index, Reference Index и Command Catalog являются derived in-memory моделями.
 
-Начни product implementation с canonical `STEP-001` и следуй его Scope, Mutation policy, Acceptance и Verification.
+Текущую работу определяй по canonical STEP и deterministic routing; следуй его Scope, Mutation policy, Acceptance и Verification.
 <!-- PROJECT-CONTEXT:END -->
 
 ## 2. Bootstrap любой canonical command

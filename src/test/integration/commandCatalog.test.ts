@@ -1,9 +1,11 @@
 import * as assert from 'node:assert/strict';
 import * as vscode from 'vscode';
+import { assertCommandTitle, describeCommandTitleForm } from './support/commandTitle';
 import { assertIsolatedWorkspace } from './support/workspaceGuard';
 
 const encoder = new TextEncoder();
 const EXTENSION_ID = 'ai-development-harness.vscode-harness-navigator';
+const RU_LANGUAGE_PACK_ID = 'MS-CEINTL.vscode-language-pack-ru';
 const russian = () => vscode.env.language.toLowerCase().startsWith('ru');
 
 interface CommandNodeSnapshot {
@@ -436,19 +438,25 @@ suite('Command Catalog (Extension Host)', () => {
     const extension = vscode.extensions.getExtension(EXTENSION_ID);
     assert.ok(extension);
     const contributes = (extension.packageJSON as { contributes: unknown }).contributes as {
-      commands: { command: string; category?: string; title: string }[];
+      // Без language pack title — строка; с ним — объект `{ value, original }`.
+      commands: { command: string; category?: string; title: unknown }[];
       menus: Record<string, { command: string; when?: string; group?: string }[]>;
     };
     const declared = contributes.commands.find(
       (entry) => entry.command === 'harnessNavigator.openCommandDocumentation',
     );
     assert.ok(declared);
+    // Факты для Evidence логируются до assertions, чтобы попасть в лог и при падении.
+    console.log(
+      `[commandCatalog] language=${vscode.env.language} ` +
+        `ruLanguagePack=${vscode.extensions.getExtension(RU_LANGUAGE_PACK_ID) !== undefined} ` +
+        `titleForm=${describeCommandTitleForm(declared.title)} title=${JSON.stringify(declared.title)}`,
+    );
     assert.ok(declared.category);
-    assert.ok(!declared.title.startsWith('Harness'));
-    const expected = russian() ? 'Открыть документацию' : 'Open Documentation';
-    assert.ok(
-      declared.title === expected || declared.title === '%command.openCommandDocumentation.title%',
+    assertCommandTitle(
       declared.title,
+      russian() ? 'Открыть документацию' : 'Open Documentation',
+      'Harness',
     );
     assert.equal(
       contributes.menus.commandPalette?.find(
