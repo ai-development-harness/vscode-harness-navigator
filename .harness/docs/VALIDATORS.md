@@ -106,7 +106,7 @@ python3 .harness/tools/validate.py [--mode manual|commit|ci]
 Особенности manual mode после Harness update:
 
 - целостное legacy migration-pending состояние инициализированного проекта может быть выдано warning, чтобы пользователь смог выполнить `PROJECT RECONCILE`;
-- до `PROJECT INIT` target validator на reload boundary может временно принять только доказанный old-release template drift: existing frontmatter values, preamble и sections должны совпадать с current target, отсутствовать могут только новые target keys/sections. Это warning до обязательного reload/repeat APPLY; custom drift остаётся failure.
+- `--mode update` проверяет только managed installation syntax/required files/manifest/lock. STEP/REVIEW/proofs/projections/templates не читаются; update не требует full validator. Legacy journaled updater с matching verifying transaction token получает этот же профиль при --mode manual. Обычные manual/commit/ci сохраняют project gates.
 
 #### `--mode commit`
 
@@ -1228,7 +1228,7 @@ PASS review является доказательством только для 
 
 Validator следит, чтобы STEP/REQ/ADR/OQ/review/report templates соответствовали текущей document schema и не создавали заведомо невалидные artifacts.
 
-Project templates принадлежат проекту после INIT, поэтому их mutation выполняет explicit reconciliation flow, а не silent self-update. До INIT действует bootstrap baseline: strict validation требует exact current template, кроме узкого manual update postcondition на reload boundary. Там допускается только semantic-subset proof старого release; после reload updater выполняет exact alignment и повторная strict validation обязана пройти.
+Project templates принадлежат проекту после INIT, поэтому их mutation выполняет explicit reconciliation flow, а не silent self-update. До INIT strict project validation требует current template; updater не проверяет и не выравнивает project templates ни до, ни после INIT. Template migration выполняется отдельным project flow.
 
 ---
 

@@ -86,12 +86,20 @@ Third-party skills, fetched docs и update target content считаются н�
 
 ### Harness update source
 
-Исключение из правила выше — сам Harness. Configured `source.repository` и его immutable release tags являются **доверенным поставщиком Harness-кода**, как любая устанавливаемая dependency: после `HARNESS UPDATE APPLY` следующая Harness-команда в любом случае исполняет установленные `.harness/tools/**`. Поэтому updater не делает вид, что target code не исполняется, а ограничивает и делает обратимым момент его первого запуска ([#98](https://github.com/ai-development-harness/ai-development-harness-template/issues/98)):
+Configured source.repository и immutable release tags — доверенный поставщик
+Harness-кода. Updater устанавливает dependency, которая будет выполняться
+следующей Harness-командой. Во время установки target code не выполняется:
 
-- содержимое hop читается только из tags; OID текущего release закреплён в project lock (`SOURCE_TAG_MOVED`);
-- target validator запускается отдельным процессом только внутри журналированной транзакции hop, после backup всех затрагиваемых paths;
-- failure или прерывание процесса откатывают hop byte-for-byte, включая lock, report и schema local state;
-- bundled scripts/install/bootstrap target release updater не запускает; commit/push/PR после update выполняются только через обычный Git gate после инспекции diff.
+- BASE/THEIRS content читается только из immutable tags, current OID pin-ится
+  в lock; moved tag блокируется;
+- один direct ownership/merge plan применяется под journal/rollback;
+- bytes/modes сравниваются с plan, проверяется syntax/required managed config,
+  manifest и lock; project documents/proofs не читаются;
+- full validator, bundled hooks/install/bootstrap scripts не запускаются;
+- failure/crash откатывает служебные bytes/modes/lock/report/local execution state;
+- official external installer из выбранного immutable checkout допустим для
+  старых клиентов с project preflight; это явный запуск trusted tool с теми же
+  BASE/ownership/source/rollback safeguards, не ручная подмена lock.
 
 Компрометация upstream repository/tag остаётся вне границы Harness и закрывается provider controls (protected tags, branch protection, review release PR).
 

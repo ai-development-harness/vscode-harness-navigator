@@ -4,15 +4,15 @@
 Модель доверия (см. THREAT_MODEL.md): configured source repository и его
 immutable release tags — доверенный поставщик Harness-кода, как любая
 устанавливаемая зависимость. Update graph читается из configured default
-branch только как routing metadata, содержимое hop — только из tags; OID
+branch только для latest, содержимое target — только из tags; OID
 текущего release закреплён в lock.
 
-Каждый hop — отдельная транзакция с журналом (`update_recovery.py`):
+Обновление current → target — одна транзакция с журналом (`update_recovery.py`):
 backup затрагиваемых paths → запись файлов (runtime engine последним) → lock →
-report → target validator в отдельном процессе → commit (удаление журнала).
-Любой сбой, включая прерывание процесса, откатывается по журналу. Если hop
-меняет код, уже загруженный в текущий процесс, engine останавливается на
-reload boundary: следующий шаг выполняет новый код в новом процессе.
+проверка установки → report → commit (удаление журнала).
+Любой сбой, включая прерывание процесса, откатывается по журналу. Установка
+сразу достигает final target. Reload относится к следующей рабочей команде,
+а не к продолжению обновления через промежуточные релизы.
 """
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ import tomllib
 from typing import Any, Iterable
 
 from document_contract import create_durable_report
+from installation_validation import installation_errors
 from harness_config import (
     ConfigError,
     get,
@@ -52,7 +53,6 @@ from update_recovery import (
     rollback_journal,
     safe_relative_path,
     update_journal,
-    UPDATE_TRANSACTION_ENV,
 )
 
 
@@ -73,7 +73,6 @@ OWNERSHIP_CLASSES = ("harness_owned", "shared", "marker_merge")
 MIN_SUPPORTED_RELEASE = "v0.6.0"
 GIT_NETWORK_TIMEOUT_SECONDS = 600
 GIT_LOCAL_TIMEOUT_SECONDS = 120
-VALIDATOR_TIMEOUT_SECONDS = 900
 
 
 class UpdateError(RuntimeError):
@@ -354,7 +353,7 @@ class WorkingTree:
 
     def tracked(self) -> set[str]:
         proc = self.git("ls-files", "-z")
-        return {item.decode("utf-8") for item in proc.stdout.split(b"\0") if item}
+        return {os.fsdecode(item) for item in proc.stdout.split(b"\0") if item}
 
     def ignored(self, path: str) -> bool:
         proc = self.git("check-ignore", "-q", "--no-index", "--", path, check=False)
@@ -735,9 +734,15 @@ def resolve_update(root: Path, target: str | None, source: GitSource) -> tuple[d
         raise UpdateError("INVALID_UPDATE_POLICY", "source.repository/tag_pattern missing")
     lock = _load_lock(root, policy)
     current = lock["source"]["ref"]
-    graph = _read_graph(source, policy)
-    latest, outgoing = _validate_graph(graph, tag_pattern)
-    requested = target or latest
+    # Explicit TO не зависит ни от latest, ни от исторических transitions.
+    # Для latest каталог служит только указателем на immutable release tag.
+    if target is None:
+        catalog = _read_graph(source, policy)
+        requested = catalog.get("latest")
+        if not isinstance(requested, str):
+            raise UpdateError("INVALID_UPDATE_GRAPH", "release catalog latest must be a tag")
+    else:
+        requested = target
     if re.fullmatch(tag_pattern, requested) is None:
         raise UpdateError("INVALID_RELEASE_TAG", f"target does not match source.tag_pattern: {requested}")
     if re.fullmatch(tag_pattern, current) is None:
@@ -753,10 +758,9 @@ def resolve_update(root: Path, target: str | None, source: GitSource) -> tuple[d
     if pinned_oid is not None and pinned_oid != current_oid:
         raise UpdateError("SOURCE_TAG_MOVED", f"current release tag moved since lock was written: {current}")
     source.resolve_tag(requested)
-    route = _route(current, requested, outgoing)
-    for hop in route:
-        source.resolve_tag(hop.source)
-        source.resolve_tag(hop.target)
+    if target is None and _semver(requested) < _semver(current):
+        raise UpdateError("LATEST_OLDER_THAN_CURRENT", "latest cannot silently downgrade Harness; use explicit TO")
+    route = [] if current == requested else [Hop(current, requested, "standard", True)]
     return lock, route, policy
 
 
@@ -1128,7 +1132,7 @@ def require_no_pending_journal(root: Path) -> None:
         raise UpdateError(
             "UPDATE_JOURNAL_PENDING",
             "an interrupted Harness update transaction is pending; run HARNESS UPDATE APPLY "
-            "(it rolls back first) or python3 .harness/tools/harness-update.py recover",
+            "(it rolls back first)",
         )
 
 
@@ -1144,7 +1148,6 @@ def check_update(root: Path, *, target: str | None = None, source_url: str | Non
         # Сначала resolve lock: legacy project без lock должен получить
         # LEGACY_ADOPTION_REQUIRED, а не общий CURRENT_HARNESS_INVALID.
         lock, route, _ = resolve_update(root, target, source)
-        _run_validator(root, phase="preflight")
         current_state = verify_current_release_state(root, source, lock)
         resolved_target = target or (route[-1].target if route else lock["source"]["ref"])
         plans = _preflight_route(root, route, source)
@@ -1180,35 +1183,18 @@ def _write_lock(root: Path, target: str, target_commit: str) -> None:
 
 
 def _run_validator(root: Path, *, phase: str) -> None:
-    """Запустить установленный validator в отдельном процессе."""
-    validator = root / ".harness/tools/validate.py"
-    if not validator.is_file():
-        raise UpdateError("VALIDATOR_UNAVAILABLE", f"Harness validator missing during {phase}")
+    """Проверить только установку; код целевого release не исполняется.
+
+    Полный validator проекта здесь запрещён: его результат зависит от STEP,
+    REVIEW, Evidence и projections. Эти проверки принадлежат рабочим командам.
+    """
     code = "CURRENT_HARNESS_INVALID" if phase == "preflight" else "POSTCONDITION_FAILED"
-    env = os.environ.copy()
-    # Future/current target validator may legitimately read/migrate execution
-    # state inside this transaction. transactionId grants only that subprocess
-    # access; unrelated canonical sessions remain blocked by execution_status.
-    journal = load_journal(root)
-    if isinstance(journal, dict):
-        transaction_id = journal.get("transactionId")
-        if isinstance(transaction_id, str) and transaction_id:
-            env[UPDATE_TRANSACTION_ENV] = transaction_id
     try:
-        proc = subprocess.run(
-            [sys.executable, str(validator), "--mode", "manual"],
-            cwd=root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=VALIDATOR_TIMEOUT_SECONDS,
-            env=env,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise UpdateError(code, f"Harness validation timed out during {phase}") from exc
-    if proc.returncode != 0:
-        output = (proc.stdout + "\n" + proc.stderr).strip()
-        raise UpdateError(code, output or f"Harness validation failed during {phase}")
+        errors = installation_errors(root)
+    except (OSError, ValueError, ConfigError, JournalError, subprocess.SubprocessError) as exc:
+        raise UpdateError(code, f"installation validation failed during {phase}: {exc}") from exc
+    if errors:
+        raise UpdateError(code, "; ".join(errors))
 
 
 def _write_report(
@@ -1264,12 +1250,12 @@ Reclassified:
 ## Verification
 
 - Deterministic ownership/merge plan: PASS
-- Target Harness validator (separate process): PASS
+- Harness installation integrity (project artifacts excluded): PASS
 - Hop transaction journal: committed
 
 ## Follow-up
 
-{'Reload runtime and repeat HARNESS UPDATE APPLY.' if reload_required else 'No update-specific follow-up.'}
+{'Reload runtime before the next project command; the update is already complete.' if reload_required else 'No update-specific follow-up.'}
 """
 
     path, _created_at = create_durable_report(
@@ -1296,62 +1282,6 @@ def _write_order(item: PathPlan) -> tuple[int, str]:
     if item.path.startswith(TOOLS_PREFIX):
         return (1, item.path)
     return (0, item.path)
-
-
-def _preinit_alignment_api():
-    """Alignment API текущего установленного release, если он его поставляет."""
-    try:
-        from template_contract import (  # noqa: PLC0415 - release-dependent API
-            align_preinit_project_templates,
-            preinit_template_alignment_state,
-        )
-    except ImportError:
-        return None
-    return align_preinit_project_templates, preinit_template_alignment_state
-
-
-def _align_preinit_templates_after_reload(root: Path, tree: WorkingTree | None = None) -> list[str]:
-    """Довести project-owned pre-INIT templates до baseline текущего release.
-
-    Первый hop не имеет права захватывать templates updater ownership-ом.
-    Target manual validator пропускает только exact-additive old-release drift.
-    Alignment выполняет код, который уже соответствует установленному release
-    (после reload или когда hop не менял загруженные модули), и откатывается
-    журналом при любой write/postcondition failure.
-    """
-    if bool(get(load_manifest(root), "project.initialized", False)):
-        return []
-    api = _preinit_alignment_api()
-    if api is None:
-        return []
-    align, alignment_state = api
-
-    pending, blockers = alignment_state(root)
-    if blockers:
-        raise UpdateError(
-            "PREINIT_TEMPLATE_ALIGNMENT_BLOCKED",
-            "; ".join(blockers),
-        )
-    if not pending:
-        return []
-
-    journal = _begin(root, operation="preinit-template-alignment", source=None, target=None, paths=pending)
-    try:
-        changed = align(root)
-        if sorted(changed) != sorted(pending):
-            raise UpdateError(
-                "PREINIT_TEMPLATE_ALIGNMENT_INCOMPLETE",
-                "pre-init template alignment changed an unexpected path set",
-            )
-        update_journal(root, journal, state="verifying")
-        # После alignment temporary migration allowance исчезает: validator
-        # снова обязан доказать exact pre-INIT baseline.
-        _run_validator(root, phase="postcondition")
-    except BaseException:
-        rollback_journal(root, journal)
-        raise
-    finish_journal(root)
-    return changed
 
 
 def _begin(root: Path, *, operation: str, source: str | None, target: str | None, paths: Iterable[str]) -> dict[str, Any]:
@@ -1390,6 +1320,17 @@ def _apply_hop(
         # транзакции до postcondition и откатывается вместе с файлами.
         _write_lock(root, plan.hop.target, source.resolve_tag(plan.hop.target))
         update_journal(root, journal, state="verifying")
+        # Проверяем фактически записанные bytes/modes по immutable plan, включая
+        # shared merge result. Lock и все записи откатываются при несовпадении.
+        for item in plan.paths:
+            actual = tree.read_bytes(item.path)
+            expected = MISSING if item.action == "delete" else item.content
+            if item.action == "preserve":
+                continue
+            if not _managed_content_equal(actual, expected):
+                raise UpdateError("POSTCONDITION_FAILED", f"installed content differs from plan: {item.path}")
+            if item.action == "write" and tree.tracks_filemode() and tree.mode(item.path) != item.mode:
+                raise UpdateError("POSTCONDITION_FAILED", f"installed mode differs from plan: {item.path}")
         _run_validator(root, phase="postcondition")
         # Report утверждает validator PASS, поэтому создаётся только после
         # фактического PASS; journal резервирует его до создания файла и
@@ -1434,10 +1375,9 @@ def apply_update(root: Path, *, target: str | None = None, source_url: str | Non
 
         # Даже NO_UPDATE должен доказать, что lock действительно описывает
         # текущий Harness-owned protocol layer.
-        _run_validator(root, phase="preflight")
         current_state = verify_current_release_state(root, source, lock)
         if not route:
-            aligned_templates = _align_preinit_templates_after_reload(root)
+            aligned_templates: list[str] = []
             result: dict[str, Any] = {
                 "status": "NO_UPDATE",
                 "current": initial,
@@ -1453,9 +1393,7 @@ def apply_update(root: Path, *, target: str | None = None, source_url: str | Non
                 result["recoveredInterruptedUpdate"] = recovered
             return result
 
-        # Read-only preflight до первой mutation. Если updater/reload boundary
-        # встречается раньше final target, текущий runtime не делает вид, что
-        # способен безопасно интерпретировать последующие release semantics.
+        # One direct immutable plan, completely checked before any write.
         preflight_plans = _preflight_route(root, route, source)
         applied: list[HopPlan] = []
         reports: list[str] = []
@@ -1465,24 +1403,10 @@ def apply_update(root: Path, *, target: str | None = None, source_url: str | Non
             plan = preflight_plans[index]
             reports.append(_apply_hop(root, tree, source, plan, requested=resolved_target))
             applied.append(plan)
-            if plan.reload_required:
-                result = {
-                    "status": "UPDATER_RELOAD_REQUIRED",
-                    "current": hop.target,
-                    "resolvedTarget": resolved_target,
-                    "route": [initial] + [item.hop.target for item in applied],
-                    "report": reports[-1],
-                    "reports": reports,
-                    "runtimeChanges": plan.runtime_changes,
-                }
-                if recovered:
-                    result["recoveredInterruptedUpdate"] = recovered
-                return result
 
-        # Ни один hop не менял загруженный код, поэтому текущий процесс уже
-        # соответствует установленному release и может завершить pre-INIT
-        # template alignment без отдельного reload (#101).
-        aligned_templates = _align_preinit_templates_after_reload(root)
+        # Final target уже установлен. Пользовательские templates/projections
+        # не выравниваются updater-ом, включая проекты до INIT.
+        aligned_templates: list[str] = []
         result = {
             "status": "UPDATED",
             "current": route[-1].target,
@@ -1490,6 +1414,8 @@ def apply_update(root: Path, *, target: str | None = None, source_url: str | Non
             "route": [initial] + [item.hop.target for item in applied],
             "report": reports[-1],
             "reports": reports,
+            "reloadRequired": any(plan.reload_required for plan in applied),
+            "runtimeChanges": sorted({path for plan in applied for path in plan.runtime_changes}),
             "projectTemplateAlignment": {"changed": aligned_templates},
         }
         if recovered:
@@ -1589,6 +1515,7 @@ def main() -> int:
     for name in ("check", "apply"):
         item = sub.add_parser(name)
         item.add_argument("--to", dest="target")
+        item.add_argument("--root", type=Path, help="project to update; permits an official external installer")
         item.add_argument("--json", action="store_true", dest="as_json")
         item.add_argument(
             "--source-url",
@@ -1596,10 +1523,11 @@ def main() -> int:
         )
     adopt = sub.add_parser("adopt")
     adopt.add_argument("--from", dest="baseline", required=True)
+    adopt.add_argument("--root", type=Path)
     adopt.add_argument("--json", action="store_true", dest="as_json")
     adopt.add_argument("--source-url")
     args = parser.parse_args()
-    root = Path(__file__).resolve().parents[2]
+    root = (getattr(args, "root", None) or Path(__file__).resolve().parents[2]).resolve()
     try:
         if args.action == "check":
             result = check_update(root, target=args.target, source_url=args.source_url)

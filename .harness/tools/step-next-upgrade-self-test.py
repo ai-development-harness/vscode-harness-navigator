@@ -83,6 +83,9 @@ def candidate_from_current_checkout(source: Path) -> None:
         edge for edge in graph["transitions"]
         if semver(edge["from"]) < semver(BASELINE)
     ]
+    if graph.get("strategy") == "direct":
+        for edge in graph["transitions"]:
+            edge["to"] = SYNTHETIC_TARGET
     graph["transitions"].append({
         "from": BASELINE, "to": SYNTHETIC_TARGET,
         "kind": "standard", "reloadRequired": True,
@@ -120,6 +123,9 @@ def main() -> int:
         git(project, "add", "docs/synthetic-owned-note.md")
         git(project, "commit", "--quiet", "-m", "project-owned fixture")
         original_user_bytes = user_file.read_bytes()
+        templates = {p.relative_to(project).as_posix(): p.read_bytes()
+                     for folder in (project / "docs", project / "planning")
+                     for p in folder.rglob("TEMPLATE.md")}
 
         # A real v0.11.4 runtime creates a schema-v2 durable interrupted
         # command. It must survive updater/reload exactly, including identity.
@@ -165,7 +171,9 @@ def main() -> int:
         assert user_file.read_bytes() == original_user_bytes
         assert state_file.read_bytes() == original_state
 
-        run(project, sys.executable, ".harness/tools/validate.py", "--mode", "manual")
+        run(project, sys.executable, ".harness/tools/validate.py", "--mode", "update")
+        # Project template/schema reconciliation belongs to later user work.
+        assert all((project / rel).read_bytes() == data for rel, data in templates.items())
         # New runtime must resume the v0.11.4 record under the same identity.
         command = run(
             project, sys.executable, ".harness/tools/harness-dispatch.py",

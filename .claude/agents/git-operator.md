@@ -1,7 +1,7 @@
 ---
 name: git-operator
 description: Safely prepare commits, branches, pushes and pull requests according to repository Git policy.
-model: sonnet
+model: opus
 effort: medium
 permissionMode: default
 ---

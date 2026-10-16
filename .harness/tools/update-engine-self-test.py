@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+from unittest.mock import patch
 from contextlib import contextmanager
 from pathlib import Path
 import json
@@ -269,44 +270,25 @@ def test_new_marker_block(tmp: Path) -> None:
 
 
 def test_validator_failure_rolls_back_everything(tmp: Path) -> None:
-    """#103: failed target validator откатывает files, lock, report и local state."""
-    legacy_state = json.dumps({"schemaVersion": 1, "executions": []}) + "\n"
-    source, project = synthetic_pair(
-        tmp,
+    """Повреждение служебного кода откатывает все paths и lock байт-в-байт."""
+    source, project = synthetic_pair(tmp,
         base={"docs/core.md": "core v1\n", ".harness/harness-update.toml": policy(harness_owned=["docs/**"], markers={})},
-        target={
-            "docs/core.md": "core v2\n",
-            "docs/new.md": "introduced\n",
-            # Target code мигрирует local state и затем падает.
-            ".harness/tools/validate.py": (
-                "from pathlib import Path\n"
-                f"Path({STATE!r}).write_text('{{\"schemaVersion\": 2}}')\n"
-                "print('synthetic failure')\n"
-                "raise SystemExit(1)\n"
-            ),
-        },
-    )
-    write(project, STATE, legacy_state)
+        target={"docs/core.md": "core v2\n", "docs/new.md": "introduced\n",
+                ".harness/tools/validate.py": "def broken(:\n"})
+    write(project, STATE, '{"schemaVersion": 1, "executions": []}\n')
     before = snapshot(project)
     expect_error("POSTCONDITION_FAILED", apply_update, project, source_url=str(source))
-    assert snapshot(project) == before, sorted(set(snapshot(project)) ^ set(before))
+    assert snapshot(project) == before
     assert not (project / JOURNAL).exists()
 
 
 def test_target_code_runs_inside_journal(tmp: Path) -> None:
-    """#98: target validator исполняется только внутри журналированной транзакции."""
-    probe = (
-        "import json\n"
-        "from pathlib import Path\n"
-        f"journal = Path({JOURNAL!r}) / 'journal.json'\n"
-        "state = json.loads(journal.read_text())['state'] if journal.is_file() else None\n"
-        "Path('journal-state.txt').write_text(str(state))\n"
-        + PASS_VALIDATOR
-    )
-    source, project = synthetic_pair(tmp, base={}, target={".harness/tools/validate.py": probe})
-    result = apply_update(project, source_url=str(source))
-    assert result["status"] == "UPDATED", result
-    assert (project / "journal-state.txt").read_text() == "verifying"
+    """Ни старый, ни target validator не исполняются updater-ом (#342)."""
+    probe = "from pathlib import Path\nPath('target-code-ran').touch()\nraise SystemExit(1)\n"
+    source, project = synthetic_pair(tmp, base={".harness/tools/validate.py": probe}, target={".harness/tools/validate.py": probe + "# target\n"})
+    assert check_update(project, source_url=str(source))["status"] == "PASS"
+    assert apply_update(project, source_url=str(source))["status"] == "UPDATED"
+    assert not (project / "target-code-ran").exists()
     assert not (project / JOURNAL).exists()
 
 
@@ -315,7 +297,12 @@ def _spawn_apply(project: Path, source: Path) -> subprocess.Popen[str]:
         "import sys\n"
         f"sys.path.insert(0, {str(TOOLS_DIR)!r})\n"
         "from pathlib import Path\n"
+        "import harness_update, time\n"
         "from harness_update import apply_update\n"
+        "def pause(root, *, phase):\n"
+        "    (root / 'validator-started').write_text('1')\n"
+        "    time.sleep(60)\n"
+        "harness_update._run_validator = pause\n"
         f"apply_update(Path({str(project)!r}), source_url={str(source)!r})\n"
     )
     return subprocess.Popen(
@@ -406,7 +393,7 @@ def test_loaded_module_change_requires_reload(tmp: Path) -> None:
     assert checked["reloadBoundary"] == "v1.1.0", checked
     assert checked["hops"][0]["runtimeChanges"] == [".harness/tools/harness_config.py"], checked
     result = apply_update(project, source_url=str(source))
-    assert result["status"] == "UPDATER_RELOAD_REQUIRED", result
+    assert result["status"] == "UPDATED" and result["reloadRequired"], result
 
     # Модуль, не загруженный в процесс, не требует reload.
     other = tmp / "other"
@@ -441,48 +428,31 @@ def _failing_state_writer(payload: str | None) -> str:
 
 
 def test_local_state_rollback_is_byte_exact(tmp: Path) -> None:
-    """#132: failed hop возвращает local state байт-в-байт и удаляет созданный."""
-    # Mutation без смены schemaVersion.
-    same = tmp / "same"
-    same.mkdir()
-    source, project = synthetic_pair(
-        same, base={}, target={".harness/tools/validate.py": _failing_state_writer('{"schemaVersion": 1, "x": 2}')},
-    )
+    """Fault injection postcondition не ослабляет rollback runtime state."""
     original = '{"schemaVersion": 1, "x": 1}\n'
-    write(project, STATE, original)
-    if os.name == "posix":
-        os.chmod(project / STATE, 0o600)
-        original_mode = stat.S_IMODE((project / STATE).stat().st_mode)
-    else:
-        original_mode = None
-    expect_error("POSTCONDITION_FAILED", apply_update, project, source_url=str(source))
-    assert (project / STATE).read_text() == original
-    if original_mode is not None:
-        assert stat.S_IMODE((project / STATE).stat().st_mode) == original_mode, (
-            "rollback changed execution-status permissions"
-        )
-
-    # Файла не было — созданный hop-ом файл удаляется.
-    created = tmp / "created"
-    created.mkdir()
-    source, project = synthetic_pair(
-        created, base={}, target={".harness/tools/validate.py": _failing_state_writer('{"schemaVersion": 2}')},
-    )
-    assert not (project / STATE).exists()
-    expect_error("POSTCONDITION_FAILED", apply_update, project, source_url=str(source))
-    assert not (project / STATE).exists(), "state created by failed hop survived rollback"
-
-    # Успешный hop сохраняет намеренную миграцию.
-    ok = tmp / "ok"
-    ok.mkdir()
-    migrating = (
-        "from pathlib import Path\n"
-        f"Path({STATE!r}).write_text('{{\"schemaVersion\": 2}}')\n" + PASS_VALIDATOR
-    )
-    source, project = synthetic_pair(ok, base={}, target={".harness/tools/validate.py": migrating})
+    for name, exists in (("existing", True), ("created", False)):
+        folder = tmp / name; folder.mkdir()
+        source, project = synthetic_pair(folder, base={}, target={".harness/tools/helper.py": "# target\n"})
+        if exists:
+            write(project, STATE, original)
+            if os.name == "posix":
+                os.chmod(project / STATE, 0o600)
+        def fail(root, *, phase):
+            write(root, STATE, '{"schemaVersion": 2}\n')
+            raise UpdateError("POSTCONDITION_FAILED", "injected installation failure")
+        with patch("harness_update._run_validator", side_effect=fail):
+            expect_error("POSTCONDITION_FAILED", apply_update, project, source_url=str(source))
+        assert (project / STATE).exists() == exists
+        if exists:
+            assert (project / STATE).read_text() == original
+            if os.name == "posix":
+                assert stat.S_IMODE((project / STATE).stat().st_mode) == 0o600
+    # Исправный update не запускает target code, меняющий operational state.
+    folder = tmp / "success"; folder.mkdir()
+    source, project = synthetic_pair(folder, base={}, target={".harness/tools/validate.py": _failing_state_writer('{"schemaVersion": 2}')})
     write(project, STATE, original)
     assert apply_update(project, source_url=str(source))["status"] == "UPDATED"
-    assert json.loads((project / STATE).read_text())["schemaVersion"] == 2
+    assert (project / STATE).read_text() == original
 
 
 def test_update_blocks_concurrent_execution_state(tmp: Path) -> None:
@@ -543,7 +513,7 @@ def test_update_report_only_after_validator_pass(tmp: Path) -> None:
     failing = tmp / "failing"
     failing.mkdir()
     source, project = synthetic_pair(
-        failing, base={}, target={".harness/tools/validate.py": "raise SystemExit(1)\n"},
+        failing, base={}, target={".harness/tools/validate.py": "def invalid(:\n"},
     )
     expect_error("POSTCONDITION_FAILED", apply_update, project, source_url=str(source))
     assert _update_reports(project) == [], "report written before validator PASS"
@@ -749,7 +719,7 @@ def test_journal_commit_point_is_crash_atomic(tmp: Path) -> None:
     # rollback по неполному journal нет.
     rolled = tmp / "rolled"
     rolled.mkdir()
-    source, project = synthetic_pair(rolled, base={}, target={".harness/tools/validate.py": "raise SystemExit(1)\n"})
+    source, project = synthetic_pair(rolled, base={}, target={".harness/tools/validate.py": "def invalid(:\n"})
     before = snapshot(project)
     update_recovery.shutil.rmtree = _interrupting_rmtree(original_rmtree, match=update_recovery.TOMBSTONE_PREFIX)
     try:
@@ -796,36 +766,24 @@ def test_journal_commit_point_is_crash_atomic(tmp: Path) -> None:
 
 
 def test_rollback_removes_lock_created_inside_hop(tmp: Path) -> None:
-    """Final review P2: validator-created lock ждётся и не переживает rollback."""
+    """Rollback сериализован с writers local execution state."""
     import update_recovery
-
     lock = ".harness/local/execution/execution-status.lock"
-    validator = (
-        "from pathlib import Path\n"
-        f"Path({lock!r}).parent.mkdir(parents=True, exist_ok=True)\n"
-        f"Path({lock!r}).touch()\n"
-        "raise SystemExit(1)\n"
-    )
-    source, project = synthetic_pair(tmp, base={}, target={".harness/tools/validate.py": validator})
-    assert not (project / lock).exists()
-
+    source, project = synthetic_pair(tmp, base={}, target={})
+    def fail(root, *, phase):
+        write(root, lock, "")
+        raise UpdateError("POSTCONDITION_FAILED", "injected failure")
     original_lock = update_recovery.execution_state_lock
     entered = {"value": False}
-
     @contextmanager
     def tracking_lock(root):
         entered["value"] = True
         with original_lock(root):
             yield
-
-    update_recovery.execution_state_lock = tracking_lock
-    try:
+    with patch("harness_update._run_validator", side_effect=fail), patch("update_recovery.execution_state_lock", tracking_lock):
         expect_error("POSTCONDITION_FAILED", apply_update, project, source_url=str(source))
-    finally:
-        update_recovery.execution_state_lock = original_lock
-
-    assert entered["value"], "rollback did not serialize against validator-created execution lock"
-    assert not (project / lock).exists(), "execution lock created inside failed hop survived rollback"
+    assert entered["value"]
+    assert not (project / lock).exists()
 
 
 STATE_DEPENDENT_VALIDATOR = (
@@ -844,7 +802,8 @@ def test_adopt_requires_postcondition(tmp: Path) -> None:
     )
     lock = project / ".harness/harness.lock.json"
     lock.unlink()
-    expect_error("POSTCONDITION_FAILED", adopt_legacy, project, baseline="v1.0.0", source_url=str(source))
+    with patch("harness_update._run_validator", side_effect=UpdateError("POSTCONDITION_FAILED", "injected adoption failure")):
+        expect_error("POSTCONDITION_FAILED", adopt_legacy, project, baseline="v1.0.0", source_url=str(source))
     assert not lock.exists(), "lock survived failed adoption postcondition"
     assert not (project / JOURNAL).exists()
 
@@ -1041,15 +1000,17 @@ def test_preinit_template_change(tmp: Path) -> None:
         except json.JSONDecodeError as exc:
             raise AssertionError(proc.stdout + proc.stderr) from exc
 
+    original_template = (project / "docs/adr/TEMPLATE.md").read_bytes()
     result = apply_cli()
     for _ in range(3):
         if result.get("status") != "UPDATER_RELOAD_REQUIRED":
             break
         result = apply_cli()
     assert result.get("status") in {"UPDATED", "NO_UPDATE"}, result
-    gate = run(project, sys.executable, ".harness/tools/validate.py", "--mode", "commit", check=False)
-    assert gate.returncode == 0, gate.stdout + gate.stderr
-    assert "## Follow-up" in (project / "docs/adr/TEMPLATE.md").read_text(encoding="utf-8")
+    assert (project / "docs/adr/TEMPLATE.md").read_bytes() == original_template
+    assert result["status"] == "UPDATED" and result["reloadRequired"], result
+    assert apply_cli()["status"] == "NO_UPDATE"
+    assert (project / "docs/adr/TEMPLATE.md").read_bytes() == original_template
 
 
 def test_graph_connectivity(tmp: Path) -> None:

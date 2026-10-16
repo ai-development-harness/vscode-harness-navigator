@@ -152,6 +152,124 @@ Fixture.
 """
 
 
+def blocked_dag_regression() -> None:
+    """#340: общий BLOCKED узел вычисляется один раз, причины не меняются."""
+    import planning_contract as pc
+
+    with tempfile.TemporaryDirectory(prefix="harness-blocked-dag-") as tmp:
+        root = Path(tmp)
+        basis = "sha256:" + "1" * 64
+        tasks = {}
+        for number in range(1, 13):
+            tasks[f"STEP-{number:03d}"] = {
+                "frontmatter": {
+                    "id": f"STEP-{number:03d}", "status": "completed",
+                    "type": "implementation",
+                    "depends_on": [f"STEP-{n:03d}" for n in
+                                   (number - 1, number - 2) if n > 0],
+                },
+                "sections": {"Evidence": "Результат проверен."},
+            }
+
+        def trusted(_root, step_id, **_kwargs):
+            return {
+                "path": root / f"{step_id}.md", "verdict": "PASS",
+                "content_hash": "sha256:" + "2" * 64,
+                "document": {"frontmatter": {"contract_basis": basis}},
+            }
+
+        # Exact опубликованный proof из issue: ускорение не переписывает
+        # исторический BLOCKED в PASS и не изменяет его fingerprint.
+        with patch("planning_contract.read_task", side_effect=lambda _r, s: tasks[s]) as reads, \
+             patch("planning_contract.planning_context_basis", return_value=basis), \
+             patch("review_contract.latest_trusted_review", side_effect=trusted):
+            proof = pc.step_completion_proof(root, "STEP-012")
+            assert not proof["complete"], proof
+            assert proof["proof_hash"] == (
+                "sha256:e0a572e8a4525b55219f45a5c4d95483981dce374dab3d90e979aaf43f5bbe7e"
+            ), proof
+            assert reads.call_count == 12, reads.call_count
+            assert "dependency-cycle:" not in str(proof["reasons"])
+
+            # Циклы сохраняют контекст пути. Один кеш используется повторно
+            # из разных точек входа: ответы должны совпадать с чистым обходом.
+            tasks["STEP-001"]["frontmatter"]["depends_on"] = ["STEP-003"]
+            cache = {}
+            for step_id in ("STEP-003", "STEP-002", "STEP-001"):
+                expected = pc.step_completion_proof(root, step_id)
+                actual = pc.step_completion_proof(root, step_id, _proof_cache=cache)
+                assert actual == expected, (actual, expected)
+                assert not actual["complete"]
+                assert "dependency-cycle:" in str(actual["reasons"])
+                assert (step_id, None) not in cache
+                before = reads.call_count
+                assert pc.step_completion_proof(root, step_id, _proof_cache=cache) == actual
+                assert reads.call_count == before, "same cycle context should reuse cache"
+
+            # Даже заведомо общий кеш не должен скрывать текущий back-edge.
+            cached_leaf = {("STEP-001", None): {"complete": True}}
+            back_edge = pc.step_completion_proof(
+                root, "STEP-001", _ancestors=frozenset({"STEP-001"}),
+                _proof_cache=cached_leaf,
+            )
+            assert back_edge["reasons"] == ["dependency-cycle:STEP-001"]
+
+    # Реальные canonical STEP/REQ и planning basis: отказ исторического REVIEW
+    # на разветвлённом DAG остаётся тем же, чтения ограничены числом узлов.
+    with tempfile.TemporaryDirectory(prefix="harness-canonical-blocked-dag-") as tmp:
+        root = Path(tmp)
+        write(root, ".harness/manifest.yaml", MANIFEST)
+        depth = 12
+        for number in range(1, depth + 1):
+            step_id, req_id = f"STEP-{number:03d}", f"REQ-{number:03d}"
+            text = step(step_id, req_id, f"STEP-{number - 1:03d}" if number > 1 else None)
+            if number > 2:
+                text = text.replace("requirements:\n", f"  - STEP-{number - 2:03d}\nrequirements:\n", 1)
+            write(root, f"planning/tasks/{step_id}.md", text)
+            write(root, f"docs/requirements/{req_id}-fixture.md", requirement(step_id, req_id))
+            write(root, f"planning/reviews/{step_id}/REVIEW-proof.md", "Historical REVIEW.\n")
+        bases = {f"STEP-{n:03d}": planning_context_basis(root, f"STEP-{n:03d}")
+                 for n in range(1, depth + 1)}
+        verdict = "PASS"
+
+        def historical(_root, step_id, **_kwargs):
+            return {
+                "path": root / f"planning/reviews/{step_id}/REVIEW-proof.md",
+                "verdict": verdict,
+                "document": {"frontmatter": {"contract_basis": bases[step_id]}},
+            }
+
+        class NoReuseCache(dict):
+            # Эталон без повторного использования: та же семантика, все пути.
+            def get(self, key, default=None):
+                return default
+
+        with patch("review_contract.latest_trusted_review", side_effect=historical):
+            expected = step_completion_proof(root, "STEP-012", _proof_cache=NoReuseCache())
+            with patch("planning_contract.read_task", wraps=pc.read_task) as reads:
+                actual = step_completion_proof(root, "STEP-012")
+            assert actual == expected
+            assert not actual["complete"]
+            assert reads.call_count <= depth * 6, reads.call_count
+            print(f"BLOCKED DAG: {depth} nodes, {reads.call_count} canonical task reads")
+
+            # Stale contract и FAIL REVIEW остаются отказами даже при общем кеше.
+            bases["STEP-001"] = "sha256:" + "0" * 64
+            stale = step_completion_proof(root, "STEP-012")
+            assert not stale["complete"]
+            assert "completion-contract-stale:STEP-001" in str(stale["reasons"])
+            verdict = "FAIL"
+            failed = step_completion_proof(root, "STEP-012")
+            assert not failed["complete"]
+            assert "latest trusted review verdict is not PASS" in str(failed["reasons"])
+
+        with patch("review_contract.latest_trusted_review", return_value=None), \
+             patch("review_contract.legacy_completed_steps", return_value={}):
+            missing = step_completion_proof(root, "STEP-012")
+            assert not missing["complete"]
+            assert "trusted PASS review is missing" in str(missing["reasons"])
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="harness-dependency-enforcement-") as tmp:
         root = Path(tmp)
@@ -530,6 +648,7 @@ def main() -> int:
                 f"for a {depth}-step chain"
             )
 
+    blocked_dag_regression()
     print("DEPENDENCY EVIDENCE ENFORCEMENT SELF-TEST: PASS")
     return 0
 

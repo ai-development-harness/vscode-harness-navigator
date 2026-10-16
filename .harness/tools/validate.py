@@ -1626,10 +1626,22 @@ def validate_repository_surface(
 # ---------------------------------------------------------------------------
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["ci", "commit", "manual"], default="manual")
+    parser.add_argument("--mode", choices=["ci", "commit", "manual", "update"], default="manual")
     args = parser.parse_args()
 
     root = repo_root()
+    # Старые journaled updater вызывают manual, передавая transaction identity.
+    # Это compatibility boundary установки, а не ослабление STEP/CI validation.
+    from installation_validation import installation_errors, update_transaction_active
+    if args.mode == "update" or (args.mode == "manual" and update_transaction_active(root)):
+        try:
+            failures = installation_errors(root)
+        except (OSError, ValueError, ConfigError) as exc:
+            failures = [str(exc)]
+        print("HARNESS INSTALLATION VALIDATION: " + ("FAIL" if failures else "PASS"))
+        for failure in failures:
+            print(f"  - {failure}")
+        return 1 if failures else 0
     # Ошибки намеренно накапливаются: CI/пользователь за один запуск получает
     # полный список drift/corruption. warnings не делают repository невалидным.
     errors: list[str] = []

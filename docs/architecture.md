@@ -51,4 +51,4 @@
 
 ## Известный architecture debt / drift
 
-На момент инициализации production code отсутствует. Drift будет проверяться отдельными STEP review и `PROJECT RECONCILE`.
+Production code реализован в `src/`, проверки находятся в `tests/` и `src/test/`. Актуальные расхождения и ограничения evidence фиксируются отдельными STEP review и отчётами `PROJECT RECONCILE` в `planning/audits/`.

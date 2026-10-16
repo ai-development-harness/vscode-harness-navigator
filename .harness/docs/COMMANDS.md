@@ -223,30 +223,31 @@ Read-only deterministic рекомендация. Сначала продолж�
 <a id="command-harness-update-check"></a>
 ## `HARNESS UPDATE CHECK [TO <tag>]`
 
-Read-only проверка маршрута Harness update. Manifest задаёт только `repository.harnessUpdatePolicy`; сама policy задаёт `source.update_manifest`, `state.lock_file` и `state.report_directory`. Именно эти configured paths используются как routing/lock/report topology.
-
-Без `TO` конечный target берётся из configured `source.update_manifest.latest`. С `TO <tag>` пользователь задаёт конкретный конечный target. В обоих случаях updater обязан построить допустимую цепочку release hops; существующий immutable tag без route не считается допустимым target.
-
-Dispatcher вызывает deterministic update engine напрямую, без model call. Команда моделирует весь route hop-by-hop, возвращает bridge/reload boundaries, safe changes/conflicts и не меняет working tree, Git refs, lock, STEP, commit, push или PR.
-
-Команда разрешена как до, так и после `PROJECT INIT`: `project.initialized: false` не является blocker для проверки Harness update.
+Read-only проверка прямого обновления current → latest либо current → immutable
+TO tag. Manifest задаёт repository.harnessUpdatePolicy, policy — source/lock/report
+paths. TO не читает каталог; latest использует только его latest field. Цепочка
+промежуточных releases не строится. Dispatcher вызывает deterministic engine
+без model call, проверяет source integrity и ownership/merge всего перехода.
+Рабочие STEP/REQ/ADR/REVIEW, proofs, projections и templates не валидируются,
+их любое состояние не блокирует CHECK/APPLY. CHECK не меняет repository/index.
+Команда доступна до и после PROJECT INIT.
 
 <a id="command-harness-update-apply"></a>
 ## `HARNESS UPDATE APPLY [TO <tag>]`
 
-Maintenance mutation protocol layer без STEP и без model call. Dispatcher напрямую вызывает deterministic updater. Standalone APPLY сам выполняет fresh deterministic validation/preflight; в chain `CHECK > APPLY` переход разрешён только после PASS CHECK для того же target/route.
+Maintenance mutation служебных файлов без STEP/model call. APPLY повторяет
+fresh source/managed-file/merge preflight и устанавливает сразу конечный release
+одной journaled transaction. Без TO выбирает latest, с TO — указанный immutable
+tag. Проверяет только установку, сохраняет все project artifacts/index; не
+запускает full project validator, PROJECT RECONCILE или target scripts.
 
-Команда применяет заранее проверенную цепочку строго hop-by-hop. Каждый hop использует immutable release tags и обычные ownership/3-way rules. Lock обновляется только после postcondition соответствующего hop. Если edge помечен `reloadRequired`, текущий запуск останавливается на достигнутом bridge с `UPDATER_RELOAD_REQUIRED`; после reload повторяется та же команда до исходного конечного target.
-
-Команда разрешена до `PROJECT INIT`. Pre-init update не выполняет bootstrap проекта и не переводит `project.initialized` в `true`. При reload-required изменении template contract первый APPLY обновляет protocol layer/lock и останавливается; после reload повтор exact APPLY может детерминированно выровнять только доказанный old-release pre-INIT template baseline. Пользовательская prose/value/schema drift блокирует alignment и не перезаписывается.
-
-Пример конечного target:
-
-```text
-HARNESS UPDATE APPLY TO vX.X.X
-```
-
-Updater не выполняет executable migration/install/bootstrap actions из configured update graph или target release, не делает commit/push/PR. Deterministic result содержит `nextAction`: `UPDATED → GIT CHECK`, `UPDATER_RELOAD_REQUIRED → reload-and-repeat exact APPLY`. Stable `NO_UPDATE → null`; если `NO_UPDATE` завершил deferred pre-INIT template alignment и вернул `repositoryMutated=true`, dispatcher направляет в `GIT CHECK`. Если GIT gate показывает pending schema migration уже инициализированного проекта, её выполняет `PROJECT RECONCILE` до commit.
+UPDATED означает достигнутый target. reloadRequired=true задаёт nextAction
+reload-runtime перед следующей рабочей командой; повтор APPLY не требуется.
+При отсутствии runtime changes nextAction — GIT CHECK. Повторный APPLY возвращает
+NO_UPDATE без mutation. Source/tag/managed merge/integrity blockers и atomic
+rollback сохраняются. Completion/freshness/schema gates выполняются в обычной
+работе с проектом. До INIT project.initialized остаётся false, templates не
+выравниваются updater-ом. Подробнее: [UPDATES.md](UPDATES.md).
 
 <a id="command-git-check"></a>
 ## `GIT CHECK`

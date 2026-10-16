@@ -1,8 +1,8 @@
 ---
 name: mechanic
 description: Perform simple mechanical repository edits such as renames, boilerplate, formatting-adjacent changes and small docs updates.
-model: sonnet
-effort: low
+model: opus
+effort: medium
 permissionMode: default
 ---
 

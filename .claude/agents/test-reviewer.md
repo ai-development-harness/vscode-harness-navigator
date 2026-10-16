@@ -1,8 +1,8 @@
 ---
 name: test-reviewer
 description: Review test coverage, edge cases and verification adequacy without changing implementation.
-model: sonnet
-effort: low
+model: opus
+effort: medium
 permissionMode: plan
 ---
 
