@@ -6,8 +6,8 @@
     "description": "Режим относится к собственной обработке канонической команды; вызванные ею дочерние команды учитываются отдельно."
   },
   "summary": {
-    "total": 32,
-    "none": 14,
+    "total": 34,
+    "none": 16,
     "required": 16,
     "conditional": 2
   },
@@ -583,6 +583,45 @@
         "modelWork": [],
         "deterministicWork": [
           "Сбор фактически применяемой конфигурации и её источников"
+        ],
+        "fastPaths": []
+      }
+    },
+    {
+      "command": "HARNESS CLEANUP CHECK",
+      "domain": "HARNESS",
+      "operation": "CLEANUP CHECK",
+      "summary": "Показать временные каталоги, доступные для удаления, и причины сохранения остальных.",
+      "documentation": ".harness/docs/COMMANDS.md#command-harness-cleanup-check",
+      "dispatch": {
+        "kind": "deterministic",
+        "handler": "harness-cleanup-check"
+      },
+      "reasoning": {
+        "mode": "none",
+        "modelWork": [],
+        "deterministicWork": [
+          "Проверка владельца, завершения, ссылок и безопасного пути временных файлов"
+        ],
+        "fastPaths": []
+      }
+    },
+    {
+      "command": "HARNESS CLEANUP APPLY",
+      "domain": "HARNESS",
+      "operation": "CLEANUP APPLY",
+      "summary": "Повторно проверить и удалить временные каталоги доказанно завершённой работы.",
+      "documentation": ".harness/docs/COMMANDS.md#command-harness-cleanup-apply",
+      "dispatch": {
+        "kind": "deterministic",
+        "handler": "harness-cleanup-apply"
+      },
+      "reasoning": {
+        "mode": "none",
+        "modelWork": [],
+        "deterministicWork": [
+          "Проверка владельца, завершения, ссылок и безопасного пути временных файлов",
+          "Удаление с повторной проверкой под общим execution lock"
         ],
         "fastPaths": []
       }

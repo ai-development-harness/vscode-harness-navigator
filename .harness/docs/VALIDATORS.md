@@ -2229,3 +2229,45 @@ python3 .harness/tools/validate.py --mode manual
 ```
 
 Negative scenarios: missing/wrong receipt, previous executionId, modified file, changed subject, wrong scope, invalid template, same-second report collision, configured paths, crash между durable report и сохранением receipt. `PASS` в CLI writer не означает terminal SUCCESS; authoritative gate принадлежит dispatcher.
+
+## Windows CI groups
+
+**Файлы:** `windows-ci.py`, `windows_ci.py`, `windows-ci-self-test.py`.
+
+**Роль:** выполнять прежние 13 Windows self-tests тремя непересекающимися группами
+на отдельных runners и сохранять итоговый check `Validate Windows boundaries` (#339).
+
+**Когда использовать:** Harness Integrity вызывает reusable `harness-windows-group.yml`
+для `update`, `resume`, `execution`. Финализатор зависит от всех трёх jobs того же SHA.
+
+**Что проверяет:** полноту и отсутствие дублей набора, код возврата каждого теста,
+непустой полный набор успешных результатов jobs. `failure`, `cancelled`, `skipped`,
+отсутствующий или неизвестный результат запрещает PASS. Каждый процесс имеет
+длительность в миллисекундах и результат; ранний FAIL не маскируется поздним PASS.
+
+**CLI и аргументы:**
+
+```bash
+python3 .harness/tools/windows-ci.py run --group update
+python3 .harness/tools/windows-ci.py run --group resume --timeout-seconds 900
+python3 .harness/tools/windows-ci.py finalize
+```
+
+`run` принимает одну из трёх групп и timeout одного self-test в диапазоне (0, 900].
+Внешний лимит Windows job остаётся 15 минут. `finalize` читает `WINDOWS_NEEDS_JSON`
+из `toJSON(needs)` текущего GitHub Actions run. CLI не выполняет provider mutations.
+
+**Exit codes:** 0 — вся группа/все jobs успешны; 1 — ошибка, timeout или неполный
+результат; 2 — неверные аргументы.
+
+**Внутренние зависимости/границы:** запуск и остановка дерева процессов переиспользуют
+`run-self-tests.py`. Отдельный Windows-набор Release Qualification остаётся прежним:
+validator и шесть обязательных self-tests, с собственными exact-SHA evidence и timeout.
+Его распараллеливание не требуется для сохранения покрытия и не входит в #339.
+
+
+## Очистка временных файлов
+
+`.harness/tools/local-cleanup.py` — CLI над `local_cleanup.py`. Используется для проверки остатков после прерванной сессии; обычное завершение вызывает тот же модуль автоматически. Проверяет execution/completion proof, canonical ссылки, identity и безопасные пути.
+
+CLI: `python3 .harness/tools/local-cleanup.py check` или `python3 .harness/tools/local-cleanup.py apply`, без дополнительных аргументов. JSON содержит кандидатов, объём и причины сохранения; exit code `0` — проверка/очистка выполнена, `2` — предупреждение о невозможности безопасного выполнения. Наличие сохраняемых кандидатов само по себе не ошибка. `local-cleanup-self-test.py` проверяет реальные dispatcher paths и небезопасные сценарии на Linux и Windows. Границы: [LOCAL_CLEANUP.md](LOCAL_CLEANUP.md).

@@ -97,6 +97,7 @@ def main() -> int:
             skill.write_text("fixture", encoding="utf-8")
             saved_route = command_dispatch.route_command
             saved_capture = command_dispatch.capture_fix
+            saved_temporary = command_dispatch.temporary_directory
             seen = []
             command_dispatch.route_command = lambda *_: {
                 "command": "STEP FIX STEP-001",
@@ -105,6 +106,8 @@ def main() -> int:
                 "target": "STEP-001", "input": None, "authority": {},
             }
             command_dispatch.capture_fix = lambda *_: seen.append("pre-FIX")
+            # Здесь изолирован порядок pre-FIX; настоящий owner/tmp покрыт local-cleanup-self-test.
+            command_dispatch.temporary_directory = lambda *_: ".harness/local/tmp/fixture"
             try:
                 response = command_dispatch._semantic_handoff(
                     root, {"rootCommand": "STEP FIX STEP-001", "executionId": "exec-42"},
@@ -115,6 +118,7 @@ def main() -> int:
             finally:
                 command_dispatch.route_command = saved_route
                 command_dispatch.capture_fix = saved_capture
+                command_dispatch.temporary_directory = saved_temporary
 
             # Deliberate full audit persists across independent writer calls.
             fix_delta.verification_subject_revision = lambda *_: {"subject": "postfix"}

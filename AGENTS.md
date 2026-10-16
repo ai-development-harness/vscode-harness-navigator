@@ -2,9 +2,9 @@
 
 ## 1. Назначение и источник истины
 
-Этот файл — короткий always-on bootstrap AI Development Harness. Подробные command playbooks не дублируются здесь: после deterministic routing читай только нужный `.agents/skills/<skill>/SKILL.md` и связанные документы.
+После deterministic routing читай только нужный `.agents/skills/<skill>/SKILL.md` и связанные документы.
 
-Репозиторий, а не история чата, является source of truth. При конфликте используй порядок:
+Источник истины — репозиторий. При конфликте порядок:
 
 1. фактический code/config/migrations/tests;
 2. Accepted ADR;
@@ -28,7 +28,7 @@ Accepted ADR не переписывай задним числом. Расхож
 
 ## 2. Bootstrap любой canonical command
 
-Не воспроизводи CTS/execution/routing вручную. Любой canonical input передай единой deterministic boundary:
+Canonical input передай dispatcher; CTS/execution/routing вручную не воспроизводи:
 
 ```bash
 python3 .harness/tools/harness-dispatch.py start --command '<raw canonical command>'
@@ -74,6 +74,8 @@ Machine details остаются pull-based в `.harness/docs/COMMAND_SYNTAX.md`
 - `HARNESS RESUME`
 - `HARNESS DOCTOR`
 - `HARNESS CONFIG`
+- `HARNESS CLEANUP CHECK`
+- `HARNESS CLEANUP APPLY`
 - `HARNESS UPDATE CHECK`
 - `HARNESS UPDATE APPLY`
 - `GIT CHECK`
@@ -122,6 +124,8 @@ Configured paths всегда разрешай через `.harness/manifest.yam
 Для STEP semantic работы нужны только релевантные inputs: STEP contract, linked REQ, Accepted ADR, explicit `architecture_refs`, relevant OQ и фактический code/tests/config. Completion dependencies и другие вычислимые prerequisites доверяй deterministic gates соответствующей команды.
 
 Canonical REQ/ADR/STEP/OQ изменяются первыми; projections пересобираются `python3 .harness/tools/sync-projections.py` и не редактируются как независимый state.
+
+Временные snapshots/scripts/logs пиши в `temporaryDirectory` из handoff; durable Evidence/proofs — вне tmp. Правила: `.harness/docs/LOCAL_CLEANUP.md`.
 
 Evidence отличает literal captured output от summary. Если точный output не сохранён, фиксируй command, exit code и observed facts — не реконструируй terminal quote.
 

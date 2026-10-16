@@ -191,6 +191,8 @@ Edge `REVIEW → FIX` разрешён именно при `FAIL`. Поэтом�
 | `HARNESS RESUME` | no | — | standalone-only |
 | `HARNESS DOCTOR` | no | — | standalone-only |
 | `HARNESS CONFIG` | no | — | standalone-only |
+| `HARNESS CLEANUP CHECK` | no | — | standalone-only |
+| `HARNESS CLEANUP APPLY` | no | — | standalone-only |
 | `GIT CHECK` | yes | GIT COMMIT<br>GIT PUSH<br>GIT PR | COMMIT: result=PASS; pre=—<br>PUSH: result=PASS; pre=git-push-ready<br>PR: result=PASS; pre=git-pr-ready |
 | `GIT COMMIT` | yes | GIT PUSH | PUSH: result=SUCCESS; pre=— |
 | `GIT PUSH` | yes | GIT PR | PR: result=SUCCESS; pre=— |

@@ -184,97 +184,90 @@ jobs:
         # Пример: итоговый HARNESS SELF-TESTS: PASS (14).
         run: python3 .harness/tools/run-self-tests.py
 
-  # Targeted Windows coverage platform-specific safety boundaries.
-  # Пример: msvcrt locking и taskkill не исполняются Linux job-ом.
-  validate-windows-boundaries:
-    # Отображаемое имя отдельного Windows compatibility job.
-    # Пример: "Validate Windows boundaries".
-    name: Validate Windows boundaries
-    # Зафиксированный Windows runner для platform-specific Python branches.
-    # Пример: windows-2025 вместо floating windows-latest.
-    runs-on: windows-2025
-    # Targeted suite обычно короткий; timeout защищает от зависших process tests.
-    # Пример: 15 минут оставляют запас для update-engine fixtures на загруженном runner.
-    timeout-minutes: 15
+  # Отдельная группа Windows self-tests без общих временных репозиториев.
+  # Пример: update выполняется параллельно двум остальным группам.
+  windows-update:
+    # Локальный workflow использует ту же revision, что вызывающий workflow.
+    # Пример: .github/workflows/harness-windows-group.yml.
+    uses: ./.github/workflows/harness-windows-group.yml
+    # Передать фиксированное имя группы.
+    # Пример: update.
+    with:
+      # Группы и набор проверяются discoverable self-test.
+      # Пример: update.
+      group: update
 
-    # Последовательность Windows-specific проверок.
-    # Пример: checkout → Python → python3 shim → targeted self-tests.
+  # Отдельная группа Windows self-tests без общих временных репозиториев.
+  # Пример: resume выполняется параллельно двум остальным группам.
+  windows-resume:
+    # Локальный workflow использует ту же revision, что вызывающий workflow.
+    # Пример: .github/workflows/harness-windows-group.yml.
+    uses: ./.github/workflows/harness-windows-group.yml
+    # Передать фиксированное имя группы.
+    # Пример: resume.
+    with:
+      # Группы и набор проверяются discoverable self-test.
+      # Пример: resume.
+      group: resume
+
+  # Отдельная группа Windows self-tests без общих временных репозиториев.
+  # Пример: execution выполняется параллельно двум остальным группам.
+  windows-execution:
+    # Локальный workflow использует ту же revision, что вызывающий workflow.
+    # Пример: .github/workflows/harness-windows-group.yml.
+    uses: ./.github/workflows/harness-windows-group.yml
+    # Передать фиксированное имя группы.
+    # Пример: execution.
+    with:
+      # Группы и набор проверяются discoverable self-test.
+      # Пример: execution.
+      group: execution
+
+  # Стабильный обязательный check сохраняет совместимость publish gates (#339).
+  # Пример: одна отменённая/пропущенная группа не допускает итоговый PASS.
+  validate-windows-boundaries:
+    # Имя используется branch protection и maintainer-tools.
+    # Пример: Validate Windows boundaries.
+    name: Validate Windows boundaries
+    # Финализация запускается и после ошибки группы.
+    # Пример: always().
+    if: ${{ always() }}
+    # Все три обязательные группы должны завершиться успешно.
+    # Пример: отсутствие любого результата означает FAIL.
+    needs: [windows-update, windows-resume, windows-execution]
+    # Финализация не повторяет Windows-тесты и требует только Python.
+    # Пример: ubuntu-24.04.
+    runs-on: ${{ fromJSON(vars.HARNESS_LINUX_RUNS_ON || '"ubuntu-24.04"') }}
+    # Ограниченный бюджет только для чтения результатов.
+    # Пример: 5 минут.
+    timeout-minutes: 5
+    # Получить тот же код и проверить фактические needs текущего запуска.
+    # Пример: три success -> PASS.
     steps:
-      # Получить exact commit/PR без сохранения push credentials.
-      # Пример: checkout текущего PR commit.
+      # Прочитать CLI из того же commit.
+      # Пример: checkout@v7.
       - name: Checkout repository
-        # Официальный pinned checkout action.
-        # Пример: actions/checkout@v7.
+        # Зафиксированная версия checkout.
+        # Пример: v7.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        # Параметры checkout для read-only validation.
-        # Пример: credentials=false, full history.
+        # Финализатор не пишет в репозиторий.
+        # Пример: persist-credentials=false.
         with:
-          # Windows tests не выполняют provider mutation.
+          # Не сохранять credentials.
           # Пример: false.
           persist-credentials: false
-          # Update/review regressions используют Git history.
-          # Пример: 0 означает полную историю.
-          fetch-depth: 0
-
-      # Установить основной поддерживаемый Python runtime Windows.
-      # Пример: Python 3.13.
-      - name: Setup Python
-        # Официальный pinned setup-python action.
-        # Пример: actions/setup-python@v7.
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        # Параметры runtime setup.
-        # Пример: python-version=3.13.
-        with:
-          # Версия targeted Windows runtime.
-          # Пример: "3.13".
-          python-version: "3.13"
-
-      # Canonical Harness examples используют executable name python3.
-      # Пример: создать shim к interpreter из setup-python.
-      - name: Provide python3 command
-        # Явный shell нужен для создания cmd shim на Windows.
-        # Пример: pwsh.
-        shell: pwsh
-        # Создать python3.cmd и добавить каталог в PATH следующих steps.
-        # Пример: python3 перенаправляется в exact pythonLocation.
-        run: |
-          $shim = Join-Path $env:RUNNER_TEMP "python3.cmd"
-          $line = '@"{0}\python.exe" %*' -f $env:pythonLocation
-          Set-Content -Path $shim -Value $line -Encoding ascii
-          Add-Content -Path $env:GITHUB_PATH -Value $env:RUNNER_TEMP
-
-      # Исполнить только branches, где Windows behavior отличается от POSIX.
-      # Пример: locking/recovery/process termination/atomic writes.
-      - name: Validate Windows-specific Harness boundaries
-        # Явный shell стабилизирует Windows command semantics.
-        # Пример: pwsh.
-        shell: pwsh
-        # Targeted regression set platform-sensitive tools.
-        # Пример: execution, verification и update engine.
-        run: |
-          # В PowerShell ошибка native python не прерывает следующие команды
-          # автоматически: успешный последний тест мог скрыть предыдущий FAIL.
-          # Проверяем код возврата каждого скрипта отдельно (#302).
-          function Invoke-HarnessSelfTest {
-            param([string]$Script)
-            python $Script
-            if ($LASTEXITCODE -ne 0) {
-              throw "Self-test failed: $Script (exit $LASTEXITCODE)"
-            }
-          }
-          Invoke-HarnessSelfTest ".harness/tools/harness-config-self-test.py"
-          Invoke-HarnessSelfTest ".harness/tools/document-contract-self-test.py"
-          Invoke-HarnessSelfTest ".harness/tools/execution-self-test.py"
-          Invoke-HarnessSelfTest ".harness/tools/step-next-self-test.py"
-          Invoke-HarnessSelfTest ".harness/tools/verification-self-test.py"
-          Invoke-HarnessSelfTest ".harness/tools/reliable-orchestration-fault-self-test.py"
-          Invoke-HarnessSelfTest ".harness/tools/portable-handoff-self-test.py"
-          Invoke-HarnessSelfTest ".harness/tools/portable-resume-self-test.py"
-          Invoke-HarnessSelfTest ".harness/tools/portable-resume-matrix-self-test.py"
-          Invoke-HarnessSelfTest ".harness/tools/operational-reports-self-test.py"
-          Invoke-HarnessSelfTest ".harness/tools/operational-completion-self-test.py"
-          Invoke-HarnessSelfTest ".harness/tools/operational-integration-self-test.py"
-          Invoke-HarnessSelfTest ".harness/tools/update-engine-self-test.py"
+      # Проверить полный набор результатов, включая skipped/cancelled.
+      # Пример: missing result -> FAIL.
+      - name: Require all Windows groups
+        # Данные GitHub передаются через environment, не shell interpolation.
+        # Пример: JSON needs для текущего SHA.
+        env:
+          # Авторитетный результат всех зависимостей job.
+          # Пример: windows-update.result=success.
+          WINDOWS_NEEDS_JSON: ${{ toJSON(needs) }}
+        # CLI возвращает ненулевой код при любом неполном успехе.
+        # Пример: finalize.
+        run: python3 .harness/tools/windows-ci.py finalize
 
   # Проверить нижнюю документированную границу Python отдельно от основного 3.13 job.
   # Пример: использование API, появившегося только в 3.12+, должно ломать этот job.

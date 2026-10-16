@@ -109,7 +109,8 @@ schema/freshness problems решаются в работе с проектом, 
 
 Старый binary может выполнять full preflight до получения новых файлов.
 Новый release не может ретроактивно изменить этот код. Если он блокирует
-обновление по STEP/REVIEW/STATUS, используй официальный installer из отдельного
+обновление по STEP/REVIEW/STATUS или откатывается с `POSTCONDITION_FAILED`
+для проектного shared-файла (#352), используй официальный installer из отдельного
 checkout **выбранного immutable release**, не редактируя lock и не копируя
 служебные файлы вручную:
 
@@ -139,7 +140,11 @@ migration версии требуют отдельной миграции. Ес�
 Linux 3.11 и Windows 3.13, pristine initialized canary upgrade и отдельную
 `update-artifact-canary.py` matrix на disposable copies того же canary.
 Матрица проверяет latest/TO, единственную установку, сохранение bytes/modes и
-Git index для 16 состояний artifacts, read-only CHECK и повторный NO_UPDATE.
+Git index для состояний artifacts, read-only CHECK и повторный NO_UPDATE.
+Отдельные shared-сценарии (#352) проверяют tracked файл вне BASE/TARGET:
+обычный и executable mode, staged/unstaged bytes, `core.filemode=false` и
+локальное удаление. Эти файлы сравниваются отдельно от project-owned snapshot;
+сохраняются также mtime и точные bytes Git index.
 Любой FAIL блокирует release. Полный project validator нужен в pristine lane
 для проверки нормальной работы продукта; он не является updater postcondition.
 

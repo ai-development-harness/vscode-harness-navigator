@@ -419,3 +419,8 @@ Finding этой проверки означает необходимость re
 - Для `semantic-writer.py planning-review` поле `findings` — массив непустых строк; structured objects относятся к STEP REVIEW contract, не planning-review.
 - Manual Verification result обязан передавать `check` точно как записано в STEP `## Verification`; несовпадение — `VERIFICATION_CONTRACT_INVALID`.
 - `harness-dispatch.py complete --root` принимает canonical root command string (например, `STEP RUN STEP-017`), а не `executionId`. Exact execution id передаётся отдельно через `--execution-id`.
+
+
+## Проверка и очистка временных файлов
+
+`HARNESS CLEANUP CHECK` — read-only проверка. `HARNESS CLEANUP APPLY` — повторная проверка и удаление. Команды без аргументов, targets и цепочек; решение принимает deterministic cleaner. См. [LOCAL_CLEANUP.md](LOCAL_CLEANUP.md).

@@ -400,6 +400,7 @@ def project_status(root: Path) -> dict[str, Any]:
     stale_plans = [
         item for item in listed["steps"]
         if item.get("planFreshness") == "stale"
+        and item.get("status") != "completed"
     ]
     return {
         "status": "PASS",
