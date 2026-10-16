@@ -144,9 +144,9 @@ def _requirement_status(
             )
         try:
             task = read_task(root, step_id)
-            # История REQ опирается на тогдашний immutable PASS. Он не
-            # становится current prerequisite: NEXT/IMPLEMENT используют
-            # строгий step_completion_proof(), без historical fallback.
+            # История REQ и prerequisites новой работы используют одну
+            # принятую completion history, без сегодняшнего пересмотра
+            # контрактов completed STEP (#355).
             proof = historical_completion_projection_proof(
                 root,
                 step_id,

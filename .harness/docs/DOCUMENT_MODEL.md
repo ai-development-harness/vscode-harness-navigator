@@ -156,10 +156,15 @@ SHA-256 нормализованного текста `Implementation plan`.
 
 - implementation/bugfix/refactor/hardening/documentation/release — Evidence + schema-valid PASS review;
 - research — completed + durable Evidence/Deliverables;
-- adr — completed + Evidence + linked ADR в `accepted`;
+- adr — completed + Evidence + linked ADR в `accepted` или `superseded`;
 - audit/review — completed + durable Evidence.
 
 Completion proof **не входит** в planning basis. Он проверяется deterministic непосредственно перед `STEP IMPLEMENT` через runtime precondition `step-implement-ready`. Поэтому dependent STEP можно спланировать заранее, но начать mutation до фактического завершения prerequisite нельзя.
+
+Completed STEP является историческим фактом: его PASS не сравнивается с
+сегодняшним контрактом и нынешними зависимостями. Новая работа проверяет свой
+актуальный Ready plan и собственные prerequisites; повторная приёмка завершённой
+цепочки не требуется. Подробности: [EVOLUTION_SEMANTICS.md](EVOLUTION_SEMANTICS.md).
 
 После implementation review PASS тот же proof используется для deterministic lifecycle close: writer временно переводит STEP в `completed`, проверяет полный type-specific proof и только при успехе сохраняет status и регенерирует projections. При недостаточном Evidence/ADR/proof status откатывается, а immutable PASS review сохраняется как честный semantic verdict без ложного completion.
 

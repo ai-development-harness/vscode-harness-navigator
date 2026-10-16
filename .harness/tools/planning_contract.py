@@ -422,7 +422,7 @@ def step_completion_proof(
             except (DocumentError, ValueError, OSError) as exc:
                 reasons.append(str(exc))
                 continue
-            if adr["frontmatter"].get("status") != "accepted":
+            if adr["frontmatter"].get("status") not in {"accepted", "superseded"}:
                 reasons.append(f"{adr_id} is not accepted")
     elif step_type in {"audit", "review"}:
         if not evidence:
@@ -464,11 +464,9 @@ def step_completion_proof(
         elif trusted.get("verdict") != "PASS":
             reasons.append("latest trusted review verdict is not PASS")
         else:
-            # Исторический PASS доказывает конкретный semantic contract.
-            # REQ/ADR/OQ/STEP/PRN change после REVIEW не превращает прежнее
-            # достижение в новое разрешение для зависимых executions.
-            # Legacy reports без contract_basis сохраняют migration semantics;
-            # они не притворяются новым review и требуют обычных guards.
+            # Завершённый STEP — принятый исторический результат (#355).
+            # Его старый REVIEW не сравнивается с сегодняшним REQ/ADR/architecture
+            # и proofs зависимостей; актуальность проверяет план новой работы.
             source = trusted.get("document")
             report_meta = (
                 source.get("frontmatter", {})
@@ -480,7 +478,7 @@ def step_completion_proof(
             # не фиксировать зависимые proofs. Нельзя доказать, что он был
             # проведён после текущего upstream REVIEW. Legacy отчёты без
             # contract_basis сохраняют отдельные migration semantics.
-            if dependency_ids(task) and _valid_sha256(reviewed_basis):
+            if not complete and dependency_ids(task) and _valid_sha256(reviewed_basis):
                 if not _valid_sha256(reviewed_deps) and (
                     not _historical or report_meta.get("reviewed_subject_content_hash") is not None
                 ):
@@ -493,7 +491,7 @@ def step_completion_proof(
                     )
                     if current_deps != reviewed_deps:
                         reasons.append(f"completion-dependency-proof-stale:{step_id}")
-            if not _historical and _valid_sha256(reviewed_basis):
+            if not complete and not _historical and _valid_sha256(reviewed_basis):
                 try:
                     current_basis = planning_context_basis(root, step_id)
                 except (OSError, ValueError) as exc:
@@ -512,29 +510,9 @@ def step_completion_proof(
         if not evidence:
             reasons.append("step has no durable Evidence")
 
-    # Завершённая зависимость действительна для текущего downstream STEP
-    # только если её собственные requirements/architecture остаются доказаны.
-    # План downstream не связывается с lifecycle dependency (PLAN можно
-    # готовить раньше), проверка относится только к execution/evidence gates.
-    if complete:
-        ancestry = _ancestors | {step_id}
-        for dep_id in dependency_ids(task):
-            try:
-                dep_proof = step_completion_proof(
-                    root,
-                    dep_id,
-                    extra_legacy_review_pins=extra_legacy_review_pins,
-                    _historical=_historical,
-                    _ancestors=ancestry,
-                    _proof_cache=_proof_cache,
-                )
-            except (OSError, ValueError) as exc:
-                reasons.append(f"dependency-unprovable:{dep_id}:{exc}")
-                continue
-            if not dep_proof["complete"]:
-                reasons.append(
-                    f"dependency-incomplete:{dep_id}:" + "; ".join(dep_proof["reasons"])
-                )
+    # Не обходим сегодняшние зависимости принятой задачи: они не описывают
+    # условия её прошлой приёмки. Новая работа проверяет свои prerequisites
+    # через dependency_completion_failures, а целостность графа — validator.
 
     snapshot = {
         "step_id": step_id,
@@ -722,12 +700,15 @@ def dependency_completion_failures(
 ) -> list[str]:
     """Доказать завершение hard dependencies без рекурсии.
 
-    STEP NEXT проверяет весь DAG (transitive=True). Старый IMPLEMENT gate
-    v0.11.4 проверял только direct depends_on: это правило сохраняем для
-    безопасного обновления проектов с историческими completion baselines.
+    STEP NEXT проверяет активный DAG (transitive=True), останавливаясь на
+    принятых completed узлах. IMPLEMENT проверяет direct depends_on.
     Проверка формата depends_on общая и fail-closed в обоих режимах.
     Кэши — только на время одного вызова resolver.
     """
+    # Для самой completed задачи нет нового execution и новой очереди
+    # prerequisites. Сохранность её результата проверяет completion proof.
+    if read_task(root, step_id)["frontmatter"].get("status") == "completed":
+        return []
     failures: list[str] = []
     checked: set[str] = set()
     visiting: set[str] = set()
@@ -786,7 +767,10 @@ def dependency_completion_failures(
                     failures.append(
                         f"dependency-incomplete:{dep}:" + "; ".join(proof["reasons"])
                     )
-            if transitive and dep not in checked:
+            # Принятый completed узел завершает обход. Его нынешний depends_on
+            # не превращает исторический PASS в очередь повторной приёмки.
+            if (transitive and dep not in checked and dep in proofs
+                    and proofs[dep].get("snapshot", {}).get("status") != "completed"):
                 stack.append((dep, False))
     return list(dict.fromkeys(failures))
 
@@ -1129,6 +1113,7 @@ def _validate_task(root: Path, step_id: str, task: dict[str, Any], errors: list[
             adr = _parse_canonical_document(canonical_adr_path(root, adr_id), adr_id)
             if (
                 meta.get("plan", {}).get("status") == "ready"
+                and meta.get("status") != "completed"
                 and not adr_status_allows_readiness(
                     task,
                     adr["frontmatter"].get("status"),
@@ -1137,7 +1122,9 @@ def _validate_task(root: Path, step_id: str, task: dict[str, Any], errors: list[
                 errors.append(f"{prefix}: ready plan references non-accepted {adr_id}")
         except (DocumentError, ValueError, OSError) as exc:
             errors.append(f"{prefix}: {exc}")
-    for ref in refs:
+    # Anchor исторического architecture snapshot может быть переименован
+    # после приёмки. Его текущая доступность нужна только активной работе.
+    for ref in refs if meta.get("status") != "completed" else []:
         try:
             _architecture_ref_snapshot(root, ref)
         except (OSError, UnicodeDecodeError, ValueError) as exc:
@@ -1202,15 +1189,17 @@ def _validate_task(root: Path, step_id: str, task: dict[str, Any], errors: list[
                 errors.append(f"{prefix}: unresolved placeholder in '## {section}'")
         if str(meta.get("phase")).upper() == "TBD":
             errors.append(f"{prefix}: ready plan has phase=TBD")
-        for item in relevant_open_questions(root, task):
-            if item.get("status") == "open":
-                errors.append(f"{prefix}: ready plan is blocked by {item.get('id')}")
+        if meta.get("status") != "completed":
+            for item in relevant_open_questions(root, task):
+                if item.get("status") == "open":
+                    errors.append(f"{prefix}: ready plan is blocked by {item.get('id')}")
 
         expected_basis = None
-        try:
-            expected_basis = planning_context_basis(root, step_id)
-        except (DocumentError, ConfigError, OSError, ValueError) as exc:
-            errors.append(f"{prefix}: cannot compute context basis: {exc}")
+        if meta.get("status") != "completed":
+            try:
+                expected_basis = planning_context_basis(root, step_id)
+            except (DocumentError, ConfigError, OSError, ValueError) as exc:
+                errors.append(f"{prefix}: cannot compute context basis: {exc}")
         try:
             expected_content = plan_content_hash(root, step_id)
         except (ExecutionGroupError, OSError, ValueError) as exc:
@@ -1346,10 +1335,9 @@ def historical_completion_projection_proof(
 ) -> dict[str, Any]:
     """Проверить принятую историю без разрешения нового execution.
 
-    Один type-specific механизм сохраняет trust, Evidence, Verification и циклы.
-    Историческая проверка не сравнивает принятый контекст с сегодняшним и не
-    требует metadata, которой ещё не было у старого writer. Кеш каждого вызова
-    изолирован от строгого runtime proof; его hash и prerequisites не меняются.
+    Compatibility wrapper использует тот же type-specific proof, что runtime.
+    Completed результат проверяется по собственной принятой истории, без
+    сегодняшнего контекста и без повторного обхода его старых prerequisites.
     """
     return step_completion_proof(
         root, step_id,
