@@ -926,9 +926,9 @@ def run_step_verification(
             "message": str(exc),
         }
 
-    # Нельзя запускать новые тесты и выдавать PASS downstream, если completed
-    # upstream STEP перестал соответствовать своему REQ/ADR/semantic contract.
-    # Это gate только для текущего execution, без переписывания history.
+    # Новая Verification требует сохранного принятого результата прямых
+    # prerequisites. Сегодняшний контекст старых completed STEP здесь
+    # не пересматривается: актуальность относится к новой работе (#355).
     dependency_failures = [
         item for item in verification_dependency_facts(root, step_id)
         if not item["complete"]

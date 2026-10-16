@@ -250,12 +250,13 @@ def qualify(baseline: Path, mirror: Path, target: str) -> dict:
                              for path in reviews.rglob('*.md')}
                 run([sys.executable, str(work / '.harness/tools/sync-projections.py')], work)
                 if state.endswith('architecture'):
-                    # Тот же настоящий исторический PASS допускает публикацию,
-                    # но не становится актуальным prerequisite новой работы.
+                    # Принятая история одинаково подтверждается публикацией
+                    # и новым consumer: сегодняшнее architecture prose не
+                    # переоткрывает completed STEP (#355).
                     code = ("import sys; from pathlib import Path; "
                             "sys.path.insert(0, '.harness/tools'); "
                             "from planning_contract import step_completion_proof, historical_completion_projection_proof; "
-                            f"assert not step_completion_proof(Path.cwd(), {sid!r})['complete']; "
+                            f"assert step_completion_proof(Path.cwd(), {sid!r})['complete']; "
                             f"assert historical_completion_projection_proof(Path.cwd(), {sid!r})['complete']")
                     run([sys.executable, '-c', code], work)
                 for mode in ('commit', 'ci'):

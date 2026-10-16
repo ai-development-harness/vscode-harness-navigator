@@ -116,64 +116,27 @@ Git push/PR/других side effects в эту задачу **не входят
 формализация missing links в canonical REQ/ADR/STEP. Никаких новых
 пользовательских обязательств при переключении Claude Code ↔ Codex нет.
 
-## Enforcement актуальности завершённых зависимостей (#295)
+## Проверка зависимостей новой работы (#295, #355)
 
-`--preview` остаётся **только read-only**. Дополнительная защита на
-execution boundary переиспользует уже существующие механизмы:
+`--preview` остаётся read-only. На execution boundary используются существующие
+Ready plan, Verification и completion proof:
 
-- `step_completion_proof()` проверяет, соответствует ли последний trusted
-  REVIEW зафиксированному в нём `contract_basis` текущему semantic snapshot
-  REQ/ADR/OQ/STEP/PRN. Новый REVIEW также сохраняет
-  `dependency_completion_basis` — отпечатки *фактических upstream completion
-  proofs на момент проверки*. Изменение upstream, а затем новый upstream
-  REVIEW не делают старый downstream REVIEW действительным вновь.
-  Исторические legacy reports не переписываются.
-- Если completed STEP зависит от другого STEP, он проверяет актуальность
-  его completion proof **транзитивно**. Циклы, отсутствующие зависимости и
-  ошибочные документы не превращаются в PASS.
-- Для зависимого STEP с современным `contract_basis` в REVIEW теперь обязателен
-  `dependency_completion_basis`. Старый REVIEW с первым полем, но без второго,
-  не может подтвердить current downstream completion: возвращается
-  `completion-dependency-proof-missing`. Это консервативная перепроверка,
-  а не изменение исторического отчёта; новый обычный REVIEW создаёт proof.
-  Legacy отчёты без `contract_basis` остаются в прежнем migration режиме.
-- `verification_context_basis()` содержит hash подтверждённых
-  `step_completion_proof` прямых dependencies. Это отдельно от Ready plan:
-  PLAN всё ещё разрешено готовить **до** завершения зависимостей.
-- При невыполненных/устаревших prerequisites Verification возвращает
-  `VERIFICATION_DEPENDENCY_UNPROVEN`, вместо того чтобы запускать новые
-  проверки и создавать ложный PASS.
-- Когда upstream proof изменится, старое Verification Evidence downstream
-  получит `VERIFICATION_CONTEXT_STALE`, пока не будет выполнена новая
-  Verification.
+- Completed prerequisite подтверждается собственной принятой историей. Текущие
+  REQ/ADR/OQ/STEP/PRN не пересматривают его прежний PASS.
+- `dependency_completion_basis` нового REVIEW фиксирует фактические proofs,
+  доступные при этой новой проверке. Metadata не дописывается в старые отчёты.
+- `verification_context_basis()` новой работы содержит proofs её прямых
+  prerequisites отдельно от Ready plan. PLAN разрешено готовить до их завершения,
+  а IMPLEMENT и Verification требуют сохранного принятого результата.
+- Missing/corrupt PASS, отсутствие Evidence, Verification FAIL или незавершённый
+  прямой prerequisite дают `VERIFICATION_DEPENDENCY_UNPROVEN` до новых проверок.
+- Смена собственного contract/source или прямого proof во время активной работы
+  требует актуальных PLAN/Verification/REVIEW этой новой работы. Прежние completed
+  STEP и их исторические Evidence при этом не переоткрываются.
 
-**Пример:**
-
-```text
-STEP-001 completed (для REQ-001 v1) → STEP-002 completed
-                     |
-                     └─ REQ-001 изменён до v2
-
-STEP-001: completion-contract-stale
-STEP-002: dependency-incomplete:STEP-001
-Verification STEP-002: stale или BLOCKED
-STEP-003 (несвязанный): остаётся действительным
-```
-
-| Ситуация | Что было | Что стало |
-| --- | --- | --- |
-| Изменение REQ после ранее выполненного REVIEW | Исторический PASS мог использоваться как текущий | Сохранённый `contract_basis` проверяется заново и помечается stale |
-| У downstream STEP нет прямой ссылки на изменившийся REQ | Собственный план мог оставаться fresh | Completion chain и Verification пересматривают upstream proof |
-| Изменена только административная metadata REQ/STEP | Возможна ненужная повторная работа | Semantic snapshot не включает нерелевантные поля |
-| Исторический REVIEW без `contract_basis` | Legacy migration semantics | Сохраняются, без ложного заявления о современном proof |
-| Неизвестный dependency/цикл | В сложных сценариях могла теряться причина | Причина сохраняется и не вызывает повторного запуска side effect |
-
-Enforcement не удаляет прежние Evidence/Review, не снимает автоматически
-`status: completed`, не запускает Git mutation и не зависит от Claude/Codex.
-Исторические завершения остаются историей, но их stale proof не разрешает
-новую downstream execution. Для legacy proof без semantic basis следует
-использовать существующие миграционные механизмы и обычное REVIEW при
-возникновении новых требований; он не получает поддельную историю.
+Пример: изменение REQ-001 после completed STEP-001/002 сохраняет их принятие.
+Новый STEP-003 планируется по сегодняшним требованиям и использует сохранный
+результат своего прямого completed prerequisite, без повторной приёмки предков.
 
 ## Semantic blast radius
 
@@ -188,7 +151,7 @@ Semantic hypothesis не добавляется автоматически в de
 ```text
 REQ / STEP / ADR / OQ / PRN changes
 → current planning basis differs from Ready basis
-→ affected plan becomes stale
+→ affected active plan becomes stale
 → STEP RUN / IMPLEMENT prerequisite blocks stale plan
 → STEP PLAN
 → independent planning review
@@ -207,7 +170,7 @@ ADR-003 accepted
 → ADR-003 status/superseded_by changes
 → linked planning context becomes stale
 → impact analysis names architecture cause
-→ re-plan affected STEP
+→ re-plan affected active STEP
 ```
 
 Если active STEP всё ещё ссылается на superseded ADR, RECONCILE классифицирует это как architecture-owner gap.
@@ -296,27 +259,30 @@ Synthetic regression должен доказывать минимум:
 7. semantic contract edit не проходит QUICK FIX policy;
 8. impact analysis не мутирует immutable historical review.
 
-## Историческое завершение и актуальность для новой работы
+## Завершённый STEP — исторический факт
 
-`historical_completion_projection_proof()` проверяет принятую историю через
-общий type-specific proof: доверенный immutable PASS, Evidence, результат
-Verification, существование зависимостей и отсутствие циклов остаются обязательными.
-Сравнение исторического `contract_basis` с сегодняшним контекстом и актуальность
-`dependency_completion_basis` относятся к разрешению новой работы. Их несовпадение
-не отменяет историческое завершение, в том числе после изменения общего
-архитектурного описания. Отсутствие dependency metadata допустимо только для старого
-REVIEW без `reviewed_subject_content_hash`; новый неполный REVIEW остаётся ошибкой.
+`step_completion_proof()` и compatibility wrapper
+`historical_completion_projection_proof()` проверяют сохранность принятого
+результата: собственные Evidence, generated Verification и trusted immutable
+PASS REVIEW, либо предусмотренный type-specific proof. Старые reports без
+поздней metadata сохраняются без изменений. Superseded ADR остаётся принятым
+историческим решением.
 
-Общий structural validator во всех режимах, включая commit/push/CI, requirements
-STATUS и traceability coverage используют историческую проверку. У completed STEP
-устаревший context старого Ready plan не является обязательной очередью PLAN/REVIEW.
-Immutable REVIEW/AUDIT не изменяются, новые fingerprints в них не добавляются.
+Завершённый STEP не сравнивается с сегодняшним REQ/ADR/PRN/architecture context,
+не пересчитывает dependency basis старого REVIEW и не обходит нынешний
+`depends_on`. Изменение этих входов после приёмки не отменяет прошлое завершение
+и не требует повторного PLAN/IMPLEMENT/Verification/REVIEW. Новые proof artifacts
+и дополнительные команды для этого не нужны. Read-only диагностика плана
+возвращает `status: historical`, `action: null`; сегодняшние OQ, статусы ADR
+и переименование architecture anchor не блокируют исторический Ready plan.
 
-`step_completion_proof()`, `dependency_completion_failures()` и execution gates
-сохраняют строгий текущий контракт и прежний proof hash. При новой зависимой работе
-неподтверждённая актуальность возвращает BLOCKED до product mutation. PLAN сохраняет
-прежние правила. Исторический PASS не выдаёт разрешение на новый execution.
+Новая работа проверяет собственные текущие требования, архитектуру, Ready plan,
+Verification и независимый REVIEW. Её прямые completed prerequisites должны иметь
+сохранный completion proof; за этим историческим узлом обход останавливается.
+Missing/повреждённый REVIEW, отсутствие Evidence или generated Verification FAIL
+у прямого prerequisite остаются BLOCKED. Незавершённые зависимости, отсутствующие
+STEP и циклы активного графа не становятся допустимыми. Общий schema validator
+продолжает проверять структурную целостность ссылок и графа.
 
-Реальный текущий defect или semantic drift получает отдельный finding и corrective
-owner в reconcile. Само несовпадение historical fingerprint не доказывает regression
-и не требует массовой повторной Verification/REVIEW для публикации обновления.
+Реальный defect старой реализации получает отдельную corrective задачу.
+Несовпадение historical fingerprint само по себе таким defect не является.

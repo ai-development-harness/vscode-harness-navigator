@@ -207,6 +207,7 @@ def baseline_project(
     release: str = "0.11.2",
     fail_self_tests: bool = False,
     fail_blocked_dag: bool = False,
+    fail_history_scenarios: bool = False,
 ) -> str:
     root.mkdir()
     init_repo(root)
@@ -242,6 +243,10 @@ print(json.dumps({"status":"PASS","command":sys.argv[1]}))
     write(root, ".harness/tools/validate.py", "raise SystemExit(0)\n")
     write(root, ".harness/tools/dependency-evidence-self-test.py",
           f"raise SystemExit({1 if fail_blocked_dag else 0})\n")
+    # Project-owned runner должен реально исполняться после upgrade.
+    # Его FAIL нельзя скрыть общим зелёным self-test suite.
+    write(root, "tests/completed-history/run.py",
+          f"raise SystemExit({1 if fail_history_scenarios else 0})\n")
     if fail_self_tests:
         # Synthetic stdout matches public run-self-tests.py --json.
         # The failure must expose safe test names but not diagnostic prose.
@@ -305,6 +310,8 @@ def main() -> int:
         baseline_head = git(baseline, "rev-parse", "HEAD")
         payload = invoke(root, baseline, baseline_sha, source, candidate, expect=0)
         assert payload["status"] == "PASS", payload
+        assert any(item["id"] == "completed-history-scenarios" and item["status"] == "PASS"
+                   for item in payload["stages"]), payload
         assert payload["candidateRevision"] == candidate, payload
         assert payload["candidateRelease"] == "v0.11.3", payload
         assert payload["expectedPreviousStable"] == "v0.11.2", payload
@@ -342,6 +349,12 @@ def main() -> int:
         rejected = invoke(root, blocked_dag, blocked_sha, source, candidate, expect=1)
         assert rejected["reasonCode"] == "POST_UPDATE_GATE_FAILED", rejected
         assert rejected["message"] == "blocked-dependency-dag", rejected
+
+        history = root / "completed-history-failure"
+        history_sha = baseline_project(history, fail_history_scenarios=True)
+        rejected_history = invoke(root, history, history_sha, source, candidate, expect=1)
+        assert rejected_history["reasonCode"] == "POST_UPDATE_GATE_FAILED", rejected_history
+        assert rejected_history["message"] == "completed-history-scenarios", rejected_history
 
         # Обязательное условие нового release gate: canary не может быть
         # на позапрошлом релизе и выдавать multi-hop за предыдущий stable.

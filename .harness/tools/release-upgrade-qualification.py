@@ -540,9 +540,9 @@ def qualify(
                     "validate",
                     [sys.executable, ".harness/tools/validate.py", "--mode", "manual"],
                 ),
-                # Отдельное evidence для #340: initialized upgrade проверяется
-                # также на разветвлённом BLOCKED DAG с историческими REVIEW.
-                # Full suite ниже сохраняется; линейной PASS-цепочки мало.
+                # Отдельное evidence исторической приёмки #355. Стабильный
+                # stage id сохранён для потребителей qualification reports;
+                # сами completed цепочки больше не требуют повторной приёмки.
                 (
                     "blocked-dependency-dag",
                     [sys.executable, ".harness/tools/dependency-evidence-self-test.py"],
@@ -552,6 +552,16 @@ def qualify(
                     [sys.executable, ".harness/tools/run-self-tests.py", "--json"],
                 ),
             ]
+            # Canary хранит project-owned сценарии с настоящими принятыми
+            # reports. После upgrade проверяем NEXT/IMPLEMENT/Verification
+            # на disposable копиях; обычный consumer не обязан иметь этот набор.
+            scenario_runner = work / "tests/completed-history/run.py"
+            if scenario_runner.is_file():
+                checks.insert(-1, (
+                    "completed-history-scenarios",
+                    [sys.executable, str(scenario_runner), "--baseline", str(work),
+                     "--harness-root", str(work)],
+                ))
             for stage_id, command in checks:
                 proc, item = _stage(stage_id, command, cwd=work)
 

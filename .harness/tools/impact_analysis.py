@@ -87,6 +87,10 @@ def compare_component_sets(
 
 def plan_staleness(root: Path, step_id: str) -> dict[str, Any]:
     task = read_task(root, step_id)
+    # У принятого результата нет текущего readiness и очереди re-plan (#355).
+    # Старый basis остаётся историческим, без чтения сегодняшнего context.
+    if task["frontmatter"].get("status") == "completed":
+        return {"status": "historical", "causes": [], "action": None}
     plan = task["frontmatter"].get("plan")
     if not isinstance(plan, dict):
         return {
@@ -224,6 +228,8 @@ def affected_steps(root: Path, changed: list[str]) -> dict[str, Any]:
             continue
         step_id = path.stem
         task = read_task(root, step_id)
+        if task["frontmatter"].get("status") == "completed":
+            continue
         linked = _linked_component_keys(root, step_id)
         reasons = [
             _reason_for_component(key)
@@ -403,7 +409,9 @@ def selective_invalidation_preview(root: Path, changed: list[str]) -> dict[str, 
         impacted = step_id in paths
         explicit = step_id in direct
         plan_status = plan.get("status")
-        if issues or plan_status == "invalid":
+        if plan_status == "historical":
+            state = "preserved"
+        elif issues or plan_status == "invalid":
             state = "ambiguous"
             if plan_status == "invalid" and not issues:
                 issues.append("plan state cannot be proven")
