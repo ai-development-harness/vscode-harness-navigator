@@ -360,6 +360,7 @@ def step_completion_proof(
     step_id: str,
     *,
     extra_legacy_review_pins: dict[str, str] | None = None,
+    _historical: bool = False,
     _ancestors: frozenset[str] = frozenset(),
     _proof_cache: dict[tuple[str, frozenset[str] | None], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -480,9 +481,11 @@ def step_completion_proof(
             # проведён после текущего upstream REVIEW. Legacy отчёты без
             # contract_basis сохраняют отдельные migration semantics.
             if dependency_ids(task) and _valid_sha256(reviewed_basis):
-                if not _valid_sha256(reviewed_deps):
+                if not _valid_sha256(reviewed_deps) and (
+                    not _historical or report_meta.get("reviewed_subject_content_hash") is not None
+                ):
                     reasons.append(f"completion-dependency-proof-missing:{step_id}")
-                else:
+                elif not _historical:
                     current_deps = dependency_completion_basis(
                         root, step_id, _ancestors=_ancestors,
                         _proof_cache=_proof_cache,
@@ -490,7 +493,7 @@ def step_completion_proof(
                     )
                     if current_deps != reviewed_deps:
                         reasons.append(f"completion-dependency-proof-stale:{step_id}")
-            if isinstance(reviewed_basis, str) and _valid_sha256(reviewed_basis):
+            if not _historical and _valid_sha256(reviewed_basis):
                 try:
                     current_basis = planning_context_basis(root, step_id)
                 except (OSError, ValueError) as exc:
@@ -521,6 +524,7 @@ def step_completion_proof(
                     root,
                     dep_id,
                     extra_legacy_review_pins=extra_legacy_review_pins,
+                    _historical=_historical,
                     _ancestors=ancestry,
                     _proof_cache=_proof_cache,
                 )
@@ -1214,7 +1218,8 @@ def _validate_task(root: Path, step_id: str, task: dict[str, Any], errors: list[
             expected_content = None
         stored_basis = plan.get("context_basis")
         stored_content = plan.get("content_hash")
-        if expected_basis is not None and stored_basis != expected_basis:
+        if (expected_basis is not None and stored_basis != expected_basis
+                and meta.get("status") != "completed"):
             message = f"{prefix}: ready plan context_basis is stale"
             if warnings is None:
                 errors.append(message)
@@ -1253,28 +1258,17 @@ def _validate_task(root: Path, step_id: str, task: dict[str, Any], errors: list[
                         f"{prefix}: plan.reviewed_report does not point to matching PASS report"
                     )
 
-    # completed — это не самостоятельное доказательство выполнения. Canonical
-    # lifecycle разрешён только вместе с type-specific durable completion proof:
-    # Evidence, accepted ADR и/или trusted PASS review в зависимости от STEP type.
+    # Исторический lifecycle проверяется отдельно от разрешения новой работы.
+    # Общий validator используется commit/push/CI и не должен требовать повторной
+    # приёмки всей истории после изменения общего контекста (#345, #346).
     if meta.get("status") == "completed":
         try:
-            proof = step_completion_proof(root, step_id)
+            proof = historical_completion_projection_proof(root, step_id)
         except (DocumentError, ConfigError, OSError, ValueError) as exc:
             errors.append(f"{prefix}: cannot prove completed lifecycle: {exc}")
         else:
             for reason in proof["reasons"]:
-                message = f"{prefix}: completed STEP completion proof failed: {reason}"
-                if warnings is not None and _historical_missing_dependency_proof(root, reason):
-                    # Исторический completion остаётся валидным документом,
-                    # но это НЕ разрешение использовать его как свежий
-                    # prerequisite для новой execution (step_completion_proof
-                    # остаётся строгим). Записать диагностику, не переписывая
-                    # старый immutable report.
-                    warnings.append(
-                        message + " (legacy REVIEW: new dependent executions require fresh proof)"
-                    )
-                else:
-                    errors.append(message)
+                errors.append(f"{prefix}: completed STEP completion proof failed: {reason}")
 
 
 # Open Question validator: ID/status/affects targets и обязательные sections.
@@ -1344,88 +1338,24 @@ def _validate_open_questions(root: Path, errors: list[str]) -> None:
 # Сканирует STEP files, проверяет каждый contract, затем dependency cycles, OQ
 # и semantic review history. allow_legacy используется только migration flow.
 # ---------------------------------------------------------------------------
-def _historical_missing_dependency_proof(root: Path, reason: str) -> bool:
-    """Распознать только отсутствие нового proof в ИСТОРИЧЕСКОМ REVIEW.
-
-    До появления dependency_completion_basis старые valid immutable REVIEW
-    не могли сохранять snapshot upstream completion. Их нельзя переписать
-    задним числом и нельзя делать invalid только из-за версии Harness.
-
-    Это разрешение используется исключительно в structural validator.
-    step_completion_proof() и runtime prerequisites остаются fail-closed:
-    ни PLAN/IMPLEMENT, ни новое зависимое выполнение не получают PASS из
-    отсутствующего поля. Настоящий stale contract / cycle остаётся ошибкой.
-    """
-    match = re.fullmatch(
-        r"(?:dependency-incomplete:STEP-\d{3,}:)*"
-        r"completion-dependency-proof-missing:(STEP-\d{3,})",
-        reason,
-    )
-    if match is None:
-        return False
-
-    from review_contract import latest_trusted_review
-
-    # В transitively incomplete reason каждый промежуточный STEP тоже
-    # должен иметь именно historical REVIEW. Modern STEP с устаревшей
-    # зависимостью нельзя скрывать за старым ancestor.
-    chain = re.findall(r"dependency-incomplete:(STEP-\d{3,}):", reason)
-    chain.append(match.group(1))
-    for step_id in chain:
-        try:
-            trusted = latest_trusted_review(root, step_id)
-        except (OSError, ValueError):
-            return False
-        if trusted is None or trusted.get("verdict") != "PASS":
-            return False
-        document = trusted.get("document")
-        meta = document.get("frontmatter") if isinstance(document, dict) else None
-        if not isinstance(meta, dict):
-            return False
-        # Новый writer всегда сохраняет content hash. Его отсутствие, как и
-        # dependency basis, отличает pre-contract report от нового неполного.
-        if not (
-            _valid_sha256(meta.get("contract_basis"))
-            and meta.get("dependency_completion_basis") is None
-            and meta.get("reviewed_subject_content_hash") is None
-        ):
-            return False
-    return True
-
-
 def historical_completion_projection_proof(
     root: Path,
     step_id: str,
     *,
     extra_legacy_review_pins: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Исторический REQ status без выдачи runtime permission.
+    """Проверить принятую историю без разрешения нового execution.
 
-    Старый immutable REVIEW может не содержать metadata, которой не было
-    в тогдашней версии Harness. Если и только если ВСЕ blockers являются
-    такими отсутствующими historical dependency proofs, восстановим
-    прежний projection snapshot. Это сохраняет отображение завершённой
-    истории, но НЕ меняет runtime step_completion_proof()/preconditions.
+    Один type-specific механизм сохраняет trust, Evidence, Verification и циклы.
+    Историческая проверка не сравнивает принятый контекст с сегодняшним и не
+    требует metadata, которой ещё не было у старого writer. Кеш каждого вызова
+    изолирован от строгого runtime proof; его hash и prerequisites не меняются.
     """
-    proof = step_completion_proof(
+    return step_completion_proof(
         root, step_id,
         extra_legacy_review_pins=extra_legacy_review_pins,
+        _historical=True,
     )
-    if proof["complete"] or not proof["reasons"]:
-        return proof
-    if not all(
-        _historical_missing_dependency_proof(root, reason)
-        for reason in proof["reasons"]
-    ):
-        return proof
-    snapshot = dict(proof["snapshot"])
-    snapshot["reasons"] = []
-    return {
-        "complete": True,
-        "reasons": [],
-        "snapshot": snapshot,
-        "proof_hash": stable_hash(snapshot),
-    }
 
 
 def validate_planning_contracts(

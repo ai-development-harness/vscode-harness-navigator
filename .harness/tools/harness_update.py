@@ -938,6 +938,11 @@ def _path_plan(
     merged = _three_way(ours, base, merge_theirs, path=path)
     if merged is None:
         return PathPlan(path, base_class, target_class, "delete", None)
+    # #352: shared-файл только в OURS не требует записи. TARGET не задаёт
+    # ему mode; перезапись теряла executable-bit и ломала postcondition.
+    # Решение принимается после merge, чтобы сохранить delete/modify conflicts.
+    if theirs is MISSING:
+        return PathPlan(path, base_class, target_class, "preserve", None, None, "project-only shared path")
     return PathPlan(path, base_class, target_class, "write", merged, target_mode)
 
 

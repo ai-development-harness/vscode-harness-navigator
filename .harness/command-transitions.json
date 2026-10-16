@@ -699,6 +699,47 @@
             ],
             "fastPaths": []
           }
+        },
+        "CLEANUP CHECK": {
+          "canonical": "HARNESS CLEANUP CHECK",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none",
+          "summary": "Показать временные каталоги, доступные для удаления, и причины сохранения остальных.",
+          "documentation": ".harness/docs/COMMANDS.md#command-harness-cleanup-check",
+          "dispatch": {
+            "kind": "deterministic",
+            "handler": "harness-cleanup-check"
+          },
+          "reasoning": {
+            "mode": "none",
+            "modelWork": [],
+            "deterministicWork": [
+              "Проверка владельца, завершения, ссылок и безопасного пути временных файлов"
+            ],
+            "fastPaths": []
+          }
+        },
+        "CLEANUP APPLY": {
+          "canonical": "HARNESS CLEANUP APPLY",
+          "chainAllowed": false,
+          "target": "none",
+          "input": "none",
+          "summary": "Повторно проверить и удалить временные каталоги доказанно завершённой работы.",
+          "documentation": ".harness/docs/COMMANDS.md#command-harness-cleanup-apply",
+          "dispatch": {
+            "kind": "deterministic",
+            "handler": "harness-cleanup-apply"
+          },
+          "reasoning": {
+            "mode": "none",
+            "modelWork": [],
+            "deterministicWork": [
+              "Проверка владельца, завершения, ссылок и безопасного пути временных файлов",
+              "Удаление с повторной проверкой под общим execution lock"
+            ],
+            "fastPaths": []
+          }
         }
       },
       "transitions": [

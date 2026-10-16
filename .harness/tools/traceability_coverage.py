@@ -3,7 +3,7 @@
 
 Explicit repository IDs are the source of truth. LLM inference is intentionally
 not used by this module. Completion/evidence freshness is delegated to the
-existing step_completion_proof contract so coverage does not invent a second
+existing historical completion contract so coverage does not invent a second
 definition of current proof.
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from planning_contract import (
     open_questions,
     read_task,
     requirement_ids,
-    step_completion_proof,
+    historical_completion_projection_proof,
 )
 
 SCHEMA_VERSION = 1
@@ -75,7 +75,7 @@ def _safe_proof(
 def build_coverage(
     root: Path,
     *,
-    completion_provider: Callable[[Path, str], dict[str, Any]] = step_completion_proof,
+    completion_provider: Callable[[Path, str], dict[str, Any]] = historical_completion_projection_proof,
 ) -> dict[str, Any]:
     root = root.resolve()
     reqs = _canonical_docs(requirements_directory(root), "REQ-*.md")

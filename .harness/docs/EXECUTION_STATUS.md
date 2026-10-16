@@ -618,3 +618,10 @@ invocations, обычный `RESUME` не должен повторно запу
 возвращает понятный BLOCKED, а не выдаёт предположительный PASS. Невозможно
 достоверно восстановить полное содержимое проверенных до коммита файлов из
 старого хэша разницы рабочего дерева.
+
+
+## Временные рабочие файлы
+
+Semantic handoff выдаёт `temporaryDirectory`: `.harness/local/tmp/<executionId>/`. При resume путь сохраняется. Это место для удаляемых snapshots/scripts/logs, а не для durable Evidence или recovery proofs. Завершение отдельного STEP PLAN/IMPLEMENT не означает завершения всего STEP. Cleaner использует существующий completion proof; без него данные сохраняются. См. [LOCAL_CLEANUP.md](LOCAL_CLEANUP.md).
+
+`HARNESS CLEANUP CHECK/APPLY` не регистрируют отдельную execution. CHECK не пишет ничего; APPLY координирует удаление существующим execution lock.

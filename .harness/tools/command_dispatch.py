@@ -57,6 +57,7 @@ from harness_ux import (
     step_list,
     step_show,
 )
+from local_cleanup import cleanup, temporary_directory
 from planning_contract import step_completion_proof
 from step_context import build_step_context
 from step_next import resolve_step_action, resolve_step_next
@@ -448,6 +449,7 @@ def _semantic_handoff(
             "completionBinding": "executionId",
         },
     }
+    result["temporaryDirectory"] = temporary_directory(root, str(execution["executionId"]))
     current_state = execution.get("current")
     recovery_context = (
         current_state.get("context")
@@ -555,7 +557,7 @@ def _finish_machine_result(
         )
         return _dispatch_running(root, root_execution, root_command)
 
-    return _terminal(completed, resolved, result=result)
+    return _terminal(root, completed, resolved, result=result)
 
 
 def _git_push_after_commit_fast_path(
@@ -705,6 +707,8 @@ def _deterministic_handler(
         return harness_status(root)
     if handler == "harness-doctor":
         return harness_doctor(root)
+    if handler in {"harness-cleanup-check", "harness-cleanup-apply"}:
+        return cleanup(root, apply=handler == "harness-cleanup-apply")
     if handler == "harness-config":
         return harness_config(root)
     if handler == "project-status":
@@ -813,6 +817,7 @@ def _deterministic_handler(
 
 
 def _terminal(
+    root: Path,
     execution: dict[str, Any],
     resolved: dict[str, Any],
     *,
@@ -829,6 +834,8 @@ def _terminal(
         value["result"] = result
     if resolved.get("notExecuted") is not None:
         value["notExecuted"] = resolved.get("notExecuted")
+    if value["status"] == "DONE":
+        value["cleanup"] = cleanup(root, apply=True)
     return value
 
 
@@ -898,6 +905,12 @@ def start_dispatch(
                 "status": "BLOCKED",
                 "reasonCode": "PORTABLE_COMMAND_NOT_ALLOWED",
             }
+    if normalized in (["HARNESS CLEANUP CHECK"], ["HARNESS CLEANUP APPLY"]):
+        # CHECK не регистрирует execution и не создаёт lock/state. APPLY
+        # сам держит общий lock вместе с повторной проверкой каждого кандидата.
+        result = _deterministic_handler(root, normalized[0])
+        return {"schemaVersion": SCHEMA_VERSION, "status": "DONE" if result["status"] == "PASS" else "BLOCKED",
+                "rootCommand": normalized[0], "executionId": None, "command": None, "result": result}
     if normalized == ["HARNESS RESUME"]:
         return resume_dispatch(root)
     if normalized == ["STEP NEXT"]:
@@ -1361,7 +1374,7 @@ def complete_dispatch(
                 **({"remediation": getattr(exc, "details").get("remediation")} if isinstance(getattr(exc, "details", None), dict) and getattr(exc, "details").get("remediation") else {}),
             }
 
-    return _terminal(execution, resolved)
+    return _terminal(root, execution, resolved)
 
 
 def resume_dispatch(
@@ -1413,6 +1426,8 @@ def resume_dispatch(
 
     resolved = resolve_root(root, root_command)
     if resolved.get("status") not in {"RESUME", "NEXT"} or not resolved.get("command"):
+        if resolved.get("status") == "DONE":
+            resolved["cleanup"] = cleanup(root, apply=True)
         return {
             "schemaVersion": SCHEMA_VERSION,
             **resolved,

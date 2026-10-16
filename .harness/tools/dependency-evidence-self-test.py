@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from planning_contract import (
     dependency_completion_basis,
+    historical_completion_projection_proof,
     planning_context_basis,
     read_task,
     step_completion_proof,
@@ -270,6 +271,63 @@ def blocked_dag_regression() -> None:
             assert "trusted PASS review is missing" in str(missing["reasons"])
 
 
+def historical_publication_regression() -> None:
+    """#345/#346: одинаковая приёмка истории с basis и без него."""
+    from traceability_coverage import build_coverage
+
+    for has_basis in (False, True):
+        with tempfile.TemporaryDirectory(prefix="harness-historical-publication-") as tmp:
+            root = Path(tmp)
+            write(root, ".harness/manifest.yaml", MANIFEST)
+            write(root, "docs/architecture.md", "## Module map\n\nАдаптер провайдера.\n")
+            for number in (1, 2):
+                sid, rid = f"STEP-{number:03d}", f"REQ-{number:03d}"
+                text = step(sid, rid, "STEP-001" if number == 2 else None)
+                if number == 1:
+                    text = text.replace("architecture_refs: []", "architecture_refs:\n  - docs/architecture.md#module-map")
+                write(root, f"planning/tasks/{sid}.md", text)
+                write(root, f"docs/requirements/{rid}-fixture.md", requirement(sid, rid))
+                write(root, f"planning/reviews/{sid}/REVIEW-proof.md", "Исторический PASS.\n")
+            stored = {sid: planning_context_basis(root, sid) for sid in ("STEP-001", "STEP-002")}
+            before = {path: path.read_bytes() for path in root.rglob("*.md")}
+            verdict = "PASS"
+
+            def trusted(_root, sid, **_kwargs):
+                return {"path": root / f"planning/reviews/{sid}/REVIEW-proof.md",
+                        "verdict": verdict, "document": {"frontmatter":
+                            {"contract_basis": stored[sid]} if has_basis else {}}}
+
+            with patch("review_contract.latest_trusted_review", side_effect=trusted):
+                for changed in (False, True):
+                    if changed:
+                        write(root, "docs/architecture.md", "## Module map\n\nУточнено описание принятого адаптера.\n")
+                    errors = []
+                    for sid in stored:
+                        _validate_task(root, sid, read_task(root, sid), errors, None)
+                        assert historical_completion_projection_proof(root, sid)["complete"]
+                    assert not errors, errors
+                    coverage = build_coverage(root)
+                    assert coverage["metrics"]["verified"] == 2, coverage
+                    assert coverage["metrics"]["staleEvidence"] == 0, coverage
+                if has_basis:
+                    # Новый consumer не может использовать историческую приёмку
+                    # вместо актуального proof: strict boundary остаётся BLOCKED.
+                    assert not step_completion_proof(root, "STEP-002")["complete"]
+                    assert not verification_dependency_facts(root, "STEP-002")[0]["complete"]
+                verdict = "FAIL"
+                assert not historical_completion_projection_proof(root, "STEP-002")["complete"]
+                verdict = "PASS"
+                # Настоящий цикл остаётся ошибкой и исторического режима.
+                path = root / "planning/tasks/STEP-001.md"
+                original = path.read_text()
+                path.write_text(original.replace("depends_on: []", "depends_on:\n  - STEP-002"))
+                assert not historical_completion_projection_proof(root, "STEP-002")["complete"]
+                path.write_text(original)
+            for path, content in before.items():
+                if path.name != "architecture.md":
+                    assert path.read_bytes() == content, path
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="harness-dependency-enforcement-") as tmp:
         root = Path(tmp)
@@ -344,10 +402,7 @@ def main() -> int:
                 "completed STEP completion proof failed" in x
                 for x in validation_errors
             ), validation_errors
-            assert any(
-                "completion-dependency-proof-missing:STEP-002" in x
-                for x in validation_warnings
-            ), validation_warnings
+            assert not validation_warnings, validation_warnings
             assert not step_completion_proof(root, "STEP-002")["complete"]
             assert render_requirements_status(root) == historical_projection, (
                 "updater must preserve old REQ projection without permitting runtime"
@@ -397,11 +452,8 @@ def main() -> int:
                 root, "STEP-002", read_task(root, "STEP-002"),
                 stale_errors, [],
             )
-            assert any(
-                "completed STEP completion proof failed" in value
-                for value in stale_errors
-            ), stale_errors
-            assert render_requirements_status(root) != historical_projection
+            assert not stale_errors, stale_errors
+            assert render_requirements_status(root) == historical_projection
             facts = verification_dependency_facts(root, "STEP-002")
             assert len(facts) == 1 and facts[0]["complete"] is False, facts
             assert verification_context_basis(root, "STEP-002") != before_dependency
@@ -526,8 +578,7 @@ def main() -> int:
             )
             assert not any("completed STEP completion proof failed" in value
                            for value in legacy_errors), legacy_errors
-            assert any("dependency-incomplete:STEP-002" in value
-                       for value in legacy_warnings), legacy_warnings
+            assert not legacy_warnings, legacy_warnings
 
             # Modern parent с отсутствующей dependency basis не получает
             # grandfathering через исторический downstream.
@@ -648,6 +699,7 @@ def main() -> int:
                 f"for a {depth}-step chain"
             )
 
+    historical_publication_regression()
     blocked_dag_regression()
     print("DEPENDENCY EVIDENCE ENFORCEMENT SELF-TEST: PASS")
     return 0

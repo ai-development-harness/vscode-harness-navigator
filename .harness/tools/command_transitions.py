@@ -57,6 +57,8 @@ KNOWN_DISPATCH_HANDLERS = {
     "harness-resume",
     "harness-doctor",
     "harness-config",
+    "harness-cleanup-check",
+    "harness-cleanup-apply",
     "harness-update-check",
     "harness-update-apply",
     "project-status",

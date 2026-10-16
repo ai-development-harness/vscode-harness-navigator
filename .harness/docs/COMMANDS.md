@@ -282,3 +282,14 @@ Standalone post-merge cleanup без model call. Dispatcher напрямую в�
 ## `GIT SYNC`
 
 Dispatcher выполняет команду без model call: fetch + ahead/behind/divergence через deterministic executor. По умолчанию read-only report; при `sync.mode="ff-only"` допускается только безопасный fast-forward чистой рабочей копии. Merge/rebase автоматически не выполняются.
+
+
+<a id="command-harness-cleanup-check"></a>
+### HARNESS CLEANUP CHECK
+
+Показывает управляемые временные каталоги, число файлов и байт, доступных для удаления, и причины сохранения остальных. Не создаёт execution, lock или отчёт. Старые произвольные каталоги в `.harness/local` не входят в очистку.
+
+<a id="command-harness-cleanup-apply"></a>
+### HARNESS CLEANUP APPLY
+
+Заново проверяет владельца, завершение работы, ссылки из документов и безопасность путей. Удаляет только допустимые каталоги под `.harness/local/tmp/`, удерживая общий lock с выполнением команд и updater. Предыдущий CHECK не разрешает удаление изменившихся данных. Подробный контракт: [LOCAL_CLEANUP.md](LOCAL_CLEANUP.md).

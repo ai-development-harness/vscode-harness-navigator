@@ -230,6 +230,115 @@ def test_handover_keeps_file(tmp: Path) -> None:
     assert (project / "docs/notes.md").read_text() == "handed over final\n"
 
 
+def test_project_only_shared_paths(tmp: Path) -> None:
+    """#352: CHECK/APPLY сохраняют локальные shared bytes, modes и Git index."""
+    from harness_update import WorkingTree
+
+    for executable in (False, True):
+        for filemode in (False, True):
+            case = tmp / f"mode-{executable}-{filemode}"
+            case.mkdir()
+            source, project = synthetic_pair(
+                case,
+                base={".harness/harness-update.toml": policy(
+                    harness_owned=[], markers={}, shared=[".github/**"])},
+                target={},
+                project_overrides={".github/dependabot.yml": "version: 2\nupdates: []\n"},
+            )
+            path = project / ".github/dependabot.yml"
+            if os.name != "nt":
+                path.chmod(0o755 if executable else 0o644)
+            run(project, "git", "config", "core.filemode", str(filemode).lower())
+            # Индекс содержит staged-версию, working tree — дополнительную правку.
+            write(project, ".github/dependabot.yml", "version: 2\nupdates: []\n# staged\n")
+            run(project, "git", "add", "--", ".github/dependabot.yml")
+            with path.open("ab") as stream:
+                stream.write(b"# unstaged\r\n")
+            before = path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns
+            index = (project / ".git/index").read_bytes()
+            checked = check_update(project, source_url=str(source))
+            assert checked["status"] == "PASS", checked
+            # Файл проекта вообще не должен передаваться writer-у: это защищает
+            # также права вне Git executable-bit и локальные line endings.
+            original = WorkingTree.write_bytes
+            def guarded(tree, rel, content, **kwargs):
+                assert rel != ".github/dependabot.yml", rel
+                return original(tree, rel, content, **kwargs)
+            with patch.object(WorkingTree, "write_bytes", guarded):
+                applied = apply_update(project, source_url=str(source))
+            assert applied["status"] == "UPDATED", applied
+            assert (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns) == before
+            assert (project / ".git/index").read_bytes() == index
+            repeat = apply_update(project, source_url=str(source))
+            assert repeat["status"] == "NO_UPDATE" and not repeat["repositoryMutated"], repeat
+            assert (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns) == before
+            assert (project / ".git/index").read_bytes() == index
+
+
+def test_shared_target_modes_and_rollback(tmp: Path) -> None:
+    """#352: preserve не ослабляет target modes, conflicts и rollback."""
+    from harness_update import WorkingTree
+
+    for failure in (False, True):
+        case = tmp / str(failure)
+        case.mkdir()
+        source, project = synthetic_pair(
+            case,
+            base={".harness/harness-update.toml": policy(
+                harness_owned=[], markers={}, shared=[".github/**"]),
+                ".github/template.yml": "version: 1\n"},
+            target={".github/template.yml": "version: 2\n"},
+            project_overrides={".github/dependabot.yml": "version: 2\nupdates: []\n"},
+        )
+        run(project, "git", "config", "core.filemode", "true")
+        managed = project / ".github/template.yml"
+        local = project / ".github/dependabot.yml"
+        if os.name != "nt":
+            managed.chmod(0o755)
+            local.chmod(0o640)
+        before = snapshot(project)
+        modes = {p: stat.S_IMODE(p.stat().st_mode) for p in (managed, local)}
+        index = (project / ".git/index").read_bytes()
+        original = WorkingTree.write_bytes
+        def wrong_mode(tree, rel, content, **kwargs):
+            original(tree, rel, content, **kwargs)
+            if rel == ".github/template.yml" and os.name != "nt":
+                (tree.root / rel).chmod(0o755)
+        if failure:
+            # Windows не моделирует executable-bit; content fault всё равно
+            # должен откатить транзакцию и сохранить проектный shared path.
+            if os.name == "nt":
+                def wrong_mode(tree, rel, content, **kwargs):
+                    original(tree, rel, b"wrong\n" if rel == ".github/template.yml" else content, **kwargs)
+            with patch.object(WorkingTree, "write_bytes", wrong_mode):
+                expect_error("POSTCONDITION_FAILED", apply_update, project, source_url=str(source))
+            assert snapshot(project) == before
+            assert {p: stat.S_IMODE(p.stat().st_mode) for p in modes} == modes
+            assert not (project / JOURNAL).exists()
+        else:
+            result = apply_update(project, source_url=str(source))
+            assert result["status"] == "UPDATED", result
+            assert managed.read_bytes() == b"version: 2\n"
+            assert WorkingTree(project).mode(".github/template.yml") == 0o644
+            assert stat.S_IMODE(local.stat().st_mode) == modes[local]
+        assert (project / ".git/index").read_bytes() == index
+
+    case = tmp / "delete-modify-conflict"
+    case.mkdir()
+    source, project = synthetic_pair(
+        case,
+        base={".harness/harness-update.toml": policy(
+            harness_owned=[], markers={}, shared=[".github/**"]),
+            ".github/template.yml": "version: 1\n"},
+        target={".github/template.yml": None},
+        project_overrides={".github/template.yml": "project change\n"},
+    )
+    before = snapshot(project)
+    expect_error("MERGE_CONFLICT", check_update, project, source_url=str(source))
+    expect_error("MERGE_CONFLICT", apply_update, project, source_url=str(source))
+    assert snapshot(project) == before
+
+
 def agents_text(project_body: str, *, badges: bool) -> str:
     extra = "\n<!-- BADGES:START -->\ntarget badges\n<!-- BADGES:END -->\n" if badges else ""
     return f"# Agents\n\n<!-- PROJECT:START -->{project_body}<!-- PROJECT:END -->\n{extra}"
@@ -1042,6 +1151,8 @@ def test_graph_connectivity(tmp: Path) -> None:
 
 CASES = [
     test_handover_keeps_file,
+    test_project_only_shared_paths,
+    test_shared_target_modes_and_rollback,
     test_new_marker_block,
     test_validator_failure_rolls_back_everything,
     test_target_code_runs_inside_journal,

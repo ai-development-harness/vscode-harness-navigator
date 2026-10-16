@@ -37,6 +37,7 @@ Migration:
 
 1. Сравни code/config/migrations/tests с canonical REQ, Accepted ADR, active Project Principles, architecture refs, STEP, evidence и schema-valid review reports. Цель — найти **repository-wide cross-artifact drift**, а не сравнивать разные repositories.
 2. Для stale/changed contracts используй `python3 .harness/tools/impact-analysis.py --step STEP-NNN --json` или `--changed ARTIFACT-ID --json`; не пересчитывай staleness reasoning-ом.
+Исторический PASS completed STEP сохраняется при изменении общего контекста и отсутствии поздней metadata. Не назначай массовый PLAN/REVIEW ради обновления Harness: current eligibility проверяется при новом consumer intent. Реальный текущий defect оформляй отдельным finding с corrective owner.
 3. Классифицируй найденное по canonical owner:
    - deterministic projection/command-syntax drift, который можно безопасно пересобрать;
    - substantive product/contract drift, требующий corrective STEP;

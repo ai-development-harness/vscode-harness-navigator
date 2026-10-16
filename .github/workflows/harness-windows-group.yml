@@ -1,0 +1,105 @@
+# Общий Windows runner: каждая группа получает отдельную машину (#339).
+# Пример: вызывается тремя jobs Harness Integrity на том же commit.
+name: Harness Windows group
+# Reusable workflow не запускает независимую публикацию.
+# Пример: workflow_call из harness-integrity.yml.
+on:
+  # Вход группы выбирается вызывающим job.
+  # Пример: group=update.
+  workflow_call:
+    # Параметры конкретного вызова.
+    # Пример: один обязательный group.
+    inputs:
+      # Имя непересекающейся группы self-tests.
+      # Пример: update, resume или execution.
+      group:
+        # Отсутствующая группа не должна давать пустой PASS.
+        # Пример: true.
+        required: true
+        # Значение дополнительно проверяется CLI.
+        # Пример: string.
+        type: string
+# Тестам достаточно чтения репозитория.
+# Пример: contents=read.
+permissions:
+  # Запись в GitHub не нужна.
+  # Пример: read.
+  contents: read
+# Один вызов соответствует одному Windows runner.
+# Пример: windows-2025.
+jobs:
+  # Изолированный процесс выполнения группы.
+  # Пример: update.
+  group:
+    # Подпись в Actions показывает выбранную группу.
+    # Пример: Windows update.
+    name: Windows ${{ inputs.group }}
+    # Сохраняем исходную Windows platform.
+    # Пример: windows-2025.
+    runs-on: windows-2025
+    # Сохраняем исходный внешний лимит на каждую группу.
+    # Пример: 15 минут.
+    timeout-minutes: 15
+    # Исходные setup steps для каждой отдельной машины.
+    # Пример: checkout, Python, python3 shim.
+    steps:
+      # Получить exact commit/PR без сохранения push credentials.
+      # Пример: checkout текущего PR commit.
+      - name: Checkout repository
+        # Официальный pinned checkout action.
+        # Пример: actions/checkout@v7.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        # Параметры checkout для read-only validation.
+        # Пример: credentials=false, full history.
+        with:
+          # Windows tests не выполняют provider mutation.
+          # Пример: false.
+          persist-credentials: false
+          # Update/review regressions используют Git history.
+          # Пример: 0 означает полную историю.
+          fetch-depth: 0
+
+      # Установить основной поддерживаемый Python runtime Windows.
+      # Пример: Python 3.13.
+      - name: Setup Python
+        # Официальный pinned setup-python action.
+        # Пример: actions/setup-python@v7.
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        # Параметры runtime setup.
+        # Пример: python-version=3.13.
+        with:
+          # Версия targeted Windows runtime.
+          # Пример: "3.13".
+          python-version: "3.13"
+
+      # Canonical Harness examples используют executable name python3.
+      # Пример: создать shim к interpreter из setup-python.
+      - name: Provide python3 command
+        # Явный shell нужен для создания cmd shim на Windows.
+        # Пример: pwsh.
+        shell: pwsh
+        # Создать python3.cmd и добавить каталог в PATH следующих steps.
+        # Пример: python3 перенаправляется в exact pythonLocation.
+        run: |
+          $shim = Join-Path $env:RUNNER_TEMP "python3.cmd"
+          $line = '@"{0}\python.exe" %*' -f $env:pythonLocation
+          Set-Content -Path $shim -Value $line -Encoding ascii
+          Add-Content -Path $env:GITHUB_PATH -Value $env:RUNNER_TEMP
+
+      # Runner сохраняет имя, длительность и exit code каждого процесса.
+      # Пример: FAIL раннего теста не маскируется последующим PASS.
+      - name: Run Windows group
+        # Native exit code становится результатом шага.
+        # Пример: pwsh.
+        shell: pwsh
+        # Передаём input через env, без вставки в shell-код.
+        # Пример: GROUP=update.
+        env:
+          # Имя проверяется argparse по фиксированному allowlist.
+          # Пример: resume.
+          GROUP: ${{ inputs.group }}
+        # Все тесты группы выполняются один раз, без retry.
+        # Пример: run --group update.
+        run: |
+          python .harness/tools/windows-ci.py run --group $env:GROUP
+          exit $LASTEXITCODE
