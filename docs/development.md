@@ -94,6 +94,26 @@ manifest с абсолютным configured path и (POSIX, не root) ката�
 а соответствующие проверки явно пропускаются с причиной. Extension Host tests не изменяют tracked
 `src/test/fixtures`; каждая suite проверяет, что workspace лежит в `out/test-workspace`.
 
+### RU профили с language pack
+
+Без русского language pack профили `*-ru` запускаются с `--locale ru`, но VS Code остаётся на
+English fallback (`vscode.env.language === 'en'`); такой прогон не доказывает RU-локализацию.
+Для проверки на реальной RU locale pack устанавливается только в изолированный профиль
+`.vscode-test` (игнорируется Git), не в пользовательский:
+
+```bash
+.vscode-test/vscode-linux-x64-<version>/bin/code --extensions-dir=.vscode-test/extensions \
+  --user-data-dir=.vscode-test/user-data --install-extension MS-CEINTL.vscode-language-pack-ru
+yarn vscode-test --label integration-ru
+```
+
+Первый запуск после установки может ещё показать `en`: `languagepacks.json` обновляется при
+старте, поэтому запуск повторяют. Тест `openCommandDocumentation: manifest, палитра и меню`
+логирует `language`, наличие pack и форму title: с pack title приходит объектом
+`{ value, original }`. После проверки pack удаляют через `--uninstall-extension` с теми же
+каталогами и восстанавливают исходные `.vscode-test/extensions/extensions.json` и
+`.vscode-test/user-data/languagepacks.json`.
+
 ### Packaged профили
 
 `scripts/prepare-packaged-extension.ts` извлекает `extension/**` из VSIX в `out/packaged/extension`,
