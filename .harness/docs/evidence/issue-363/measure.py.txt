@@ -1,0 +1,16 @@
+import importlib.util,json,sys,time
+from pathlib import Path
+root=Path(sys.argv[1]).resolve()
+sys.path.insert(0,str(root/'.harness/tools'))
+spec=importlib.util.spec_from_file_location('hardening_under_test',root/'.harness/tools/repository-hardening-self-test.py'); mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+original=mod.run
+calls=[]
+def measured(target,*args,**kwargs):
+ start=time.perf_counter(); result=original(target,*args,**kwargs)
+ if '.harness/tools/validate.py' in args:
+  files=[p for p in target.rglob('*') if p.is_file() and '.git' not in p.relative_to(target).parts]
+  calls.append({'mode':args[-1],'seconds':time.perf_counter()-start,'exitCode':result.returncode,'files':len(files),'bytes':sum(p.stat().st_size for p in files)})
+ return result
+mod.run=measured
+start=time.perf_counter(); status=mod.main(); elapsed=time.perf_counter()-start
+print(json.dumps({'result':status,'elapsedSeconds':elapsed,'validatorCalls':len(calls),'validatorSeconds':sum(c['seconds'] for c in calls),'calls':calls},ensure_ascii=False))

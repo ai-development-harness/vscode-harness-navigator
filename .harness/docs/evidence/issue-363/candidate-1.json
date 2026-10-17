@@ -1,0 +1,393 @@
+{
+  "result": 0,
+  "elapsedSeconds": 51.9821713680285,
+  "validatorCalls": 55,
+  "validatorSeconds": 50.86526980891358,
+  "calls": [
+    {
+      "mode": "manual",
+      "seconds": 1.0178511959966272,
+      "exitCode": 0,
+      "files": 420,
+      "bytes": 4627206
+    },
+    {
+      "mode": "manual",
+      "seconds": 1.0292751800152473,
+      "exitCode": 0,
+      "files": 420,
+      "bytes": 4626966
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9616794859757647,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626966
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9565482009784319,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626971
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9463982919696718,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626972
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9614963760250248,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626982
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9461719230166636,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626972
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9517945489496924,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626973
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.962395669950638,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626974
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9479061589809135,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626967
+    },
+    {
+      "mode": "ci",
+      "seconds": 0.9548146290471777,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626966
+    },
+    {
+      "mode": "ci",
+      "seconds": 0.9641602970077656,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626971
+    },
+    {
+      "mode": "ci",
+      "seconds": 0.9462085450068116,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626972
+    },
+    {
+      "mode": "ci",
+      "seconds": 0.9450015219626948,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626982
+    },
+    {
+      "mode": "ci",
+      "seconds": 0.9455200940137729,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626972
+    },
+    {
+      "mode": "ci",
+      "seconds": 0.9463694469886832,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626973
+    },
+    {
+      "mode": "ci",
+      "seconds": 0.9405837410013191,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626974
+    },
+    {
+      "mode": "ci",
+      "seconds": 0.9498225279967301,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626967
+    },
+    {
+      "mode": "commit",
+      "seconds": 0.9362758689676411,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626966
+    },
+    {
+      "mode": "commit",
+      "seconds": 0.9396577199804597,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626971
+    },
+    {
+      "mode": "commit",
+      "seconds": 0.943418770970311,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626972
+    },
+    {
+      "mode": "commit",
+      "seconds": 0.9337797760381363,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626982
+    },
+    {
+      "mode": "commit",
+      "seconds": 0.94344614201691,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626972
+    },
+    {
+      "mode": "commit",
+      "seconds": 0.9426067300373688,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626973
+    },
+    {
+      "mode": "commit",
+      "seconds": 0.9393293510074727,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626974
+    },
+    {
+      "mode": "commit",
+      "seconds": 0.9457492899964564,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626967
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9687377579975873,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626975
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.95656635297928,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626986
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9413746689679101,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4627014
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9432795449974947,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4627022
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9413992909830995,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626974
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9523928430280648,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626974
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9512969700153917,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626974
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.947137528040912,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626974
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9710401180200279,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626974
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9676485490053892,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626974
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.955285003001336,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626974
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9724185430095531,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626975
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9583954230183735,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4627037
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9590882760239765,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4627048
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9623202149523422,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4627048
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9522786469897255,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4627015
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9678943229955621,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626993
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9491447889595293,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4627046
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9512929350021295,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4627000
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9527766300016083,
+      "exitCode": 1,
+      "files": 420,
+      "bytes": 4627001
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9608782139839604,
+      "exitCode": 0,
+      "files": 420,
+      "bytes": 4627012
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9436749540036544,
+      "exitCode": 0,
+      "files": 421,
+      "bytes": 4626974
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.1274733809987083,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626974
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.1272949010017328,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626974
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9545217570266686,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626942
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9522708309814334,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4627006
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9556138209882192,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626961
+    },
+    {
+      "mode": "manual",
+      "seconds": 0.9563268630299717,
+      "exitCode": 1,
+      "files": 421,
+      "bytes": 4626948
+    },
+    {
+      "mode": "commit",
+      "seconds": 0.9671851950115524,
+      "exitCode": 1,
+      "files": 422,
+      "bytes": 4626993
+    }
+  ]
+}

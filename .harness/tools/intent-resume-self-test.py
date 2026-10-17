@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import shutil
+import subprocess
+from unittest.mock import patch
 import tempfile
 
 from execution_status import (
@@ -15,8 +17,12 @@ from execution_status import (
     resolve_execution,
     resolve_root,
     start_execution,
+    stamp_plan,
 )
+from command_dispatch import complete_dispatch
+from fix_delta import capture_fix, review_scope
 from harness_ux import harness_resume
+from planning_contract import planning_context_basis, planning_context_components, plan_content_hash, step_completion_proof, _validate_task, read_task
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -325,10 +331,213 @@ def mutate_once(path: Path, old: str, new: str) -> None:
     path.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
 
 
+
+
+def ready_output_fixture(root: Path) -> None:
+    """Реальный Ready stamp позволяет проверять IMPLEMENT без mock gates."""
+    basis = planning_context_basis(root, "STEP-001")
+    phash = plan_content_hash(root, "STEP-001")
+    write(root / "planning/plan-reviews/STEP-001/PLAN-REVIEW-20261005T000000Z.md", f"""---
+schema: 1
+kind: planning_review
+step_id: STEP-001
+verdict: pass
+reviewer_role: reviewer
+finding_count: 0
+context_basis: {basis}
+plan_content_hash: {phash}
+created_at: 2026-10-05T00:00:00Z
+---
+
+# Planning Review STEP-001 — Тест результатов
+
+## Scope checked
+
+Входы и результаты STEP.
+
+## Findings
+
+Материальных замечаний нет.
+
+## Verdict rationale
+
+Контракт и план согласованы.
+""")
+    stamp_plan(root, "STEP-001")
+
+
+def output_basis_regressions(root: Path) -> None:
+    """Сценарии #360: результаты меняются, настоящие входы остаются frozen."""
+    step_path = root / "planning/tasks/STEP-001.md"
+    adr_path = root / "docs/adr/ADR-001-intent.md"
+    architecture_path = root / "docs/architecture.md"
+    own_adr = adr().replace("supersedes: []", "steps:\n  - STEP-001\nsupersedes: []")
+    adr_task = task().replace("type: implementation", "type: adr").replace("architecture_refs: []", "adr_outputs:\n  - ADR-001\narchitecture_refs: []")
+
+    # ADR создаётся без adrs, затем validator требует reverse traceability.
+    # Ни добавление ссылки, ни принятие ADR не должны менять basis STEP.
+    write(step_path, adr_task.replace("adrs:\n  - ADR-001", "adrs: []"))
+    before = planning_context_basis(root, "STEP-001")
+    for operation in ("PLAN", "IMPLEMENT", "FIX", "REVIEW"):
+        clear_execution(root)
+        write(step_path, adr_task.replace("adrs:\n  - ADR-001", "adrs: []"))
+        adr_path.unlink(missing_ok=True)
+        if operation == "IMPLEMENT":
+            ready_output_fixture(root)
+        execution = start_execution(root, f"STEP {operation} STEP-001")
+        write(step_path, adr_task)
+        write(adr_path, own_adr.replace("Bind resume to canonical planning fingerprints.", "Решение после исправления REVIEW."))
+        after = planning_context_basis(root, "STEP-001")
+        assert before == after, (operation, before, after)
+        resolved = resolve_execution(root, execution, mutate=False)
+        assert resolved["status"] == "RESUME", (operation, resolved)
+        assert not any(value.startswith("ADR@ADR-001=") for value in planning_context_components(root, "STEP-001"))
+
+    # Оба ADR имеют обязательную reverse traceability; только объявленный
+    # ADR-002 — результат, ADR-001 остаётся настоящим внешним входом.
+    clear_execution(root)
+    mixed_task = adr_task.replace("adrs:\n  - ADR-001", "adrs:\n  - ADR-001\n  - ADR-002").replace("adr_outputs:\n  - ADR-001", "adr_outputs:\n  - ADR-002")
+    write(step_path, mixed_task)
+    write(adr_path, own_adr)
+    output_path = root / "docs/adr/ADR-002-result.md"
+    write(output_path, own_adr.replace("ADR-001", "ADR-002"))
+    execution = start_execution(root, "STEP FIX STEP-001")
+    mutate_once(output_path, "Bind resume to canonical planning fingerprints.", "Исправлен результат.")
+    assert resolve_execution(root, execution, mutate=False)["status"] == "RESUME"
+    mutate_once(adr_path, "Bind resume to canonical planning fingerprints.", "Изменён внешний вход.")
+    assert resolve_execution(root, execution, mutate=False)["reasonCode"] == "ARCHITECTURE_BASIS_CHANGED"
+    output_path.unlink()
+
+    # Декларация ADR output также заморожена, даже если файл ещё не создан.
+    clear_execution(root)
+    write(step_path, adr_task)
+    write(adr_path, own_adr)
+    execution = start_execution(root, "STEP FIX STEP-001")
+    write(step_path, adr_task.replace("adr_outputs:\n  - ADR-001", "adr_outputs:\n  - ADR-002"))
+    assert resolve_execution(root, execution, mutate=False)["status"] == "BLOCKED"
+
+    # Завершение требует всех объявленных ADR, даже без явных ссылок в adrs.
+    completed = adr_task.replace("status: in_progress", "status: completed").replace("## Evidence\n\n—", "## Evidence\n\nРешение принято.")
+    write(step_path, completed.replace("adrs:\n  - ADR-001", "adrs: []"))
+    proof = step_completion_proof(root, "STEP-001")
+    assert "ADR output is not linked: ADR-001" in proof["reasons"], proof
+    write(step_path, completed)
+    adr_path.unlink()
+    assert not step_completion_proof(root, "STEP-001")["complete"]
+
+    for declaration in ("adr_outputs: invalid", "adr_outputs:\n  - ADR-invalid", "adr_outputs:\n  - ADR-001\n  - ADR-001"):
+        write(step_path, task().replace("type: implementation", "type: adr").replace("architecture_refs: []", declaration + "\narchitecture_refs: []"))
+        try:
+            planning_context_basis(root, "STEP-001")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(declaration)
+        errors: list[str] = []
+        _validate_task(root, "STEP-001", read_task(root, "STEP-001"), errors, [])
+        assert any("adr_outputs" in error for error in errors), errors
+    write(adr_path, own_adr)
+    write(step_path, task().replace("architecture_refs: []", "adr_outputs:\n  - ADR-001\narchitecture_refs: []"))
+    try:
+        planning_context_basis(root, "STEP-001")
+    except ValueError as exc:
+        assert "type: adr" in str(exc)
+    else:
+        raise AssertionError("implementation получил ADR output exception")
+
+    # Обычный implementation STEP не получает authoring exception по steps.
+    clear_execution(root)
+    write(step_path, task())
+    write(adr_path, own_adr)
+    execution = start_review(root)
+    mutate_once(adr_path, "Bind resume to canonical planning fingerprints.", "Изменён вход реализации.")
+    assert resolve_execution(root, execution, mutate=False)["reasonCode"] == "ARCHITECTURE_BASIS_CHANGED"
+    write(adr_path, adr())
+
+    architecture = "# Архитектура\n\n## Вход\n\nИсходный контракт.\n\n## Результат\n\nИсходное описание.\n"
+    refs = 'architecture_refs:\n  - docs/architecture.md#вход\n  - docs/architecture.md#результат'
+    declared = task().replace("architecture_refs: []", refs + '\narchitecture_outputs:\n  - docs/architecture.md#результат')
+    for operation in ("IMPLEMENT", "FIX", "REVIEW"):
+        clear_execution(root)
+        write(step_path, declared)
+        write(architecture_path, architecture)
+        if operation == "IMPLEMENT":
+            ready_output_fixture(root)
+        execution = start_execution(root, f"STEP {operation} STEP-001")
+        basis = planning_context_basis(root, "STEP-001")
+        mutate_once(architecture_path, "Исходное описание.", "Описание после реализации или FIX.")
+        assert planning_context_basis(root, "STEP-001") == basis
+        assert resolve_execution(root, execution, mutate=False)["status"] == "RESUME"
+        mutate_once(architecture_path, "Исходный контракт.", "Изменён настоящий вход.")
+        assert resolve_execution(root, execution, mutate=False)["reasonCode"] == "ARCHITECTURE_BASIS_CHANGED"
+
+    # Нельзя объявить новый output уже внутри исполнения и скрыть drift.
+    clear_execution(root)
+    write(step_path, task().replace("architecture_refs: []", refs))
+    write(architecture_path, architecture)
+    execution = start_review(root)
+    write(step_path, declared)
+    assert resolve_execution(root, execution, mutate=False)["status"] == "BLOCKED"
+
+    # Malformed/неточная декларация не должна превращаться в broad exclusion.
+    for value in ('architecture_outputs: anything', 'architecture_outputs:\n  - docs/architecture.md', 'architecture_outputs:\n  - docs/architecture.md#результат\n  - docs/architecture.md#результат'):
+        write(step_path, task().replace("architecture_refs: []", refs + "\n" + value))
+        errors: list[str] = []
+        _validate_task(root, "STEP-001", read_task(root, "STEP-001"), errors, [])
+        assert any("architecture_outputs" in error for error in errors), errors
+        try:
+            planning_context_basis(root, "STEP-001")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(value)
+
+    clear_execution(root)
+    write(step_path, task())
+    write(adr_path, adr())
+    write(architecture_path, "# Architecture\n")
+
+
+
+def output_completion(root: Path, operation: str) -> None:
+    """Настоящие dispatcher complete, Verification и Git delta после ADR FIX."""
+    clear_execution(root)
+    config = root / ".harness/manifest.yaml"
+    config.write_text(config.read_text() + "execution:\n  verificationCommandTimeoutSeconds: 30\n", encoding="utf-8")
+    step_path = root / "planning/tasks/STEP-001.md"
+    adr_path = root / "docs/adr/ADR-001-intent.md"
+    text = task().replace("type: implementation", "type: adr").replace("architecture_refs: []", "adr_outputs:\n  - ADR-001\narchitecture_refs: []")
+    text = text.replace("- intent-resume-self-test.py.", '- command: `python3 -c "print(1)"`')
+    write(step_path, text)
+    write(adr_path, adr())
+    write(root / ".gitignore", ".harness/local/\n.harness/.execution-checkpoint-known\n")
+    for args in (("init", "-q"), ("config", "user.email", "test@example.invalid"), ("config", "user.name", "Harness Test"), ("add", "."), ("commit", "-qm", "Тестовая база")):
+        done = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True)
+        assert done.returncode == 0, args
+    ready_output_fixture(root)
+    basis = planning_context_basis(root, "STEP-001")
+    command = f"STEP {operation} STEP-001"
+    execution = start_execution(root, command)
+    # Parsing immutable FAIL report покрыт incremental-review-self-test.
+    # Здесь подменены только входные findings, но не basis/Verification/delta.
+    if operation == "FIX":
+        with patch("fix_delta.latest_structured_findings", return_value={"verdict": "fail", "report": "planning/reviews/STEP-001/REVIEW-before.md", "findings": [{"fingerprint": "sha256:" + "a" * 64}]}):
+            capture_fix(root, "STEP-001", execution["executionId"])
+    mutate_once(adr_path, "Bind resume to canonical planning fingerprints.", "Уточнён результат по замечанию REVIEW.")
+    outcome = complete_dispatch(root, command, command, "PASS", execution_id=execution["executionId"])
+    assert outcome["status"] == "DONE", outcome
+    assert planning_context_basis(root, "STEP-001") == basis
+    if operation == "FIX":
+        scope = review_scope(root, "STEP-001")
+        assert scope["mode"] == "fix_delta", scope
+        assert "docs/adr/ADR-001-intent.md" in scope["changedPaths"], scope
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="harness-intent-resume-") as tmp:
         root = Path(tmp)
         prepare(root)
+        output_basis_regressions(root)
 
         # Unchanged authoritative inputs remain resumable.
         execution = start_review(root)
@@ -494,6 +703,12 @@ def main() -> int:
             assert exc.details["remediation"] == "STEP PLAN STEP-001", exc.details
         else:
             raise AssertionError("stale explicit resume unexpectedly succeeded")
+
+    for operation in ("IMPLEMENT", "FIX"):
+        with tempfile.TemporaryDirectory(prefix="harness-output-completion-") as tmp:
+            root = Path(tmp)
+            prepare(root)
+            output_completion(root, operation)
 
     print("INTENT RESUME SELF-TEST: PASS")
     return 0

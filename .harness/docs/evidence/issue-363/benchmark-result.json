@@ -1,0 +1,83 @@
+{
+  "baseline": {
+    "correctness": {
+      "failed": 0,
+      "passed": 3
+    },
+    "revision": "ab8588247b0511c08b72466b216b78d1755dfff9",
+    "stats": {
+      "max": 119.23592216701945,
+      "median": 119.20829814305762,
+      "min": 118.70446993404767,
+      "range": 0.5314522329717875,
+      "runs": 3,
+      "variationPct": 0.4458181529728833
+    },
+    "workProof": {
+      "bytes": 638,
+      "kind": "trace",
+      "path": ".harness/docs/evidence/issue-363/baseline-proof.json",
+      "sha256": "sha256:953c815d59e66a96379e5af04391fd6ac419996fc916c1d92cec1d114d25e0d9",
+      "summary": "Три PASS, по 55 validator calls с идентичной последовательностью mode/exitCode."
+    }
+  },
+  "bottleneck": {
+    "identified": true,
+    "summary": "Повторное сканирование ненужных product files полным validator в synthetic fixture."
+  },
+  "candidate": {
+    "correctness": {
+      "failed": 0,
+      "passed": 3
+    },
+    "revision": "49145f2fa1edd1c66433d7dd265af9e237f5f3af",
+    "stats": {
+      "max": 51.9821713680285,
+      "median": 51.891433609009255,
+      "min": 51.696325324010104,
+      "range": 0.28584604401839897,
+      "runs": 3,
+      "variationPct": 0.5508540121905037
+    },
+    "workProof": {
+      "bytes": 639,
+      "kind": "trace",
+      "path": ".harness/docs/evidence/issue-363/candidate-proof.json",
+      "sha256": "sha256:c23e1ca4fe152f436aeee5229b0c065bb41e69c7f77e5f8fe4179918a99ccbc8",
+      "summary": "Три PASS, по 55 validator calls с идентичной последовательностью mode/exitCode."
+    }
+  },
+  "claim": {
+    "direction": "lower-is-better",
+    "metric": "instrumented-hardening-main-duration",
+    "minimumEffectPct": 20.0,
+    "scope": "end-to-end",
+    "summary": "Компактная fixture сокращает время instrumented hardening main минимум на 20% на указанной downstream-нагрузке, сохраняя все 55 validation outcomes.",
+    "unit": "seconds"
+  },
+  "claimRestriction": null,
+  "comparison": {
+    "effectPct": 56.469948470587006,
+    "interleaved": false,
+    "observedVariationPct": 0.5508540121905037,
+    "rationale": "Первичные три пары чередовались. После исправления relocated inputs финальный candidate измерен ещё три раза; итог сравнивает прежние baseline с финальной серией. Команда, обёртка, среда и product payload одинаковы.",
+    "sameCommand": true,
+    "sameEnvironment": true
+  },
+  "deterministicGate": true,
+  "endToEnd": {
+    "checked": true,
+    "relevant": true,
+    "summary": "Измеряется весь hardening main, включая создание/изоляцию fixture, Git и 55 validator subprocess; это время self-test, не производительность продукта."
+  },
+  "reasonCodes": [],
+  "sanityLimit": {
+    "checked": true,
+    "summary": "55 полных validator invocations сохранены, уменьшен только сканируемый synthetic fixture; основной validator consumer checkout не изменён."
+  },
+  "schemaVersion": 1,
+  "status": "PASS",
+  "warnings": [
+    "NON_INTERLEAVED_RUNS"
+  ]
+}

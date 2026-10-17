@@ -13,9 +13,16 @@ from template_contract import template_targets
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
+VALIDATOR_CALLS = 0
 
 
 def run(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    global VALIDATOR_CALLS
+    if ".harness/tools/validate.py" in args:
+        # Flushed marker остаётся доступным даже при остановке всего process
+        # tree по timeout; номер и режим указывают конкретный вызов из матрицы.
+        VALIDATOR_CALLS += 1
+        print(f"[SCENARIO] validator-{VALIDATOR_CALLS}/{args[-1]}", flush=True)
     proc = subprocess.run(
         args,
         cwd=root,
@@ -32,7 +39,7 @@ def run(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
 
 def copy_tracked_files(target: Path) -> None:
     """Скопировать effective Harness checkout без project-owned untracked state."""
-    copy_effective_harness_checkout(SOURCE_ROOT, target)
+    copy_effective_harness_checkout(SOURCE_ROOT, target, protocol_only=True)
 
 def init_git(target: Path) -> None:
     """Подготовить isolated fixture как самостоятельный Git repository."""

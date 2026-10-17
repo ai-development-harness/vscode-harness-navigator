@@ -172,7 +172,7 @@ Production code mutation запрещена.
 1. Выполни duplicate/overlap search и выбери следующий неиспользованный `STEP-NNN+`.
 2. Создай schema-v1 STEP в configured `protocol.taskDirectory`; `plan.status=not_planned`.
 3. Новый REQ создавай только для нового product contract; новый OQ — отдельным canonical file; durable decision — ADR/RESEARCH prerequisite.
-4. `architecture_refs` обязаны явно перечислять relevant document/anchor inputs; whole architecture baseline не хэшируется автоматически.
+4. `architecture_refs` обязаны явно перечислять relevant document/anchor inputs; whole architecture baseline не хэшируется автоматически. Изменяемые по контракту refs заранее объявляются в optional strict list `architecture_outputs` (точное подмножество `architecture_refs`); декларация входит в STEP fingerprint, содержимое результата — нет. Собственные ADR у `type: adr` объявляются до PLAN через optional strict list `adr_outputs`; добавление этих ADR в `adrs` после создания файла не меняет basis. Внешние ADR остаются входами. Подробнее: [`INTENT_RESUME.md`](INTENT_RESUME.md#входы-и-результаты-step-360).
 5. `risk_flags` используют закрытый enum; `none` взаимоисключающий.
 6. Обнови двустороннюю traceability, затем **пересобери**, а не редактируй вручную PLAN/STATUS/requirements/OQ projections.
 7. Запусти `sync-projections.py` и `validate.py --mode manual`.
@@ -384,6 +384,19 @@ RUN по-прежнему dispatch-ит существующий STEP Type:
 12. Не запускать параллельные write-agents над одним workspace scope.
 
 Повторный явный `STEP RUN STEP-NNN` при уже running root не создаёт второй active record: он resume-ит существующий execution.
+
+### ADR-STEP внутри RUN
+
+`type: adr` использует semantic `run-step` fallback. Resolver может вернуть
+`RESUME` самого `STEP RUN`, пока type-specific orchestrator не зарегистрировал
+первую дочернюю команду. Это не команда повторно выполнять весь ADR.
+Внутри текущей root execution оркестратор регистрирует `STEP PLAN STEP-NNN`
+через `execution-state.py begin --root 'STEP RUN STEP-NNN' --command 'STEP PLAN STEP-NNN'`.
+Затем выполняет child по её skill и завершает её через dispatcher `complete`
+с теми же root и `executionId`. Следующую child PLAN → IMPLEMENT → REVIEW → FIX
+выбирает resolver; повторный PLAN нужен только при изменении настоящих входов.
+Все child остаются в одной root execution. После type-specific completion
+proof завершается сам RUN; новый root для каждой child создавать нельзя.
 
 ## 13. `STEP AUDIT STEP-NNN`
 

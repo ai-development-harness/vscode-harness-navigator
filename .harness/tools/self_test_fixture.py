@@ -20,9 +20,13 @@ from harness_config import (
     requirements_directory,
     review_directory,
     skill_search_directory,
+    skill_registry_path,
     task_directory,
     update_report_directory,
+    update_lock_path,
+    update_manifest_path,
     load_update_policy,
+    repository_path,
 )
 from projection_contract import write_projections
 from template_contract import template_targets
@@ -68,7 +72,7 @@ def _updater_owned(path: str, policy: dict) -> bool:
     return False
 
 
-def copy_effective_harness_checkout(source_root: Path, target: Path) -> None:
+def copy_effective_harness_checkout(source_root: Path, target: Path, *, protocol_only: bool = False) -> None:
     """Скопировать effective Harness surface для synthetic fixture.
 
     После HARNESS UPDATE новые managed files законно находятся в working tree
@@ -92,6 +96,19 @@ def copy_effective_harness_checkout(source_root: Path, target: Path) -> None:
     ):
         if _updater_owned(rel, update_policy):
             paths.add(rel)
+
+    if protocol_only:
+        # Hardening проверяет протокол, а не произвольный продуктовый checkout
+        # (#363). Сохраняем effective managed files, lock и configured templates;
+        # последующая isolation по-прежнему восстанавливает pre-INIT baseline.
+        templates = {path.relative_to(source_root).as_posix() for path in template_targets(source_root)}
+        lock = update_lock_path(source_root).relative_to(source_root).as_posix()
+        registry = skill_registry_path(source_root).relative_to(source_root).as_posix()
+        git_policy = repository_path(source_root, "gitPolicy").relative_to(source_root).as_posix()
+        reports_readme = (update_report_directory(source_root) / "README.md").relative_to(source_root).as_posix()
+        update_graph = update_manifest_path(source_root).relative_to(source_root).as_posix()
+        paths = {rel for rel in paths if _updater_owned(rel, update_policy)
+                 or rel.startswith(".agents/") or rel in templates or rel in {lock, registry, git_policy, reports_readme, update_graph}}
 
     for rel in sorted(paths):
         source = source_root / rel

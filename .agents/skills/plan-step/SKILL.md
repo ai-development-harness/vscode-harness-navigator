@@ -12,6 +12,10 @@ description: Produce, independently review, fingerprint and persist a concrete i
 
 Execution Status ведёт global wrapper. Active legacy schema после Harness update является blocker: сначала `PROJECT RECONCILE`.
 
+## Ранний output gate
+
+Перед PLAN действует `planning-state.py output-contract STEP-NNN`: ADR-STEP обязан иметь непустой `adr_outputs`; явные ADR/architecture результаты в Deliverables и Files должны иметь соответствующие declarations. Files плана перечисляет только изменяемые paths/anchors. Чтение входа описывай в Actions/Context, не в Files. Для whole-file Files с входными и выходными anchors объяви только изменяемые refs; остальные сохраняются входами. При обнаружении недостающего output после начала PLAN останови эту invocation, уточни owning STEP contract и начни новый PLAN: не меняй frozen input внутри той же execution. Draft writer, planning-review, stamp и completion повторяют gate.
+
 ## Phase A — requirements quality / clarification
 
 До consistency reasoning выполни Requirements Quality Gate по STEP и linked owning artifacts. Сначала получи ответ из existing REQ/ADR/OQ/architecture/codebase; не спрашивай то, что уже зафиксировано. Верни schema-v1 quality payload и проверь его через:
@@ -116,7 +120,7 @@ Writer сам заменяет только `## Implementation plan` / `## Verif
 
 Reviewer возвращает только material findings, которые меняют допустимость или содержание реализации. Material finding — это минимум одно из: plan приводит к иному observable implementation behaviour; противоречит Accepted ADR/REQ/STEP contract; оставляет обязательный acceptance/verification/prerequisite без владельца или доказуемого пути выполнения. Wording/style/clarity notes, не меняющие эти свойства, помещай только в `rationale` и не превращай в blocker.
 
-Для `type: adr` planning-review проверяет адекватность плана принятия/фиксации решения, prerequisites, ownership, compatibility и Verification. Сам authored ADR не является вторым объектом full editorial review на каждом PLAN round; формулировки ADR блокируют PLAN только если создают material contradiction/ambiguity по определению выше. ADR остаётся частью context fingerprint, чтобы смысловое изменение корректно stale-ило Ready plan.
+Для `type: adr` planning-review проверяет адекватность плана принятия/фиксации решения, prerequisites, ownership, compatibility и Verification. Сам authored ADR не является вторым объектом full editorial review на каждом PLAN round; формулировки ADR блокируют PLAN только если создают material contradiction/ambiguity по определению выше. Собственный ADR, заранее объявленный в `adr_outputs`, — результат ADR-STEP и не входит во входной fingerprint (#360); внешние ADR остаются входами. Изменение текста результата проверяет REVIEW, включая `fix_delta` после FIX. Если план синхронизирует раздел из `architecture_refs`, проверь заранее объявленный `architecture_outputs`: Files плана не исключает вход из basis автоматически. При отсутствующем объявлении верни owning STEP contract на уточнение до Ready; не меняй Scope/outputs скрыто внутри PLAN.
 
 Если привлекаешь reviewer/architect/specialized subagent, brief обязан явно сказать: читать только repository files из выданного context; не читать outputs/transcripts/temp files других agents; не ждать и не polling-ить другие reviewers; вернуть свой результат сразу после собственного pass. Параллельные specialized reviewers независимы.
 

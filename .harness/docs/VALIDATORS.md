@@ -1446,6 +1446,8 @@ python3 .harness/tools/run-self-tests.py --json
 
 `run-self-tests.py` автоматически обнаруживает все `.harness/tools/*-self-test.py` и запускает их в стабильном порядке. Новый regression-файл не требует отдельной регистрации в CI; сам runner остаётся required Harness artifact.
 
+Per-test budget остаётся 120 секунд. JSON и обычный лог содержат `elapsedSeconds`; при TIMEOUT дополнительно доступны `timeoutSeconds` и безопасный `lastScenario` из flushed marker. Raw stdout/stderr зависшего теста не печатаются без ограничения. FAIL и TIMEOUT остаются ошибками без retry; process group останавливается и при уже завершившемся POSIX-родителе. Подробности hardening fixture и замеры #363: [`HARDENING_TEST_BUDGET.md`](HARDENING_TEST_BUDGET.md).
+
 Runner продолжает suite после отдельного failure и в конце возвращает non-zero, если упал хотя бы один test. PASS self-test означает, что gate выдержал известные positive/negative regressions; он **не заменяет** запуск baseline validator на текущем repository state.
 
 ---

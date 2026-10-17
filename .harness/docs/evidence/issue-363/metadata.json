@@ -1,0 +1,257 @@
+{
+  "sourceRevision": "fe919f5cfddb8244c0b248faebdd6628afbc625a",
+  "fixtureRevisions": {
+    "baseline": "ab8588247b0511c08b72466b216b78d1755dfff9",
+    "candidate": "49145f2fa1edd1c66433d7dd265af9e237f5f3af"
+  },
+  "initialBaselineFiles": 1943,
+  "initialBaselineBytes": 22428708,
+  "productPayload": {
+    "files": 1528,
+    "bytes": 18374200,
+    "sha256": "24d8085a869b877c0d939ccf006c38d78e59312bd41accb8f26a081e0373df0f",
+    "bytesPerFile": 12025
+  },
+  "environment": {
+    "python": "3.12.3",
+    "system": "Linux",
+    "machine": "x86_64"
+  },
+  "command": [
+    "/usr/bin/python3",
+    "/tmp/measure363.py",
+    "."
+  ],
+  "wrapperSha256": "147bab691e9ae15116968c4c5c42cbc10bab2a67e863a2c0f22ba3a38efd3ac8",
+  "validationSequence": [
+    [
+      "manual",
+      0
+    ],
+    [
+      "manual",
+      0
+    ],
+    [
+      "manual",
+      0
+    ],
+    [
+      "manual",
+      0
+    ],
+    [
+      "manual",
+      0
+    ],
+    [
+      "manual",
+      0
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "ci",
+      0
+    ],
+    [
+      "ci",
+      0
+    ],
+    [
+      "ci",
+      0
+    ],
+    [
+      "ci",
+      0
+    ],
+    [
+      "ci",
+      1
+    ],
+    [
+      "ci",
+      1
+    ],
+    [
+      "ci",
+      1
+    ],
+    [
+      "ci",
+      1
+    ],
+    [
+      "commit",
+      0
+    ],
+    [
+      "commit",
+      0
+    ],
+    [
+      "commit",
+      0
+    ],
+    [
+      "commit",
+      0
+    ],
+    [
+      "commit",
+      1
+    ],
+    [
+      "commit",
+      1
+    ],
+    [
+      "commit",
+      1
+    ],
+    [
+      "commit",
+      1
+    ],
+    [
+      "manual",
+      0
+    ],
+    [
+      "manual",
+      0
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      0
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      0
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      0
+    ],
+    [
+      "manual",
+      0
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "manual",
+      1
+    ],
+    [
+      "commit",
+      1
+    ]
+  ],
+  "fixtureTrees": {
+    "baseline": "f7f22d9b680f512b472dc66342c8efc727da4c51",
+    "candidate": "660ed8513cea0c042af34fafb11f31f78f4e8874"
+  },
+  "performanceComponentHashes": {
+    ".harness/tools/self_test_fixture.py": "4e9e9343571d49300cadb3dd647ee582b882bb3da5381f9201b7e6369b97d9f6",
+    ".harness/tools/repository-hardening-self-test.py": "aadf1e1553bf6851bafb8ea847122de46a231cdcd62bec664a616bf67de7dd20",
+    ".harness/tools/run-self-tests.py": "c0bd8784835444c61f464b036914497be5c27cefcd9dc4001f772b71247d672b"
+  }
+}

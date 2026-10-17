@@ -300,3 +300,91 @@ https://github.com/ai-development-harness/ai-development-harness-template/issues
 ## Portable Intent Basis (#302)
 
 Нельзя копировать Intent Basis чужой машины. В новом clone fresh PLAN фиксирует текущие canonical REQ/ADR/STEP/OQ/PRN, а любое изменение смысла после handoff блокирует восстановление до новой публикации. Отдельный кодовый commit после снимка также устаревает: семантические hashes сами по себе не доказывают отсутствие новой реализации. Верификация, FIX/REVIEW и внешние эффекты остаются локальными и проверяются отдельными gates. См. [PORTABLE_RESUME.md](PORTABLE_RESUME.md).
+
+## Входы и результаты STEP (#360)
+
+Собственные ADR у `type: adr` заранее объявляются через optional strict list
+`adr_outputs` с точными ADR IDs. Декларация входит во входной STEP contract:
+
+```yaml
+type: adr
+adrs:
+  - ADR-001
+adr_outputs:
+  - ADR-002
+```
+
+Здесь ADR-001 остаётся внешним входом, ADR-002 — результат. ADR-002 можно
+объявить ещё до создания файла, а после создания добавить его в `adrs` для
+обязательной обратной traceability. Текст и lifecycle status объявленного
+результата не меняют planning/intent basis. Завершение ADR-STEP требует ссылки
+на каждый объявленный результат и обычного accepted/superseded ADR proof.
+`steps` в ADR не доказывает авторство: эта обратная связь нужна и потребителям
+решения. Объявление результата не разрешает переписывать ранее принятое решение:
+для изменения accepted ADR создаётся superseding ADR по обычным правилам.
+
+Если STEP должен синхронизировать раздел архитектуры, объяви его результатом
+**до первого PLAN** через optional strict list `architecture_outputs`:
+
+```yaml
+architecture_refs:
+  - docs/architecture.md#runtime-contract
+  - docs/architecture.md#implementation-status
+architecture_outputs:
+  - docs/architecture.md#implementation-status
+```
+
+Элементы `architecture_outputs` обязаны точно совпадать с элементами
+`architecture_refs`; glob, directory prefix и неявное совпадение по имени файла
+не поддерживаются. Хэш входного раздела остаётся в basis, содержимое выходного
+раздела заменяется стабильной меткой. Существование файла, anchor и containment
+проверяются для обоих. Само объявление output входит в STEP contract: добавить
+его посреди IMPLEMENT/FIX без нового PLAN нельзя. `Files` Implementation plan
+описывает изменения для reviewer, но не является неявным разрешением исключить
+весь файл из basis.
+
+Изменение результата по Ready-плану не требует PLAN и сохраняет FIX → REVIEW
+в режиме `fix_delta`. Изменение REQ, внешнего ADR, входного раздела, Scope,
+Acceptance или самого плана по-прежнему блокирует продолжение. Verification,
+проверка exact revision и independent REVIEW оценивают фактические результаты;
+исключение из входного basis не является их автоматической приёмкой.
+
+Для существующего STEP добавь `adr_outputs` / `architecture_outputs` в owning
+contract и один раз выполни PLAN. Старый immutable review не переписывай.
+При отсутствии деклараций прежний basis сохраняется; Harness не угадывает
+результаты по reverse traceability или свободному тексту плана.
+
+## Ранняя проверка объявлений результатов
+
+`python3 .harness/tools/planning-state.py output-contract STEP-NNN` проверяет
+контракт без записи state. При пропуске возвращаются `BLOCKED`, ненулевой exit
+code и `OUTPUT_DECLARATIONS_REQUIRED` с конкретными результатами.
+
+- `type: adr` требует непустой `adr_outputs` уже до начала PLAN.
+- Явные ADR IDs/paths в Deliverables и изменяемые ADR-файлы в Files должны
+  присутствовать в `adr_outputs`.
+- Архитектурный результат в Deliverables/Files, пересекающийся с
+  `architecture_refs`, требует соответствующего `architecture_outputs`.
+  Сопоставляются whole-file refs, anchors, paths с пробелами и Markdown links.
+  Соседние входные разделы не исключаются из basis автоматически.
+- Fenced examples не считаются настоящими объявлениями. Чтение входа в
+  Context/Actions также не считается его изменением; Files перечисляет мутации.
+
+Dispatcher проверяет новые STEP текущей invocation перед успешным завершением
+ADD; существующие чужие задачи не становятся blocker этой команды. PLAN
+проверяется до старта, до записи draft, при PASS planning-review, Ready stamp
+и completion. Ручная запись draft не обходит gate. Пропуск, обнаруженный после
+начала PLAN, требует остановить invocation, уточнить owning STEP contract и
+начать новый PLAN; менять frozen declarations внутри того же PLAN нельзя.
+
+Проверка опирается на структурные признаки, а не пытается угадать мутации по
+произвольному тексту. Агент обязан перечислить canonical IDs/paths результатов;
+смысловую полноту этого перечня проверяет независимый planning-review.
+Исторические completed STEP и их принятые proofs этим gate не пересматриваются.
+
+При проверке активной PLAN invocation её собственный раздел `Verification`
+не входит во входной intent basis: canonical plan writer заполняет его вместе
+с планом. Ready/review fingerprint и IMPLEMENT/FIX продолжают учитывать полный
+контракт Verification. Изменения Scope, declarations и остальных входов PLAN
+по-прежнему блокируют completion. Старый активный PLAN checkpoint с прежним
+basis может потребовать один новый PLAN; принятые historical proofs не меняются.

@@ -58,7 +58,9 @@ from harness_ux import (
     step_show,
 )
 from local_cleanup import cleanup, temporary_directory
-from planning_contract import step_completion_proof
+from planning_contract import step_completion_proof, output_declaration_issues, read_task
+from harness_config import task_directory
+from document_contract import STEP_ID_RE
 from step_context import build_step_context
 from step_next import resolve_step_action, resolve_step_next
 from verification import run_step_verification, write_verification_evidence, verification_freshness
@@ -1173,6 +1175,15 @@ def complete_dispatch(
         # того же STEP. Перед дорогой Verification ещё раз сверяем authority:
         # stale IMPLEMENT не имеет права переписывать уже успешный Evidence.
         command_route = route_command(root, command)
+        if active is not None and command_route.get("domain") == "STEP" and command_route.get("operation") == "PLAN" and result in {"SUCCESS", "PASS"}:
+            # PLAN может менять свой текст, но не frozen outputs/Scope. Read-only
+            # resolution не закрывает Ready PLAN как crash recovery до complete.
+            checkpoint = resolve_execution(root, active, mutate=False)
+            if checkpoint.get("status") == "BLOCKED":
+                return {"schemaVersion": SCHEMA_VERSION, "status": "BLOCKED",
+                        "rootCommand": root_command, "executionId": execution_id,
+                        "command": command, "reasonCode": checkpoint.get("reasonCode"),
+                        "remediation": checkpoint.get("remediation")}
         if (
             active is not None
             and command_route.get("domain") == "STEP"
@@ -1213,6 +1224,27 @@ def complete_dispatch(
         # Lock reentrant: complete_command использует ту же state transaction.
         with execution_state_lock(root):
             completed_route = route_command(root, command)
+            if result in {"SUCCESS", "PASS"} and completed_route.get("domain") == "STEP" and completed_route.get("operation") in {"ADD", "PLAN"}:
+                # ADD проверяет только новые ID этой invocation; PLAN — свой
+                # STEP. Ни model SUCCESS, ни ручной draft не обходят output gate.
+                if completed_route["operation"] == "ADD":
+                    context = active.get("current", {}).get("context", {}) if active else {}
+                    floor = context.get("stepAddIdFloor")
+                    if not isinstance(floor, int) or isinstance(floor, bool) or floor < 0:
+                        raise DispatchError("STEP_ADD_BASELINE_MISSING", "STEP ADD требует новый запуск для фиксации исходных ID")
+                    targets = [path.stem for path in task_directory(root).glob("STEP-*.md")
+                               if STEP_ID_RE.fullmatch(path.stem) and int(path.stem[5:]) > floor]
+                    if not targets:
+                        raise DispatchError("STEP_ADD_RESULT_MISSING", "STEP ADD не создал новый STEP")
+                else:
+                    targets = [str(completed_route["target"])]
+                issues = [f"{target}: {issue}" for target in targets
+                          for issue in output_declaration_issues(root, read_task(root, target))]
+                if issues:
+                    return {"schemaVersion": SCHEMA_VERSION, "status": "BLOCKED",
+                            "rootCommand": root_command, "command": command,
+                            "executionId": execution_id, "reasonCode": "OUTPUT_DECLARATIONS_REQUIRED",
+                            "issues": issues, "remediation": "Уточни outputs в owning STEP contract до PLAN"}
             if (
                 result in {"SUCCESS", "PASS"}
                 and completed_route.get("domain") == "STEP"
