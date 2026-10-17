@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 import time
@@ -44,6 +45,7 @@ def main() -> int:
         )
         assert timed["status"] == "TIMEOUT", timed
         assert timed["exitCode"] is None, timed
+        assert timed["elapsedSeconds"] >= 0.1, timed
 
         passed, stdout, stderr = runner.run_one(
             following,
@@ -52,6 +54,31 @@ def main() -> int:
         )
         assert passed["status"] == "PASS", (passed, stdout, stderr)
         assert "FOLLOWING PASS" in stdout, stdout
+
+        failing = root / "failing-self-test.py"
+        failing.write_text("raise AssertionError('ожидаемый отказ')\n", encoding="utf-8")
+        failed, _stdout, stderr = runner.run_one(failing, repo_root=root, timeout_seconds=2)
+        assert failed["status"] == "FAIL" and failed["exitCode"] != 0, failed
+        assert "AssertionError" in stderr
+
+        if os.name == "posix":
+            # Родитель уже завершился, потомок удерживает inherited stdout и
+            # игнорирует TERM. Timeout обязан всё равно остановить его группу.
+            exited = root / "exited-parent-self-test.py"
+            stubborn_marker = root / "stubborn-survived.txt"
+            child = ("import signal,time,pathlib; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+                     f"time.sleep(0.7); pathlib.Path({str(stubborn_marker)!r}).write_text('x'); time.sleep(30)")
+            exited.write_text(
+                "import subprocess,sys\n"
+                "print('[SCENARIO] exited-parent/child',flush=True)\n"
+                f"subprocess.Popen([sys.executable,'-c',{child!r}])\n",
+                encoding="utf-8",
+            )
+            timed, _stdout, _stderr = runner.run_one(exited, repo_root=root, timeout_seconds=0.3)
+            assert timed["status"] == "TIMEOUT", timed
+            assert timed["lastScenario"] == "exited-parent/child", timed
+            time.sleep(0.8)
+            assert not stubborn_marker.exists(), "timeout оставил потомка завершившегося родителя"
 
         time.sleep(0.8)
         assert not marker.exists(), "timeout left a descendant process running"

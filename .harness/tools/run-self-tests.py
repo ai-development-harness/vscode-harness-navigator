@@ -13,6 +13,8 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
+import re
 
 
 DEFAULT_TEST_TIMEOUT_SECONDS = 120
@@ -25,18 +27,19 @@ def discover() -> list[Path]:
 
 def _terminate_process_tree(proc: subprocess.Popen[str]) -> None:
     """Остановить зависший self-test вместе с его дочерними процессами."""
-    if proc.poll() is not None:
-        return
     if os.name == "posix":
         try:
             os.killpg(proc.pid, signal.SIGTERM)
             proc.wait(timeout=1)
-            return
         except (OSError, subprocess.TimeoutExpired):
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                pass
+            pass
+        # Родитель мог завершиться раньше descendants или ещё до timeout.
+        # Убиваем оставшуюся process group, иначе inherited pipes удерживают
+        # communicate() без границы времени (#363).
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
     elif os.name == "nt":
         subprocess.run(
             ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
@@ -65,6 +68,7 @@ def run_one(
     elif os.name == "nt":
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
+    started = time.monotonic()
     proc = subprocess.Popen(
         [sys.executable, str(path)],
         cwd=repo_root,
@@ -84,6 +88,9 @@ def run_one(
                 "exitCode": None,
                 "status": "TIMEOUT",
                 "timeoutSeconds": timeout_seconds,
+                "elapsedSeconds": round(time.monotonic() - started, 3),
+                "lastScenario": next((line[11:] for line in reversed(stdout.splitlines())
+                                      if re.fullmatch(r"\[SCENARIO\] [a-zA-Z0-9_./:-]{1,120}", line)), None),
             },
             stdout,
             stderr,
@@ -93,6 +100,7 @@ def run_one(
             "test": path.name,
             "exitCode": proc.returncode,
             "status": "PASS" if proc.returncode == 0 else "FAIL",
+            "elapsedSeconds": round(time.monotonic() - started, 3),
         },
         stdout,
         stderr,
@@ -135,10 +143,12 @@ def main() -> int:
         if item["status"] != "PASS":
             failed = True
         if not args.as_json:
-            print(f"[{item['status']}] {path.name}")
-            if stdout.strip():
+            print(f"[{item['status']}] {path.name} ({item['elapsedSeconds']}s)")
+            if item["status"] == "TIMEOUT":
+                print(f"  timeout={item['timeoutSeconds']}s; lastScenario={item['lastScenario'] or 'unknown'}")
+            elif stdout.strip():
                 print(stdout.rstrip())
-            if stderr.strip():
+            if item["status"] != "TIMEOUT" and stderr.strip():
                 print(stderr.rstrip(), file=sys.stderr)
 
     if args.as_json:

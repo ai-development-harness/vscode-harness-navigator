@@ -38,6 +38,7 @@ from planning_contract import (
     generated_verification_status,
     plan_content_hash,
     planning_context_basis,
+    output_declaration_issues,
     planning_review_reports,
     read_task,
     validate_planning_review_report,
@@ -215,6 +216,9 @@ def write_plan_draft(root: Path, step_id: str, payload: Any) -> dict[str, Any]:
     verification_text = render_verification_entries(verification)
 
     task = read_task(root, step_id)
+    issues = output_declaration_issues(root, task, planned_files=[path for item in implementation_steps for path in item["files"]])
+    if issues:
+        raise SemanticArtifactError("OUTPUT_DECLARATIONS_REQUIRED: " + "; ".join(issues))
     meta = deepcopy(task["frontmatter"])
     plan = meta.get("plan")
     if not isinstance(plan, dict):
@@ -309,6 +313,10 @@ def write_planning_review(root: Path, step_id: str, payload: Any) -> dict[str, A
             }
 
         task = read_task(root, step_id)
+        if verdict == "pass":
+            issues = output_declaration_issues(root, task)
+            if issues:
+                raise SemanticArtifactError("OUTPUT_DECLARATIONS_REQUIRED: " + "; ".join(issues))
         plan = task["frontmatter"].get("plan")
         if not isinstance(plan, dict) or plan.get("status") != "draft":
             raise SemanticArtifactError("planning review requires plan.status=draft")

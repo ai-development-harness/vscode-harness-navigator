@@ -49,8 +49,8 @@ from command_transitions import (
     validate_command_text,
 )
 from completion_gate import finalize_step_completion
-from document_contract import render_document
-from harness_config import ConfigError, get, load_git_policy, update_lock_path
+from document_contract import render_document, STEP_ID_RE
+from harness_config import ConfigError, get, load_git_policy, update_lock_path, task_directory
 from impact_analysis import ImpactAnalysisError, compare_component_sets
 from planning_contract import (
     implementation_prerequisite_failures,
@@ -58,6 +58,8 @@ from planning_contract import (
     max_fix_review_cycles,
     plan_content_hash,
     planning_context_basis,
+    output_declaration_issues,
+    OutputDeclarationError,
     planning_context_components,
     planning_context_fingerprints,
     read_task as read_planning_task,
@@ -571,6 +573,7 @@ def _capture_intent_basis(root: Path, command: str) -> dict[str, Any] | None:
     context_basis, context_components = planning_context_fingerprints(
         root,
         step_id,
+        plan_execution=operation == "PLAN",
     )
     value = {
         "schemaVersion": INTENT_BASIS_SCHEMA_VERSION,
@@ -2187,6 +2190,14 @@ def _command_context(
     if parsed.get("domain") == "GIT" and parsed.get("operation") == "COMMIT":
         context["gitHeadBefore"] = _git_head(root)
 
+    if parsed.get("domain") == "STEP" and parsed.get("operation") == "ADD":
+        # Максимальный существующий ID связывает completion с новыми STEP
+        # именно этой invocation, не храня в checkpoint весь каталог задач.
+        context["stepAddIdFloor"] = max(
+            (int(path.stem[5:]) for path in task_directory(root).glob("STEP-*.md")
+             if STEP_ID_RE.fullmatch(path.stem)), default=0,
+        )
+
     return context
 
 
@@ -2488,6 +2499,15 @@ def _command_dispatch_precondition_failures(
 ) -> list[str]:
     """Проверить prerequisites команды, у которой нет incoming CTS edge."""
     parsed = normalize_single_command(root, command)
+    if parsed.get("domain") == "STEP" and parsed.get("operation") == "PLAN" and parsed.get("target"):
+        # Отсутствующий STEP диагностирует прежний context gate. Здесь не
+        # меняем legacy/diagnostic starts, проверяем только существующий contract.
+        if not (task_directory(root) / f"{parsed['target']}.md").is_file():
+            return []
+        issues = output_declaration_issues(root, read_task(root, str(parsed["target"])))
+        if issues:
+            raise OutputDeclarationError(issues)
+        return []
     if (
         parsed.get("domain") == "STEP"
         and parsed.get("operation") == "IMPLEMENT"
@@ -3129,6 +3149,9 @@ def plan_info(root: Path, step_id: str) -> dict[str, Any]:
 # обхода semantic consistency gate.
 def stamp_plan(root: Path, step_id: str) -> dict[str, Any]:
     task = read_task(root, step_id)
+    issues = output_declaration_issues(root, task)
+    if issues:
+        raise ValueError("OUTPUT_DECLARATIONS_REQUIRED: " + "; ".join(issues))
     plan_body = task["sections"].get("Implementation plan", "").strip()
     if not plan_body:
         raise ValueError("Implementation plan must be non-empty before stamp-plan")

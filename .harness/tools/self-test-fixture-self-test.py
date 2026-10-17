@@ -40,16 +40,27 @@ def main() -> int:
 
         write(
             source / ".harness/manifest.yaml",
-            "repository:\n  harnessUpdatePolicy: .harness/harness-update.toml\n",
+            (Path(__file__).resolve().parents[2] / ".harness/manifest.yaml").read_text(encoding="utf-8"),
         )
         write(
             source / ".harness/harness-update.toml",
+            "[source]\nupdate_manifest = 'config/update-graph.json'\n"
+            "[state]\nlock_file = '.harness/harness.lock.json'\nreport_directory = 'work/updates'\n"
             "[ownership]\n"
             "harness_owned = [\n  \".harness/tools/**\",\n]\n"
             "shared = [\n  \".github/**\",\n]\n"
             "marker_merge = [\n  \"README.md\",\n]\n",
         )
+        manifest = source / ".harness/manifest.yaml"
+        manifest.write_text(manifest.read_text(encoding="utf-8").replace("gitPolicy: .harness/git-policy.toml", "gitPolicy: config/git-policy.toml"), encoding="utf-8")
+        write(source / "config/git-policy.toml", "version = 1\n")
+        write(source / "config/update-graph.json", "{}\n")
+        write(source / "work/updates/README.md", "отчёты\n")
         write(source / "README.md", "tracked\n")
+        write(source / "apps/product.txt", "продуктовый файл\n")
+        write(source / "docs/skills/REGISTRY.md", "реестр\n")
+        write(source / "planning/tasks/TEMPLATE.md", "проектный шаблон\n")
+        write(source / ".harness/harness.lock.json", "{}\n")
 
         run(source, "git", "init", "-q", "-b", "main")
         run(source, "git", "config", "user.email", "fixture@example.invalid")
@@ -67,6 +78,19 @@ def main() -> int:
             encoding="utf-8"
         ) == "print('managed')\n"
         assert not (target / "notes/local.txt").exists()
+        assert (target / "apps/product.txt").is_file()
+
+        minimal = base / "minimal"
+        copy_effective_harness_checkout(source, minimal, protocol_only=True)
+        assert not (minimal / "apps/product.txt").exists()
+        assert (minimal / "config/git-policy.toml").is_file()
+        assert (minimal / "config/update-graph.json").is_file()
+        assert (minimal / "work/updates/README.md").is_file()
+        assert (minimal / ".harness/tools/new-tool.py").is_file()
+        assert (minimal / ".harness/harness.lock.json").is_file()
+        assert (minimal / "docs/skills/REGISTRY.md").is_file()
+        assert (minimal / "planning/tasks/TEMPLATE.md").read_text(encoding="utf-8") == "проектный шаблон\n"
+        assert (source / "apps/product.txt").read_text(encoding="utf-8") == "продуктовый файл\n"
 
     print("self-test fixture effective checkout: PASS")
     return 0

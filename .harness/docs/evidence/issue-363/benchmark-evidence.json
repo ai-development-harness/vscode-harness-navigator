@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "claim": {
+    "summary": "Компактная fixture сокращает время instrumented hardening main минимум на 20% на указанной downstream-нагрузке, сохраняя все 55 validation outcomes.",
+    "metric": "instrumented-hardening-main-duration",
+    "unit": "seconds",
+    "direction": "lower-is-better",
+    "scope": "end-to-end",
+    "minimumEffectPct": 20
+  },
+  "comparison": {
+    "interleaved": false,
+    "rationale": "Первичные три пары чередовались. После исправления relocated inputs финальный candidate измерен ещё три раза; итог сравнивает прежние baseline с финальной серией. Команда, обёртка, среда и product payload одинаковы."
+  },
+  "bottleneck": {
+    "identified": true,
+    "summary": "Повторное сканирование ненужных product files полным validator в synthetic fixture."
+  },
+  "sanityLimit": {
+    "checked": true,
+    "summary": "55 полных validator invocations сохранены, уменьшен только сканируемый synthetic fixture; основной validator consumer checkout не изменён."
+  },
+  "endToEnd": {
+    "checked": true,
+    "relevant": true,
+    "summary": "Измеряется весь hardening main, включая создание/изоляцию fixture, Git и 55 validator subprocess; это время self-test, не производительность продукта."
+  },
+  "baseline": {
+    "revision": "ab8588247b0511c08b72466b216b78d1755dfff9",
+    "command": [
+      "/usr/bin/python3",
+      "/tmp/measure363.py",
+      "."
+    ],
+    "environment": {
+      "python": "3.12.3",
+      "system": "Linux",
+      "machine": "x86_64"
+    },
+    "samples": [
+      118.70446993404767,
+      119.20829814305762,
+      119.23592216701945
+    ],
+    "correctness": {
+      "passed": 3,
+      "failed": 0
+    },
+    "workProof": {
+      "kind": "trace",
+      "path": ".harness/docs/evidence/issue-363/baseline-proof.json",
+      "summary": "Три PASS, по 55 validator calls с идентичной последовательностью mode/exitCode."
+    }
+  },
+  "candidate": {
+    "revision": "49145f2fa1edd1c66433d7dd265af9e237f5f3af",
+    "command": [
+      "/usr/bin/python3",
+      "/tmp/measure363.py",
+      "."
+    ],
+    "environment": {
+      "python": "3.12.3",
+      "system": "Linux",
+      "machine": "x86_64"
+    },
+    "samples": [
+      51.9821713680285,
+      51.891433609009255,
+      51.696325324010104
+    ],
+    "correctness": {
+      "passed": 3,
+      "failed": 0
+    },
+    "workProof": {
+      "kind": "trace",
+      "path": ".harness/docs/evidence/issue-363/candidate-proof.json",
+      "summary": "Три PASS, по 55 validator calls с идентичной последовательностью mode/exitCode."
+    }
+  }
+}

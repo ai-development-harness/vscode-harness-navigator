@@ -1,0 +1,27 @@
+{
+  "samples": [
+    51.9821713680285,
+    51.891433609009255,
+    51.696325324010104
+  ],
+  "runs": [
+    {
+      "path": "candidate-1.json",
+      "sha256": "1ddd1df83168dd344cdb748957a84a58feb5abcfdcb6f130825cb637273eb27a",
+      "result": 0,
+      "validatorCalls": 55
+    },
+    {
+      "path": "candidate-2.json",
+      "sha256": "f4c1c38a55f7bcadb68676116d9fd35ba4f44f87cb0f5d26869a92ec4b8e96ce",
+      "result": 0,
+      "validatorCalls": 55
+    },
+    {
+      "path": "candidate-3.json",
+      "sha256": "4907375ac72a9b7034d2878ac0588d9e6d976f1ba05b2022839844e942e45af6",
+      "result": 0,
+      "validatorCalls": 55
+    }
+  ]
+}
